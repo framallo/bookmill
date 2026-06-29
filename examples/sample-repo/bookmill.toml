@@ -1,0 +1,42 @@
+# bookmill sample repo — a minimal, self-contained demo.
+# This is the REPO config (no top-level `slug`; it has books_dir/[defaults]/[editions]).
+# Run from this directory:
+#   bookmill list
+#   bookmill validate
+#   bookmill build --format epub
+author    = "A. Sample Author"
+series    = "Sample Series"
+date      = 2026
+languages = ["en"]
+books_dir = "books"
+
+[defaults]
+trim  = "6x9"
+bleed = "0"
+paper = "white"
+fonts = { serif = "Playfair Display", sans = "Montserrat", sub = "Montserrat" }
+
+[defaults.margins]
+top           = 0.75
+bottom        = 0.75
+inner         = 0.75
+outer         = 0.6
+bindingoffset = 0.375
+
+# One digital edition is enough for the demo. `bookmill build --format epub`
+# builds the retail EPUB regardless; editions matter for the print/KDP matrix.
+[editions.gumroad]
+target = "gumroad"
+market = "WW"
+
+[build]
+output_dir = "output"
+formats    = ["epub"]
+
+# Series-wide cover defaults; the book overrides palette/text in its own [cover].
+[cover]
+badge_en   = "Sample Series"
+paper_mult = 0.002252
+trim_w     = 6.0
+trim_h     = 9.0
+bleed      = 0.125

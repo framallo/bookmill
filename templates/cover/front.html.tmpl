@@ -1,0 +1,43 @@
+<!doctype html><html><head><meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="{{FONT_LINK}}" rel="stylesheet">
+<style>
+ *{margin:0;padding:0;box-sizing:border-box}
+ html,body{width:1600px;height:2560px;overflow:hidden}
+ .cover{position:relative;width:1600px;height:2560px;background:{{BGCOLOR}};overflow:hidden}
+ .bg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:{{FBG_POS}};filter:{{FILT}}}
+ .grad{position:absolute;inset:0;background:linear-gradient(180deg,
+        rgba(0,0,0,0.26) 0%, rgba(0,0,0,0.04) 16%, rgba(0,0,0,0.0) 44%,
+        rgba(0,0,0,0.0) 72%, rgba(0,0,0,0.06) 88%, rgba(0,0,0,0.16) 100%)}
+ .frame{position:absolute;inset:56px;border:2px solid {{ACCENT}};opacity:0.45}
+ .content{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
+        padding:150px 120px 150px;z-index:3}
+ .badge{font-family:'Montserrat',sans-serif;font-size:32px;letter-spacing:9px;
+        text-transform:uppercase;color:{{BADGE_COLOR}};opacity:0.95;
+        -webkit-text-stroke:{{BADGE_STROKE}};paint-order:stroke fill}
+ .titleblock{margin-top:{{TITLE_MT}};text-align:center;width:100%}
+ .title{font-family:'{{SERIF}}',sans-serif;font-weight:800;font-size:{{TITLE_SIZE}}px;
+        line-height:1.05;color:{{TITLE_COLOR}};text-shadow:{{TITLE_SHADOW}};
+        -webkit-text-stroke:{{TITLE_STROKE}};paint-order:stroke fill}
+ .rule{height:3px;width:220px;background:{{ACCENT}};margin:46px auto 0;opacity:0.85}
+ .subtitle{font-family:'{{SUB_FONT}}',sans-serif;font-style:{{SUB_ITALIC}};font-weight:500;
+        font-size:48px;line-height:1.3;color:{{SUB_COLOR}};margin-top:40px;
+        text-shadow:{{SUB_SHADOW}};-webkit-text-stroke:{{SUB_STROKE}};paint-order:stroke fill}
+ .author{margin-top:{{AUTHOR_MT}};font-family:'Montserrat',sans-serif;font-size:42px;letter-spacing:7px;
+        text-transform:uppercase;color:{{AUTHOR_COLOR}};
+        -webkit-text-stroke:{{AUTHOR_STROKE}};paint-order:stroke fill}
+</style></head><body>
+<div class="cover">
+ <img class="bg" src="{{FBG_SRC}}">
+ <div class="grad"></div>
+ <div class="frame"></div>
+ <div class="content">
+   <div class="badge">{{BADGE}}</div>
+   <div class="titleblock">
+     <div class="title">{{TITLE_HTML}}</div>
+     <div class="rule"></div>
+     <div class="subtitle">{{SUB}}</div>
+   </div>
+   <div class="author">{{AUTHOR}}</div>
+ </div>
+</div></body></html>

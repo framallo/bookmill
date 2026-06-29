@@ -1,0 +1,36 @@
+[package]
+name = "bookmill"
+version = "0.1.0"
+edition = "2021"
+description = "Convention-over-configuration book publishing pipeline (EPUB/PDF/KDP/covers/audiobook)"
+
+[[bin]]
+name = "bookmill"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+anyhow = "1"
+glob = "0.3"
+walkdir = "2"
+ratatui = "0.29"
+crossterm = "0.28"
+serde_json = "1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# Native (Chrome-free) cover rasterization: SVG -> pixmap/PDF, pure Rust.
+resvg = "0.45"
+usvg = "0.45"
+svg2pdf = "0.13"
+ttf-parser = "0.25"
+# Native EPUB image-shrink (replaces scripts/shrink-epub-images.py).
+zip = { version = "2", default-features = false, features = ["deflate"] }
+png = "0.17"
+color_quant = "1.1"
+# Content-aware EPUB image codecs (see docs/epub-shrink-tuning.md):
+#   mozjpeg = JPEG q88 (progressive, trellis, optimized Huffman) for opaque scenes;
+#   oxipng  = lossless `-o max` re-optimization for transparent chapter plates.
+oxipng = { version = "9", default-features = false, features = ["parallel"] }
+mozjpeg = "0.10"
+regex = "1"

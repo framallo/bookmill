@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>bookmill — cover editor</title>
+<script src="https://unpkg.com/konva@9/konva.min.js"></script>
+<style>
+  :root { --bg:#11151c; --panel:#1b212b; --line:#2c3543; --ink:#e7edf3; --muted:#8a98a8; --accent:#d4a937; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+  header { display:flex; align-items:center; gap:14px; padding:10px 16px; background:var(--panel); border-bottom:1px solid var(--line); }
+  header h1 { font-size:15px; margin:0; font-weight:600; letter-spacing:.3px; }
+  header .spacer { flex:1; }
+  a.navlink { color:var(--muted); text-decoration:none; font-size:13px; }
+  a.navlink:hover { color:var(--ink); }
+  select, button, input[type=color], input[type=text] {
+    background:#222b36; color:var(--ink); border:1px solid var(--line); border-radius:6px; padding:6px 9px; font:inherit;
+  }
+  button { cursor:pointer; }
+  button.primary { background:var(--accent); color:#1a1206; border-color:var(--accent); font-weight:600; }
+  button:disabled { opacity:.5; cursor:default; }
+  .wrap { display:flex; height:calc(100vh - 49px); }
+  .side { width:300px; min-width:300px; background:var(--panel); border-right:1px solid var(--line); padding:14px; overflow:auto; }
+  .stage-host { flex:1; display:flex; align-items:center; justify-content:center; overflow:auto; padding:20px; }
+  #editor { box-shadow:0 8px 40px rgba(0,0,0,.55); }
+  .field { margin-bottom:12px; }
+  .field label { display:block; color:var(--muted); font-size:12px; margin-bottom:4px; text-transform:uppercase; letter-spacing:.4px; }
+  .row { display:flex; gap:8px; align-items:center; }
+  .row > * { flex:1; }
+  h3 { font-size:12px; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); border-bottom:1px solid var(--line); padding-bottom:6px; margin:18px 0 10px; }
+  textarea { width:100%; min-height:54px; background:#222b36; color:var(--ink); border:1px solid var(--line); border-radius:6px; padding:6px; font:inherit; resize:vertical; }
+  .hint { color:var(--muted); font-size:12px; }
+  #status { font-size:12px; color:var(--muted); }
+  .pill { font-size:11px; padding:2px 7px; border-radius:10px; background:#3a2a12; color:var(--accent); border:1px solid #5a431c; }
+  #log { white-space:pre-wrap; font:11px/1.4 ui-monospace,Menlo,monospace; color:var(--muted); background:#0d1117; border:1px solid var(--line); border-radius:6px; padding:8px; max-height:160px; overflow:auto; margin-top:8px; }
+  .preview-img { width:100%; border:1px solid var(--line); border-radius:6px; margin-top:8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>bookmill · cover editor</h1>
+  <select id="bookSel"></select>
+  <select id="langSel"></select>
+  <span id="protBadge" class="pill" style="display:none">protected · comparison render</span>
+  <span class="spacer"></span>
+  <span id="status"></span>
+  <a class="navlink" href="/preview.html">previewer →</a>
+</header>
+
+<div class="wrap">
+  <aside class="side">
+    <div class="field">
+      <label>Background color</label>
+      <div class="row">
+        <input type="color" id="bgcolor" />
+        <input type="text" id="bgcolorHex" />
+      </div>
+    </div>
+
+    <h3>Selected element</h3>
+    <div id="noSel" class="hint">Click a text block on the canvas to edit it. Drag to move, use the handles to resize. Double-click to edit text.</div>
+    <div id="selPanel" style="display:none">
+      <div class="field">
+        <label id="selName">Title</label>
+        <textarea id="selText"></textarea>
+      </div>
+      <div class="field">
+        <label>Fill color</label>
+        <div class="row">
+          <input type="color" id="selFill" />
+          <input type="text" id="selFillHex" />
+        </div>
+      </div>
+      <div class="field">
+        <label>Font size (px @ 1600×2560)</label>
+        <input type="text" id="selSize" />
+      </div>
+    </div>
+
+    <h3>Guides</h3>
+    <div class="field">
+      <label><input type="checkbox" id="guidesOn" checked style="width:auto" /> Show trim / bleed / safe guides</label>
+    </div>
+
+    <h3>Save</h3>
+    <button class="primary" id="saveBtn" style="width:100%">Save &amp; re-render</button>
+    <div class="hint" style="margin-top:8px">Writes the layout to <code>[cover.&lt;lang&gt;.layout]</code> and re-renders via <code>bookmill covers</code>.</div>
+    <div id="log" style="display:none"></div>
+
+    <h3>Authoritative render</h3>
+    <div class="hint">What ships (resvg output). Refreshes after save.</div>
+    <img id="renderImg" class="preview-img" style="display:none" alt="rendered cover" />
+  </aside>
+
+  <main class="stage-host">
+    <div id="editor"></div>
+  </main>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

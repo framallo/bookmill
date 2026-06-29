@@ -1,0 +1,240 @@
+//! bookmill — convention-over-configuration book publishing pipeline.
+//! v1: config model + discovery + validation + Ratatui TUI. Build/cover/audiobook
+//! engines are scaffolded (orchestrator-first; native engines land next).
+
+mod build;
+mod config;
+mod cover_svg;
+mod epub_shrink;
+mod cover_tmpl;
+mod covers;
+mod deep;
+mod discover;
+mod tui;
+
+use anyhow::Result;
+use clap::{Parser, Subcommand};
+use discover::Repo;
+use std::path::PathBuf;
+
+#[derive(Parser)]
+#[command(name = "bookmill", version, about = "Book publishing pipeline (EPUB/PDF/KDP/covers/audiobook)")]
+struct Cli {
+    /// Path to start repo discovery from (defaults to current dir)
+    #[arg(long, global = true)]
+    repo: Option<PathBuf>,
+    #[command(subcommand)]
+    cmd: Cmd,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// List discovered books
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate config + KDP/house rules
+    Validate {
+        /// book slug (omit = all)
+        book: Option<String>,
+        /// deep mode: also build/reuse outputs and run epubcheck + PDF-geometry +
+        /// cover-resolution audits (slow). Default is the fast config-only check.
+        #[arg(long)]
+        deep: bool,
+    },
+    /// Print the resolved content file list for a book/lang
+    Content { book: String, lang: String },
+    /// Interactive terminal UI
+    Tui,
+    /// Build outputs (orchestrator — engines land next)
+    Build {
+        book: Option<String>,
+        /// build a specific format (epub|pdf|kdp|print|all); else build by editions
+        #[arg(long)]
+        format: Option<String>,
+        /// build a specific edition (e.g. kdp-paperback, gumroad); else all editions
+        #[arg(long)]
+        edition: Option<String>,
+        /// limit to a language (es|en|all)
+        #[arg(long)]
+        lang: Option<String>,
+    },
+    /// Render covers (front PNG + paperback wrap PDF + eBook JPG)
+    Covers {
+        book: Option<String>,
+        /// limit to a language (es|en|all)
+        #[arg(long)]
+        lang: Option<String>,
+        /// only emit the cover HTML (skip headless Chrome rasterization);
+        /// useful to verify the template/config without touching image assets
+        /// (chrome engine only)
+        #[arg(long)]
+        html_only: bool,
+        /// override the spine page count (else read from the built -kdp.pdf);
+        /// lets covers render before the print interior exists
+        #[arg(long)]
+        pages: Option<u32>,
+        /// rasterization engine: resvg (default, pure Rust, no Chrome) | chrome
+        #[arg(long)]
+        engine: Option<String>,
+    },
+    /// Shrink images inside an EPUB in place (native; Python-free)
+    Shrink {
+        /// path to the .epub
+        epub: PathBuf,
+        /// max image width in px (default 1200)
+        #[arg(long, default_value_t = 1200)]
+        px: u32,
+    },
+    /// Build audiobook (kab default engine)
+    Audiobook {
+        book: Option<String>,
+        #[arg(long)]
+        lang: Option<String>,
+    },
+}
+
+fn main() -> Result<()> {
+    let cli = Cli::parse();
+    let start = cli.repo.unwrap_or(std::env::current_dir()?);
+    let repo = Repo::find(&start)?;
+
+    match cli.cmd {
+        Cmd::List { json } => cmd_list(&repo, json)?,
+        Cmd::Validate { book, deep } => {
+            if deep {
+                deep::run(&repo, book)?
+            } else {
+                cmd_validate(&repo, book)?
+            }
+        }
+        Cmd::Content { book, lang } => cmd_content(&repo, &book, &lang)?,
+        Cmd::Tui => match tui::run(&repo)? {
+            Some(tui::Action::Build(req)) => {
+                let jobs = tui::jobs_for_req(&repo, &req)?;
+                tui::run_queue_ui(&repo, &jobs)?;
+            }
+            Some(tui::Action::Release(req)) => {
+                // complete build: all editions -> covers -> deep validate
+                let lang = (req.lang != "all").then_some(req.lang.clone());
+                let all = tui::BuildReq {
+                    book: req.book.clone(),
+                    lang: req.lang.clone(),
+                    edition: "all".into(),
+                    format: "edition".into(),
+                };
+                let jobs = tui::jobs_for_req(&repo, &all)?;
+                tui::run_queue_ui(&repo, &jobs)?;
+                covers::run(&repo, Some(req.book.clone()), lang, false, None, covers::Engine::Resvg)?;
+                deep::run(&repo, Some(req.book))?;
+            }
+            Some(tui::Action::Validate { book }) => deep::run(&repo, Some(book))?,
+            Some(tui::Action::Covers { book, lang }) => {
+                let lang = (lang != "all").then_some(lang);
+                covers::run(&repo, Some(book), lang, false, None, covers::Engine::Resvg)?;
+            }
+            Some(tui::Action::Audiobook { book, lang }) => {
+                let _ = (book, lang);
+                println!("audiobook: not yet implemented (kab engine lands next).");
+            }
+            None => println!("(nothing selected)"),
+        },
+        Cmd::Build { book, format, edition, lang } => {
+            if format.is_some() {
+                build::run(&repo, book, format, lang)?;
+            } else {
+                build::run_editions(&repo, book, lang, edition)?;
+            }
+        }
+        Cmd::Covers { book, lang, html_only, pages, engine } => {
+            let engine = covers::Engine::parse(engine.as_deref())?;
+            covers::run(&repo, book, lang, html_only, pages, engine)?
+        }
+        Cmd::Shrink { epub, px } => {
+            let (b, a) = epub_shrink::shrink_epub(&epub, px)?;
+            println!(
+                "{}: {:.1}MB -> {:.1}MB",
+                epub.display(),
+                b as f64 / 1e6,
+                a as f64 / 1e6
+            );
+        }
+        Cmd::Audiobook { .. } => {
+            println!("not yet implemented (v1 scaffold) — audiobook lands next.");
+        }
+    }
+    Ok(())
+}
+
+fn cmd_list(repo: &Repo, json: bool) -> Result<()> {
+    let mut books = Vec::new();
+    for dir in repo.book_dirs()? {
+        if let Ok((b, _)) = repo.load_book_at(&dir) {
+            books.push(b);
+        }
+    }
+    if json {
+        let v: Vec<_> = books
+            .iter()
+            .map(|b| {
+                serde_json::json!({
+                    "slug": b.slug,
+                    "languages": b.languages,
+                    "editions": b.editions,
+                    "title": b.title,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&v)?);
+    } else {
+        println!("{} book(s) in {}", books.len(), repo.books_dir().display());
+        for b in &books {
+            let title = b.title.values().next().cloned().unwrap_or_default();
+            println!(
+                "  {:30} {:36} [{}] editions: {}",
+                b.slug,
+                title,
+                b.languages.join(","),
+                if b.editions.is_empty() { "—".into() } else { b.editions.join(",") }
+            );
+        }
+    }
+    Ok(())
+}
+
+fn cmd_validate(repo: &Repo, book: Option<String>) -> Result<()> {
+    let dirs = match book {
+        Some(s) => vec![repo.find_book(&s)?.1],
+        None => repo.book_dirs()?,
+    };
+    let mut total = 0usize;
+    for dir in dirs {
+        let (b, _) = repo.load_book_at(&dir)?;
+        let issues = config::validate_book(&b);
+        if issues.is_empty() {
+            println!("\u{2713} {} — ok", b.slug);
+        } else {
+            for i in &issues {
+                println!("{} {}: {}", if i.level == "error" { "\u{2717}" } else { "!" }, b.slug, i.msg);
+            }
+            total += issues.iter().filter(|i| i.level == "error").count();
+        }
+    }
+    if total > 0 {
+        anyhow::bail!("{total} error(s)");
+    }
+    Ok(())
+}
+
+fn cmd_content(repo: &Repo, book: &str, lang: &str) -> Result<()> {
+    let (b, dir) = repo.find_book(book)?;
+    let c = b
+        .content
+        .get(lang)
+        .ok_or_else(|| anyhow::anyhow!("no [content.{lang}] for {book}"))?;
+    for f in c.resolve(&dir)? {
+        println!("{}", f.display());
+    }
+    Ok(())
+}

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>bookmill — previewer (stub)</title>
+<script src="https://unpkg.com/konva@9/konva.min.js"></script>
+<style>
+  :root { --bg:#11151c; --panel:#1b212b; --line:#2c3543; --ink:#e7edf3; --muted:#8a98a8; --accent:#d4a937; }
+  body { margin:0; font:14px/1.45 system-ui,sans-serif; background:var(--bg); color:var(--ink); }
+  header { display:flex; align-items:center; gap:12px; padding:10px 16px; background:var(--panel); border-bottom:1px solid var(--line); }
+  header h1 { font-size:15px; margin:0; font-weight:600; }
+  .spacer { flex:1; }
+  select, label { background:transparent; color:var(--ink); }
+  select { background:#222b36; border:1px solid var(--line); border-radius:6px; padding:6px 9px; color:var(--ink); }
+  a.navlink { color:var(--muted); text-decoration:none; }
+  .host { display:flex; align-items:center; justify-content:center; padding:24px; }
+  #stage { box-shadow:0 8px 40px rgba(0,0,0,.55); }
+  .legend { display:flex; gap:18px; padding:0 16px 10px; color:var(--muted); font-size:12px; }
+  .legend span::before { content:''; display:inline-block; width:14px; height:0; border-top:3px solid; margin-right:6px; vertical-align:middle; }
+  .trim::before { border-color:#ffffff; }
+  .bleed::before { border-color:#ff5a5a; }
+  .safe::before { border-color:#56b6ff; border-top-style:dashed !important; }
+  .note { padding:0 16px 16px; color:var(--muted); font-size:12px; max-width:760px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>bookmill · previewer (v1 stub)</h1>
+  <select id="bookSel"></select>
+  <select id="langSel"></select>
+  <span class="spacer"></span>
+  <a class="navlink" href="/">← cover editor</a>
+</header>
+<div class="legend">
+  <span class="trim">trim</span>
+  <span class="bleed">bleed (0.125&Prime; out)</span>
+  <span class="safe">safe margin (0.125&Prime; in)</span>
+</div>
+<div class="host"><div id="stage"></div></div>
+<p class="note">
+  v1 stub: shows the authoritative rendered cover (resvg output) with KDP trim / bleed / safe
+  guide rectangles overlaid via Konva. The full two-page interior spread previewer
+  (pdftoppm page rasterization + per-page gutter overlays) is a TODO.
+</p>
+<script src="/preview.js"></script>
+</body>
+</html>

@@ -1,0 +1,44 @@
+# Book config — distinguished from the repo config by the top-level `slug`.
+slug      = "the-clockwork-garden"
+languages = ["en"]
+editions  = ["gumroad"]
+
+[title]
+en = "The Clockwork Garden"
+
+[subtitle]
+en = "A Very Short Sample Fable"
+
+[meta]
+# author/date/rights inherit from the repo config; override here if needed.
+
+[pdf]
+bleed = "0"
+
+# Chapters are globbed in filename order — keep the numeric prefix.
+[content.en]
+glob = "en/chapter-*.md"
+
+[listing.en]
+keywords    = ["sample", "fable", "short story", "demo book", "bookmill", "example", "fiction"]
+bisac       = ["FIC000000"]
+reading_age = "8-12"
+blurb = """
+A tiny three-chapter fable used to demonstrate bookmill: a repo config, a book \
+config, a handful of Markdown chapters, and a minimal listing and cover block. \
+Build it with `bookmill build --format epub` to see the whole pipeline run from \
+plain text to a finished EPUB.
+"""
+
+# Minimal cover block. No art ships with the sample, so `bookmill covers` is not
+# part of the demo; the [cover] section is here only to show the schema. Add a
+# cover/bg.jpg (front photo) before running `bookmill covers`.
+[cover]
+serif        = "Playfair Display"
+title_size   = 132
+bgcolor      = "#1B2A4A"
+title_color  = "#F5F0E1"
+sub_color    = "#C9B98A"
+author_color = "#F5F0E1"
+accent       = "#C9B98A"
+filt         = "brightness(0.7) saturate(1.05) contrast(1.05)"
