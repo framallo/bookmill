@@ -1,0 +1,61 @@
+# bookmill project archetypes — drives `bookmill create`.
+#
+# An archetype is a named PRESET of conventions: it seeds the scaffold (project
+# scope, default languages, editions, trim). Everything it sets is overridable by
+# a CLI flag or an interactive answer — convention over configuration. Pick one
+# with `--archetype <name>` or interactively; if omitted, `default` is used.
+#
+# This file is bundled into the binary, but a project-local `templates/archetypes.toml`
+# (next to the repo `bookmill.toml`) OVERRIDES it — add your own archetypes there,
+# or here, with no code change. The two free dimensions are:
+#   scope     = "single" | "series"   (one book, or many sharing series defaults)
+#   languages = [ ... ]               (one language, or several)
+# so everything from single-book/single-language up to series/multi-language works.
+
+default = "series-multilang"
+
+[archetype.single-monolang]
+description = "One book, one language — the simplest project."
+scope       = "single"
+languages   = ["en"]
+editions    = ["kdp-paperback", "kdp-epub", "gumroad"]
+trim        = "6x9"
+
+[archetype.single-multilang]
+description = "One book, several languages (e.g. es + en)."
+scope       = "single"
+languages   = ["es", "en"]
+editions    = ["kdp-paperback", "kdp-epub", "gumroad"]
+trim        = "6x9"
+
+[archetype.series-monolang]
+description = "A series of books sharing defaults, one language."
+scope       = "series"
+languages   = ["en"]
+editions    = ["kdp-paperback", "kdp-epub", "gumroad"]
+trim        = "6x9"
+
+[archetype.series-multilang]
+description = "A series of books sharing defaults, several languages."
+scope       = "series"
+languages   = ["es", "en"]
+editions    = ["kdp-paperback", "kdp-epub", "gumroad"]
+trim        = "6x9"
+
+# Per-language conventions: the chapter-file stem (so chapters glob & sort) and the
+# default Kokoro audiobook voice + ane_book language code. `default` is the fallback
+# for any language without its own entry. Add a language by adding a table here.
+[lang.es]
+chapter_stem = "capitulo"
+voice        = "ef_dora"
+code         = "e"
+
+[lang.en]
+chapter_stem = "chapter"
+voice        = "af_heart"
+code         = "a"
+
+[lang.default]
+chapter_stem = "chapter"
+voice        = "af_heart"
+code         = "a"

@@ -1,0 +1,117 @@
+/* KDP-friendly EPUB3 stylesheet for "The Invisible Distance".
+ *
+ * Design goals:
+ *   - Reflowable. No fixed pixel sizes, no fixed layout. All sizing in em/%
+ *     so Kindle's font-size and font-face controls keep working.
+ *   - No @font-face embedding (avoids epubcheck RSC-007 font-path errors and
+ *     keeps the file small). Kindle renders its own reading fonts.
+ *   - Each chapter starts on a new page; clean headings, quotes, and rules. */
+
+/* ---- Body text ------------------------------------------------------ */
+body {
+    margin: 0 5%;
+    line-height: 1.5;
+    text-align: justify;
+    font-size: 1em;
+    widows: 2;
+    orphans: 2;
+}
+
+p {
+    margin: 0;
+    text-indent: 1.2em;       /* trade-book paragraph indent */
+    text-align: justify;
+}
+
+/* First paragraph after a heading or break is not indented. */
+h1 + p,
+h2 + p,
+h3 + p,
+hr + p,
+blockquote + p,
+p.first {
+    text-indent: 0;
+}
+
+/* ---- Headings ------------------------------------------------------- */
+h1, h2, h3, h4 {
+    font-weight: bold;
+    line-height: 1.2;
+    text-align: left;
+    text-indent: 0;
+    page-break-after: avoid;
+    -epub-hyphens: none;
+    hyphens: none;
+    adobe-hyphenate: none;
+}
+
+/* Chapter title: start each top-level chapter on a right-hand (recto) page.
+   Spread-capable readers (Apple Books) insert a blank verso when needed;
+   readers without spread support fall back to a normal page break. */
+h1 {
+    font-size: 1.6em;
+    margin: 1.5em 0 1em 0;
+    page-break-before: right;
+    break-before: right;
+}
+
+h2 { font-size: 1.3em; margin: 1.4em 0 0.6em 0; }
+h3 { font-size: 1.1em; margin: 1.2em 0 0.5em 0; }
+
+/* ---- Block quotes --------------------------------------------------- */
+blockquote {
+    margin: 1em 1.5em;
+    font-style: italic;
+}
+blockquote p { text-indent: 0; }
+
+/* ---- Scene-break / thematic rule ------------------------------------ */
+hr {
+    border: 0;
+    text-align: center;
+    margin: 1.4em 0;
+    page-break-after: avoid;
+}
+hr::after {
+    content: "* * *";
+    letter-spacing: 0.5em;
+}
+
+/* ---- Lists ---------------------------------------------------------- */
+ul, ol { margin: 0.6em 0 0.6em 1.4em; }
+li { margin: 0.2em 0; text-align: left; }
+
+/* ---- Emphasis & inline ---------------------------------------------- */
+em, i { font-style: italic; }
+strong, b { font-weight: bold; }
+
+/* ---- Front matter (title page / copyright) -------------------------- */
+/* pandoc's auto title page; keep it centered and uncluttered. */
+.title { text-align: center; font-size: 2em; }
+.subtitle { text-align: center; font-style: italic; }
+.author { text-align: center; }
+
+/* ---- Table of contents (nav) ---------------------------------------- */
+nav#toc ol { list-style-type: none; }
+nav#toc a { text-decoration: none; }
+
+/* ---- Images (none in current manuscript, but safe defaults) --------- */
+img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    margin: 1em auto;   /* center every image on the page */
+}
+
+/* Image caption: the alt text is rendered as a visible <figcaption> in the
+   EPUB (implicit_figures is on for the EPUB build only). In the PDF/KDP build
+   implicit_figures is off, so the same text stays an invisible alt attribute. */
+figure { margin: 1.2em auto; text-align: center; }
+figure img { margin: 0 auto 0.4em auto; }
+figcaption {
+    font-size: 0.85em;
+    font-style: italic;
+    color: #555555;
+    text-align: center;
+    margin: 0 auto 0.5em auto;
+}

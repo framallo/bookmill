@@ -31,6 +31,8 @@ pub struct RepoConfig {
     pub build: BuildOpts,
     /// repo-wide cover design defaults; books override via their own [cover]
     pub cover: Option<CoverConfig>,
+    /// repo-wide audiobook defaults (engine/voice/speed); books override via [audiobook]
+    pub audiobook: Option<Audiobook>,
 }
 
 fn default_books_dir() -> String {
@@ -119,6 +121,8 @@ pub struct BookConfig {
     pub pdf: PdfOpts,
     /// per-book cover design (palette/titles/blurb/wrap_bg…); merges over repo [cover]
     pub cover: Option<CoverConfig>,
+    /// per-book audiobook overrides (voice/speed per language); merges over repo [audiobook]
+    pub audiobook: Option<Audiobook>,
 }
 
 // ---------- cover design ([cover]) ----------
@@ -191,6 +195,62 @@ pub struct CoverLang {
     pub title: Option<String>,
     /// cover subtitle override (else book [subtitle.<lang>])
     pub sub: Option<String>,
+}
+
+// ---------- audiobook design ([audiobook]) ----------
+/// Audiobook synthesis config — used at both repo level (defaults) and book level
+/// (overrides). Drives the TTS engine (kab/Kokoro on the ANE today). Top-level
+/// scalars are engine-wide; per-language voice/code/speed live in `[audiobook.<lang>]`
+/// subtables, collected via `serde(flatten)` into `lang` (same pattern as [cover]).
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct Audiobook {
+    /// engine id — "kab" (default; the only built-in for now)
+    pub engine: Option<String>,
+    /// path to the kab binary; else env KAB/BOOKMILL_KAB, else "kab" on PATH,
+    /// else the known build path (~/work/libs/kokoro-audiobook-mcp/.build/release/kab)
+    pub kab_bin: Option<String>,
+    /// m4b "artist" metadata; else book [meta].author / repo author
+    pub artist: Option<String>,
+    /// default speech speed (per-language overrides win); default 1.0
+    pub speed: Option<f64>,
+    /// speak the chapter heading aloud? default true (false => chapter markers only)
+    pub speak_titles: Option<bool>,
+    /// per-language overrides: [audiobook.es], [audiobook.en]
+    #[serde(flatten, default)]
+    pub lang: BTreeMap<String, AudiobookLang>,
+}
+
+/// Per-language audiobook overrides (`[audiobook.<lang>]`).
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct AudiobookLang {
+    /// Kokoro voice (e.g. "ef_dora", "af_heart"); else [`default_voice`]
+    pub voice: Option<String>,
+    /// ane_book language code: a=English e=Spanish f=French i=Italian p=Portuguese;
+    /// else [`default_ane_code`] for the language
+    pub code: Option<String>,
+    /// speech speed override for this language
+    pub speed: Option<f64>,
+    /// speak the chapter heading aloud? overrides the top-level default
+    pub speak_titles: Option<bool>,
+}
+
+/// Built-in default Kokoro voice per language (female voices used by the series).
+pub fn default_voice(lang: &str) -> &'static str {
+    match lang {
+        "es" => "ef_dora",
+        _ => "af_heart",
+    }
+}
+
+/// Built-in default ane_book language code per BCP-47-ish language tag.
+pub fn default_ane_code(lang: &str) -> &'static str {
+    match lang {
+        "es" => "e",
+        "fr" => "f",
+        "it" => "i",
+        "pt" => "p",
+        _ => "a",
+    }
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]

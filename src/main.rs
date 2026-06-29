@@ -2,8 +2,10 @@
 //! v1: config model + discovery + validation + Ratatui TUI. Build/cover/audiobook
 //! engines are scaffolded (orchestrator-first; native engines land next).
 
+mod audiobook;
 mod build;
 mod config;
+mod create;
 mod cover_svg;
 mod epub_shrink;
 mod cover_tmpl;
@@ -29,6 +31,48 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Scaffold a new project (init) or add a book to an existing repo
+    Create {
+        /// book slug (kebab-case identifier + directory name)
+        #[arg(long)]
+        slug: Option<String>,
+        /// title as `lang=Title` (repeatable), e.g. --title es="Mi libro" --title en="My Book"
+        #[arg(long = "title")]
+        titles: Vec<String>,
+        /// author name (defaults to repo author / "Author Name")
+        #[arg(long)]
+        author: Option<String>,
+        /// languages (repeatable or comma-joined), e.g. --lang es --lang en
+        #[arg(long = "lang")]
+        langs: Vec<String>,
+        /// archetype preset (see templates/archetypes.toml)
+        #[arg(long)]
+        archetype: Option<String>,
+        /// project scope when initializing: single | series
+        #[arg(long)]
+        scope: Option<String>,
+        /// series name (series scope)
+        #[arg(long)]
+        series: Option<String>,
+        /// books directory when initializing a new repo (default "books")
+        #[arg(long)]
+        books_dir: Option<String>,
+        /// trim size, e.g. 6x9
+        #[arg(long)]
+        trim: Option<String>,
+        /// target directory (defaults to current dir / --repo)
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// prompt for fields interactively
+        #[arg(long, short)]
+        interactive: bool,
+        /// with --interactive, prompt for ALL fields (not just essentials)
+        #[arg(long)]
+        all: bool,
+        /// accept defaults / confirmations without prompting
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
     /// List discovered books
     List {
         #[arg(long)]
@@ -92,15 +136,64 @@ enum Cmd {
         book: Option<String>,
         #[arg(long)]
         lang: Option<String>,
+        /// override the Kokoro voice (e.g. ef_dora, af_heart) for all jobs
+        #[arg(long)]
+        voice: Option<String>,
+        /// override speech speed for all jobs (e.g. 1.0, 1.1)
+        #[arg(long)]
+        speed: Option<f64>,
+        /// TTS engine id (default "kab"; reserved for future engines)
+        #[arg(long)]
+        engine: Option<String>,
     },
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let start = cli.repo.unwrap_or(std::env::current_dir()?);
+
+    // `create` runs before repo discovery — it may scaffold a brand-new repo
+    // where none exists yet (init mode) or add a book to one it finds.
+    if let Cmd::Create {
+        slug,
+        titles,
+        author,
+        langs,
+        archetype,
+        scope,
+        series,
+        books_dir,
+        trim,
+        dir,
+        interactive,
+        all,
+        yes,
+    } = cli.cmd
+    {
+        return create::run(
+            &start,
+            create::Args {
+                slug,
+                titles,
+                author,
+                langs,
+                archetype,
+                scope,
+                series,
+                books_dir,
+                trim,
+                dir,
+                interactive,
+                all,
+                yes,
+            },
+        );
+    }
+
     let repo = Repo::find(&start)?;
 
     match cli.cmd {
+        Cmd::Create { .. } => unreachable!("handled above"),
         Cmd::List { json } => cmd_list(&repo, json)?,
         Cmd::Validate { book, deep } => {
             if deep {
@@ -135,8 +228,8 @@ fn main() -> Result<()> {
                 covers::run(&repo, Some(book), lang, false, None, covers::Engine::Resvg)?;
             }
             Some(tui::Action::Audiobook { book, lang }) => {
-                let _ = (book, lang);
-                println!("audiobook: not yet implemented (kab engine lands next).");
+                let lang = (lang != "all").then_some(lang);
+                audiobook::run(&repo, Some(book), lang, None, None)?;
             }
             None => println!("(nothing selected)"),
         },
@@ -160,8 +253,13 @@ fn main() -> Result<()> {
                 a as f64 / 1e6
             );
         }
-        Cmd::Audiobook { .. } => {
-            println!("not yet implemented (v1 scaffold) — audiobook lands next.");
+        Cmd::Audiobook { book, lang, voice, speed, engine } => {
+            if let Some(e) = &engine {
+                if e != "kab" {
+                    anyhow::bail!("unsupported audiobook engine {e:?} (only \"kab\")");
+                }
+            }
+            audiobook::run(&repo, book, lang, voice, speed)?;
         }
     }
     Ok(())

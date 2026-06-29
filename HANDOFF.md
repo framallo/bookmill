@@ -24,8 +24,17 @@ builds them (Phase 8 deleted every `meta.md`).
   to print PDF + Kindle EPUB; `la-riqueza-de-la-isla` is submitted to KDP and
   reproduced byte-for-byte; `no-hay-plata-en-la-isla-de-las-ratas` is cover- and
   interior-final at $12.99.
-- **Audiobook: NOT implemented** (CLI/TUI stub only — prints "not yet
-  implemented").
+- **Audiobook: v1 implemented** (`src/audiobook.rs`). `TtsEngine` trait + `kab`
+  adapter, config-driven (`[audiobook]`/`[audiobook.<lang>]`), wired into the CLI
+  (`bookmill audiobook`, with `--voice`/`--speed`) and the TUI. Chapters resolve
+  through `[content.<lang>]` (appended epilogues included — the old `capitulo-*.md`
+  Makefile glob dropped them) and are staged numbered so kab's lexical glob keeps
+  bookmill's order. **NOT yet done:** the content-hash segment cache for
+  incremental re-renders (kab `convert` re-renders the whole book each call).
+- **Project scaffolder: implemented** (`src/create.rs`). `bookmill create`
+  auto-detects init (new repo) vs add-book (inside a repo), driven by
+  `templates/archetypes.toml` (scope × languages); writes a buildable project
+  including the shared build assets in `templates/scaffold/`. Flags + `--interactive`.
 - **Web cover editor: works except absolute drag-positions don't round-trip into
   the render** (renderer-side gap, see below).
 - **PDF engine still shells out** to pandoc/xelatex — the native Typst swap (v2)
@@ -94,14 +103,16 @@ progress".
 
 ## What's NOT done — the work queue
 
-1. **Audiobook engine (biggest gap).** Implement the `TtsEngine` trait with a
-   **kab** adapter as default, and the **content-hash AST segment cache** (hash =
-   text + voice + engine/model version + speed) so fixing one line re-renders
-   only that clip. This is what makes Federico's proofread-by-listening loop
-   cheap. Wire it into the existing `Cmd::Audiobook` stub in `main.rs:163` and the
-   TUI action in `main.rs:137`. Spec: `BOOKMILL-PLAN.md` → "Audiobook". Today
-   audiobooks are still rendered with standalone `kab` via the argentina repo's
-   Makefile recipe (see that repo's CLAUDE.md).
+1. **Audiobook segment cache (the remaining audiobook work).** The v1 engine
+   (`src/audiobook.rs`: `TtsEngine` trait + `kab` adapter, config-driven, wired
+   into CLI + TUI) is done and replaces the Makefile recipe. What's left is the
+   **content-hash AST segment cache** (hash = text + voice + engine/model version
+   + speed) so fixing one line re-renders only that clip — what makes Federico's
+   proofread-by-listening loop cheap. `kab convert` re-renders the whole book, so
+   the cache needs per-segment synth: `ane_book.py` exposes a single-chapter
+   `--text-file … --out …` path the cache can drive, then mux the `.m4b` with
+   chapter markers (kab's `Assemble.swift` does this today). Slot it in as a
+   caching `TtsEngine` that wraps `KabEngine`. Spec: `BOOKMILL-PLAN.md` → "Audiobook".
 
 2. **Cover editor position round-trip (renderer gap).** The web editor saves
    per-element `[cover.<lang>.layout]` (xPct/yPct/wPct/fontPct/…) to TOML, and

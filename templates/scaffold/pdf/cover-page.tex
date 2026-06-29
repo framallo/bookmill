@@ -1,0 +1,20 @@
+% Full-bleed cover as the first page. Used ONLY by the shareable PDF, never by
+% the KDP interior (KDP paperback covers are uploaded separately).
+% Included via pandoc --include-in-header.
+\usepackage{eso-pic}
+\usepackage{graphicx}
+\graphicspath{{images/}{./}}
+% Per-book cover path is injected by the Makefile (\def\coverimagepath{...} in a
+% header include that precedes this file). Falls back to the shared cover.png.
+\providecommand{\coverimagepath}{cover.png}
+\AtBeginDocument{%
+  % Stamp the cover as a full-bleed foreground on the FIRST page only (the star
+  % form targets just the next shipped page), painted over the paper texture.
+  \AddToShipoutPictureFG*{%
+    \AtPageLowerLeft{%
+      \includegraphics[width=\paperwidth,height=\paperheight]{\coverimagepath}%
+    }%
+  }%
+  \thispagestyle{empty}%
+  \null\clearpage
+}
