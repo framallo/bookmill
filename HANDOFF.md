@@ -39,8 +39,9 @@ builds them (Phase 8 deleted every `meta.md`).
   auto-detects init (new repo) vs add-book (inside a repo), driven by
   `templates/archetypes.toml` (scope × languages); writes a buildable project
   including the shared build assets in `templates/scaffold/`. Flags + `--interactive`.
-- **Web cover editor: works except absolute drag-positions don't round-trip into
-  the render** (renderer-side gap, see below).
+- **Web cover editor: works, folded into the binary as `bookmill web`.** Drag
+  positions now round-trip into the render (`[cover.<lang>.layout]` honored by
+  `cover_svg.rs`). The standalone `web/` crate still builds but is superseded.
 - **PDF engine still shells out** to pandoc/xelatex — the native Typst swap (v2)
   is not done.
 - **Git: this is the first commit.** Before now the whole project was untracked.
@@ -85,10 +86,12 @@ bookmill build <slug> --format all --lang all     # epub|pdf|kdp|print|all
 bookmill build <slug> --edition kdp-epub          # build by edition instead of format
 bookmill build cover <slug> --lang all            # front PNG + wrap PDF + eBook JPG
 bookmill tui                                       # interactive terminal UI
-
-# Web cover editor (separate crate):
-cd web && cargo run              # http://127.0.0.1:7777  (build the main binary first)
+bookmill web [--port 7777] [--pages 120]           # cover editor (folded into the binary)
 ```
+
+The standalone `web/` crate still works (`cd web && cargo run`) but is superseded
+by `bookmill web`, which serves the same editor from the single binary (cover.rs /
+render.rs shared by source via `#[path]`, frontend embedded).
 
 External tools still required: **pandoc + xelatex** (PDF), **headless Chrome**
 (covers via `bookmill covers`), **epubcheck + pdfinfo** (`validate --deep`), and
@@ -141,11 +144,13 @@ progress".
 
 5. **Web UI breadth** — multi-version covers, paperback wrap/hardcover modes in
    the editor, the full two-page interior previewer (currently a stub), and a
-   publish-checklist panel reusing `validate --deep --json`. Eventually fold the
-   `web/` server into the main binary as `bookmill start`.
+   publish-checklist panel reusing `validate --deep --json`. (The server itself is
+   now folded into the binary as `bookmill web`; the standalone `web/` crate
+   remains for development. Dedupe later: cover.rs/render.rs are shared by `#[path]`
+   today — a shared lib target would be cleaner.)
 
-6. **Image-DPI auditing** in `validate --deep` — left out because it's not
-   cheap/reliable via pdfinfo/pdfimages (documented in `deep.rs`).
+6. ~~**Image-DPI auditing** in `validate --deep`~~ — **DONE**: `deep.rs` parses
+   `pdfimages -list` effective ppi and warns on interior images <300 dpi.
 
 ### Decided
 

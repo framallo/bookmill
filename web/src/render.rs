@@ -6,10 +6,19 @@ use anyhow::{bail, Context, Result};
 use std::path::Path;
 use std::process::Command;
 
-/// Locate the bookmill binary: $BOOKMILL_BIN, then sibling target dirs, then PATH.
+/// Locate the bookmill binary: $BOOKMILL_BIN, then — when this process *is*
+/// bookmill (the folded `bookmill web` server) — the current exe, then sibling
+/// target dirs, then PATH. The current-exe check lets the in-binary server call
+/// itself regardless of cwd, while the standalone `bookmill-web` (whose exe stem
+/// is not "bookmill") falls through to locate the real bookmill binary.
 pub fn bookmill_bin() -> String {
     if let Ok(b) = std::env::var("BOOKMILL_BIN") {
         return b;
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if exe.file_stem().and_then(|s| s.to_str()) == Some("bookmill") {
+            return exe.display().to_string();
+        }
     }
     // web/ lives inside the bookmill crate; the binary builds to ../target/*.
     for rel in [

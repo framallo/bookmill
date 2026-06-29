@@ -37,3 +37,9 @@ regex = "1"
 # Content hashing for the audiobook incremental-render manifest (which chapters
 # changed since the last render → re-render + tell the proofreader what to re-hear).
 sha2 = "0.10"
+# `bookmill web` — the cover editor server, folded into the binary. cover.rs /
+# render.rs are shared by source with the standalone web/ crate via #[path].
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }
+tower-http = { version = "0.6", features = ["cors"] }
+toml_edit = "0.22"

@@ -13,6 +13,7 @@ mod covers;
 mod deep;
 mod discover;
 mod tui;
+mod web;
 
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
@@ -118,6 +119,15 @@ enum Cmd {
         /// re-render even if the manifest shows nothing changed
         #[arg(long)]
         force: bool,
+    },
+    /// Launch the cover-editor web UI (localhost)
+    Web {
+        /// listen port (localhost only)
+        #[arg(long, default_value_t = 7777)]
+        port: u16,
+        /// spine page count used only when a book's print interior PDF is missing
+        #[arg(long, default_value_t = 120)]
+        pages: u32,
     },
 }
 
@@ -293,6 +303,7 @@ fn main() -> Result<()> {
             }
             audiobook::run(&repo, book, lang, voice, speed, force)?;
         }
+        Cmd::Web { port, pages } => web::run(&repo.root, port, pages)?,
     }
     Ok(())
 }

@@ -57,6 +57,7 @@ bookmill build [book] [--format|--edition] [--lang]   build interiors (EPUB/PDF)
 bookmill build cover [book] [--lang]      render front PNG + paperback wrap PDF + eBook JPG
 bookmill build shrink <epub> [--px]       shrink EPUB images in place (native)
 bookmill audiobook [book] [--lang] [--voice] [--speed] [--force]   render a chaptered .m4b (kab engine)
+bookmill web [--port] [--pages]      launch the cover-editor web UI (localhost)
 bookmill tui                         interactive terminal UI (build/cover/validate/audiobook)
 ```
 
@@ -160,7 +161,8 @@ templates/
   archetypes.toml   project archetypes for `create`
   scaffold/         build assets written into new projects
   cover/            cover HTML templates
-web/             separate crate: axum + Konva.js cover editor
+  web.rs / web/    cover-editor server (`bookmill web`); cover.rs/render.rs shared
+web/             standalone crate (same editor; superseded by `bookmill web`)
 examples/sample-repo/   self-contained demo repo
 ```
 
