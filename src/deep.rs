@@ -158,8 +158,16 @@ pub fn run(repo: &Repo, book: Option<String>, json: bool) -> Result<()> {
         return Ok(());
     }
 
+    // Overall verdict (mirrors the web book-detail "Publish readiness" panel).
+    let verdict = if rep.err > 0 {
+        "\u{2717} NOT READY"
+    } else if rep.warn > 0 {
+        "\u{26a0} READY WITH WARNINGS"
+    } else {
+        "\u{2713} READY"
+    };
     println!(
-        "\n{} ok · {} warning(s) · {} error(s)",
+        "\n{verdict} — {} ok · {} warning(s) · {} error(s)",
         rep.pass, rep.warn, rep.err
     );
     if rep.err > 0 {
