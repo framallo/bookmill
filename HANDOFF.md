@@ -56,7 +56,7 @@ bookmill/
     config.rs      TOML model + layered resolution + load-time validation
     discover.rs    walk repo, find books (book cfg has top-level `slug`)
     build.rs       request → Vec<Job> (book×edition/format×lang×output); runs the queue
-    deep.rs        `validate --deep`: epubcheck + PDF-geometry + cover-resolution audits
+    deep.rs        `validate --deep`: epubcheck + PDF-geometry + cover-resolution + image-DPI + bleed-coverage audits
     covers.rs      `bookmill covers` orchestrator (HTML → headless Chrome → PNG/PDF)
     cover_tmpl.rs  fills templates/cover/{front,wrap}.html.tmpl from [cover] config
     cover_svg.rs   SVG cover renderer (resvg path) — see GAP below

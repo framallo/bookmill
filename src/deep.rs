@@ -133,6 +133,9 @@ pub fn run(repo: &Repo, book: Option<String>, json: bool) -> Result<()> {
                     pdf_geometry_check(repo, job, &mut rep);
                     // Audit interior image DPI on the KDP print PDF only.
                     image_dpi_check(repo, job, &mut rep);
+                    // Catch "insufficient bleed" (a full-page plate that leaves a
+                    // white margin) before KDP rejects it.
+                    bleed_coverage_check(repo, job, &mut rep);
                 }
             }
         }
@@ -449,6 +452,100 @@ fn audit_dpi_rows(list: &str, min_dpi: u32, min_px: u32) -> (usize, Option<u32>,
     (checked, min_seen, low)
 }
 
+// ---------- Interior bleed coverage ----------
+
+/// A plate covering ≥ this fraction of the page *area* is treated as a full-page
+/// image that is meant to bleed (vs. a small inset/vignette, which is not).
+const FULLPAGE_AREA_FRAC: f64 = 0.70;
+/// A bleeding full-page image should reach the page edge. If it falls short by
+/// more than this (total, both sides of a dimension), it leaves a white margin —
+/// KDP's "insufficient bleed". 1/16in is KDP's cut tolerance; a fit-to-trim plate
+/// on a 0.125in-bleed page falls short by 0.25in, well past this.
+const BLEED_GAP_TOL_IN: f64 = 0.0625;
+
+/// A full-page image that doesn't reach the page edge (placed size vs. page size).
+struct BleedRow {
+    page: u32,
+    placed_w: f64,
+    placed_h: f64,
+    gap_w: f64,
+    gap_h: f64,
+}
+
+/// Flag full-page plates that leave a white margin (insufficient bleed) on the
+/// KDP print PDF — the exact failure KDP rejects ("insufficient bleed, page N").
+/// `pdfimages -list` gives each image's pixel size and effective ppi, so the
+/// *placed* size in inches is `px / ppi`; compared to the page size (from the
+/// job's resolved geometry), a near-full-page image that stops short of the edge
+/// is reported as a `warn` (heuristic — decorative bordered art could trip it).
+fn bleed_coverage_check(repo: &Repo, job: &Job, rep: &mut Report) {
+    let Some(g) = job.geometry else { return };
+    let path = build::job_output_path(repo, job);
+    let ed = job.edition.clone().unwrap_or_else(|| job.target.clone());
+    let label = format!("{} {} · {} · {}", job.slug, job.lang, ed, job.out.name());
+    if !path.exists() {
+        return; // the DPI/geometry checks already note a missing artifact
+    }
+    let list = match pdfimages_list(&path) {
+        Ok(t) => t,
+        Err(_) => return, // image_dpi_check surfaces the pdfimages failure
+    };
+    let short = audit_bleed_rows(&list, g.pw, g.ph, MIN_IMG_PX);
+    if short.is_empty() {
+        rep.ok(format!("bleed {label}: full-page images reach the page edge"));
+        return;
+    }
+    for r in &short {
+        rep.warn_page(
+            format!(
+                "bleed {label}: p{} full-page image {:.2}×{:.2}in leaves a {:.2}×{:.2}in margin \
+                 (does not reach the page edge — KDP insufficient bleed)",
+                r.page, r.placed_w, r.placed_h, r.gap_w, r.gap_h
+            ),
+            r.page,
+        );
+    }
+}
+
+/// Parse `pdfimages -list` for full-page images whose placed size (px / ppi)
+/// falls short of the page size. Skips small insets (< [`FULLPAGE_AREA_FRAC`] of
+/// the page area — vignettes are meant to float, not bleed) and tiny images.
+fn audit_bleed_rows(list: &str, page_w: f64, page_h: f64, min_px: u32) -> Vec<BleedRow> {
+    let page_area = page_w * page_h;
+    let mut out = Vec::new();
+    for line in list.lines() {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        if f.len() < 16 || f[2] != "image" {
+            continue;
+        }
+        let (page, w, h, xppi, yppi) = match (
+            f[0].parse::<u32>(),
+            f[3].parse::<u32>(),
+            f[4].parse::<u32>(),
+            f[12].parse::<f64>(),
+            f[13].parse::<f64>(),
+        ) {
+            (Ok(p), Ok(w), Ok(h), Ok(x), Ok(y)) if x > 0.0 && y > 0.0 => (p, w, h, x, y),
+            _ => continue,
+        };
+        if w < min_px || h < min_px {
+            continue;
+        }
+        let placed_w = w as f64 / xppi;
+        let placed_h = h as f64 / yppi;
+        // Only consider images large enough to be "meant to be full-page".
+        if placed_w * placed_h < FULLPAGE_AREA_FRAC * page_area {
+            continue;
+        }
+        let gap_w = (page_w - placed_w).max(0.0);
+        let gap_h = (page_h - placed_h).max(0.0);
+        if gap_w > BLEED_GAP_TOL_IN || gap_h > BLEED_GAP_TOL_IN {
+            out.push(BleedRow { page, placed_w, placed_h, gap_w, gap_h });
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -483,5 +580,28 @@ page   num  type   width height color comp bpc  enc interp  object ID x-ppi y-pp
         assert_eq!(checked, 0);
         assert_eq!(min_seen, None);
         assert!(low.is_empty());
+    }
+
+    // page 6.125 x 9.25 (6x9 trim + 0.125 bleed):
+    //   p6  fit-to-trim plate 2048x3072 @ 349dpi  -> placed 5.87x8.80in (white border) -> FLAG
+    //   p30 full-bleed plate  2458x3712 @ 401dpi  -> placed 6.13x9.26in (reaches edge)  -> ok
+    //   p8  vignette          612x820   @ 342dpi  -> placed 1.79x2.40in (small)          -> skip
+    //   p12 tiny icon         40x40     @ 72dpi                                          -> skip
+    const BLEED_SAMPLE: &str = "\
+page   num  type   width height color comp bpc  enc interp  object ID x-ppi y-ppi size ratio
+--------------------------------------------------------------------------------------------
+   6     0 image    2048  3072  rgb     3   8  image  no        47  0   349   349 8980K  49%
+   8     1 image     612   820  rgb     3   8  image  no        57  0   342   342  619K  42%
+  12     2 image      40    40  rgb     3   8  image  no        70  0    72    72  100B  10%
+  30     3 image    2458  3712  rgb     3   8  image  no        90  0   401   401 9000K  49%";
+
+    #[test]
+    fn flags_only_fit_to_trim_fullpage_plate() {
+        let short = audit_bleed_rows(BLEED_SAMPLE, 6.125, 9.25, MIN_IMG_PX);
+        // only the fit-to-trim plate on page 6 leaves a margin; the full-bleed
+        // plate (p30), the vignette (p8, too small) and the tiny icon are not flagged.
+        assert_eq!(short.len(), 1);
+        assert_eq!(short[0].page, 6);
+        assert!(short[0].gap_w > 0.0625 && short[0].gap_h > 0.0625);
     }
 }
