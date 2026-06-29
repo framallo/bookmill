@@ -5,17 +5,15 @@
 \usepackage{eso-pic}
 \newcommand{\cleartoverso}{\clearpage\ifodd\value{page}\hbox{}\thispagestyle{empty}\clearpage\fi}
 
-% Place an illustration as large as possible, centered, aspect preserved, but
-% fitted to the TRIM box (0.125in inside each paper edge = the bleed amount) so
-% content at the artwork's edge lands at the cut line and is NOT lost in the
-% bleed when KDP trims. The starred form affects only this one page.
+% Full-bleed plate: fill the ENTIRE paper (paperwidth x paperheight) so the
+% artwork reaches all four physical edges. KDP requires edge-to-edge images on a
+% bleed interior to extend PAST the trim line into the 0.125in bleed; fitting the
+% image inside the trim leaves a white border and is rejected as "insufficient
+% bleed". The outer 0.125in is trimmed off by KDP, as intended. Render plates at
+% (or slightly past) the bleed page aspect to avoid stretch. Starred form affects
+% only this one page.
 \newcommand{\AddThisPageImage}[1]{%
   \AddToShipoutPictureBG*{%
-    \put(0,0){%
-      \parbox[b][\paperheight][c]{\paperwidth}{%
-        \centering
-        \includegraphics[width=\dimexpr\paperwidth-0.25in\relax,height=\dimexpr\paperheight-0.25in\relax,keepaspectratio]{#1}%
-      }%
-    }%
+    \put(0,0){\includegraphics[width=\paperwidth,height=\paperheight]{#1}}%
   }%
 }
