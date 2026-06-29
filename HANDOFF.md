@@ -139,12 +139,16 @@ progress".
 6. **Image-DPI auditing** in `validate --deep` — left out because it's not
    cheap/reliable via pdfinfo/pdfimages (documented in `deep.rs`).
 
+### Decided
+
+- **Name: `bookmill` (locked).** No longer a placeholder — it's the binary name,
+  the crate name, and the GitHub repo (`framallo/bookmill`, private).
+
 ### Open decisions (need Federico)
 
-1. Final tool name (`bookmill` is a placeholder).
-2. DOCX: native `docx-rs` writer, drop entirely, or keep pandoc just for `--format docx`.
-3. Distribution: personal (pipx-style) vs shareable/OSS.
-4. Graphite cover-editing depth: SVG-bridge (works now) vs procedural integration
+1. DOCX: native `docx-rs` writer, drop entirely, or keep pandoc just for `--format docx`.
+2. Distribution: personal (pipx-style) vs shareable/OSS.
+3. Graphite cover-editing depth: SVG-bridge (works now) vs procedural integration
    (waits on Graphite's headless API).
 
 ## Gotchas
