@@ -195,6 +195,59 @@ pub struct CoverLang {
     pub title: Option<String>,
     /// cover subtitle override (else book [subtitle.<lang>])
     pub sub: Option<String>,
+    /// absolute per-element eBook-front layout (`[cover.<lang>.layout]`), written
+    /// by the web cover editor. When present, the SVG renderer positions
+    /// title/subtitle/author from these absolute coordinates instead of its
+    /// default flex stack. Absent => unchanged default layout (no regression).
+    pub layout: Option<CoverLayout>,
+}
+
+/// Absolute eBook-front cover layout (`[cover.<lang>.layout]`) authored by the
+/// web cover editor (`web/src/cover.rs`). One optional [`CoverElement`] per
+/// draggable text block. Coordinates are fractions of the **1600×2560 eBook
+/// front canvas** — this layout governs the eBook front PNG only (the editor is
+/// front-only); the paperback wrap keeps its own flex math.
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct CoverLayout {
+    pub title: Option<CoverElement>,
+    pub subtitle: Option<CoverElement>,
+    pub author: Option<CoverElement>,
+}
+
+/// One absolutely-positioned cover text block. Field names/units match exactly
+/// what the web editor persists (`element_inline` in `web/src/cover.rs`):
+///   * `xPct`/`yPct` — the block's **center**, as a fraction of canvas width/height.
+///   * `wPct` — wrap-box width, as a fraction of canvas **width**.
+///   * `fontPct` — font size, as a fraction of canvas **height**.
+///   * `fill` / `fontFamily` / `fontStyle` / `text` — style + content overrides.
+/// Numeric fields default leniently so a hand-edited partial block never fails the
+/// build; the editor always writes complete values.
+#[derive(Debug, Deserialize, Clone)]
+pub struct CoverElement {
+    #[serde(rename = "xPct", default = "half")]
+    pub x_pct: f64,
+    #[serde(rename = "yPct", default = "half")]
+    pub y_pct: f64,
+    #[serde(rename = "wPct", default = "default_w_pct")]
+    pub w_pct: f64,
+    #[serde(rename = "fontPct", default = "default_font_pct")]
+    pub font_pct: f64,
+    pub fill: Option<String>,
+    #[serde(rename = "fontFamily")]
+    pub font_family: Option<String>,
+    #[serde(rename = "fontStyle")]
+    pub font_style: Option<String>,
+    pub text: Option<String>,
+}
+
+fn half() -> f64 {
+    0.5
+}
+fn default_w_pct() -> f64 {
+    0.8
+}
+fn default_font_pct() -> f64 {
+    0.03
 }
 
 // ---------- audiobook design ([audiobook]) ----------

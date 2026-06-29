@@ -10,7 +10,7 @@
 //! Fonts are `include_bytes!`'d from `templates/cover/fonts/` (see that dir's
 //! README) so covers render with no system fonts and no network.
 
-use crate::config::{BookConfig, RepoConfig};
+use crate::config::{BookConfig, CoverElement, RepoConfig};
 use crate::cover_tmpl::{resolve, two_line_parts, Resolved};
 use anyhow::{bail, Context, Result};
 use std::path::Path;
@@ -294,6 +294,23 @@ impl CoverRenderer {
             attr_filter(&filt_id)
         ));
 
+        // Web-editor absolute layout: when [cover.<lang>.layout] is present, place
+        // title/subtitle/author from its saved canvas fractions instead of the flex
+        // stack below. The eBook front is the only edited surface, so this branch is
+        // front-only; the wrap keeps its own math. Absent => unchanged flex layout.
+        let mut text = String::new();
+        if r.layout.as_ref().map_or(false, |l| {
+            l.title.is_some() || l.subtitle.is_some() || l.author.is_some()
+        }) {
+            self.front_absolute(&mut text, &mut defs, r, W, H, top, cx);
+            return Ok(FRONT_SVG_TMPL
+                .replace("{{DEFS}}", &defs)
+                .replace("{{BGCOLOR}}", &r.bgcolor)
+                .replace("{{ACCENT}}", &r.accent)
+                .replace("{{IMAGE}}", &image)
+                .replace("{{TEXT}}", &text));
+        }
+
         // Block heights.
         let badge_h = line_box(32.0, 1.2);
         let title_lines = two_line_parts(&r.title);
@@ -303,6 +320,7 @@ impl CoverRenderer {
         let sub_h = 40.0 + sub_lines.len() as f64 * line_box(48.0, 1.3);
         let title_block_h = title_h + rule_block + sub_h;
         let author_h = line_box(42.0, 1.2);
+        // (`text` declared above, before the absolute-layout branch.)
 
         // Resolve flex auto-margins.
         let gap1 = Margin::parse(&r.title_mt, content_w);
@@ -314,7 +332,6 @@ impl CoverRenderer {
         let g1 = gap1.value(share);
         let g2 = gap2.value(share);
 
-        let mut text = String::new();
         let mut y = top;
         // badge
         self.emit_line(
@@ -422,6 +439,175 @@ impl CoverRenderer {
             .replace("{{ACCENT}}", &r.accent)
             .replace("{{IMAGE}}", &image)
             .replace("{{TEXT}}", &text))
+    }
+
+    /// Absolute eBook-front text layout from `[cover.<lang>.layout]` (web cover
+    /// editor). Places title/subtitle/author at their saved canvas-fraction
+    /// centers/sizes (`emit_abs_element`), keeps the fixed series badge at the
+    /// default top, and draws the accent rule under the title block. Mirrors the
+    /// editor's Konva model: each block is centered on (xPct·W, yPct·H), wrapped to
+    /// wPct·W, at fontPct·H with line-height 1.0, text horizontally centered.
+    fn front_absolute(
+        &self,
+        text: &mut String,
+        defs: &mut String,
+        r: &Resolved,
+        w: f64,
+        h: f64,
+        top: f64,
+        cx: f64,
+    ) {
+        let l = r.layout.as_ref();
+
+        // Series badge — not an editor element; stays at the default top center.
+        self.emit_line(
+            text,
+            &up(&r.badge),
+            cx,
+            top + baseline(32.0, 1.2, self.vmetrics("Montserrat", 400, false)),
+            &TextStyle {
+                family: "Montserrat",
+                weight: 400,
+                size: 32.0,
+                italic: false,
+                letter_spacing: 9.0,
+                fill: &r.badge_color,
+                opacity: 0.95,
+                stroke: &r.badge_stroke,
+                shadow_id: "",
+                anchor: "middle",
+            },
+        );
+
+        // Title (absolute).
+        let (t_top, t_h, t_cx) = self.emit_abs_element(
+            text,
+            defs,
+            l.and_then(|l| l.title.as_ref()),
+            (0.5, 0.62, 0.80, r.title_size / h),
+            &r.title,
+            &r.title_color,
+            &r.serif,
+            "bold",
+            &r.title_shadow,
+            "tsh",
+            w,
+            h,
+        );
+
+        // Accent rule, centered under the title block (default 46px gap, 220x3).
+        let rule_y = t_top + t_h + 46.0;
+        text.push_str(&format!(
+            "<rect x=\"{}\" y=\"{}\" width=\"220\" height=\"3\" fill=\"{}\" opacity=\"0.85\"/>",
+            fmt(t_cx - 110.0),
+            fmt(rule_y),
+            r.accent
+        ));
+
+        // Subtitle (absolute).
+        let sub_style = if r.sub_italic == "italic" { "italic" } else { "normal" };
+        self.emit_abs_element(
+            text,
+            defs,
+            l.and_then(|l| l.subtitle.as_ref()),
+            (0.5, 0.76, 0.85, 48.0 / h),
+            &r.sub,
+            &r.sub_color,
+            &r.sub_font,
+            sub_style,
+            &r.sub_shadow,
+            "ssh",
+            w,
+            h,
+        );
+
+        // Author (absolute; rendered as stored — the editor does not upper-case it).
+        self.emit_abs_element(
+            text,
+            defs,
+            l.and_then(|l| l.author.as_ref()),
+            (0.5, 0.93, 0.80, 42.0 / h),
+            &r.author,
+            &r.author_color,
+            "Montserrat",
+            "normal",
+            "none",
+            "aush",
+            w,
+            h,
+        );
+    }
+
+    /// Emit one absolutely-positioned text block, taking each field from `el` when
+    /// present and otherwise the supplied default (`def` = x_pct, y_pct, w_pct,
+    /// font_pct). Returns the block's `(top_y, total_height, center_x)` so callers
+    /// can anchor adjacent decoration (e.g. the rule under the title).
+    #[allow(clippy::too_many_arguments)]
+    fn emit_abs_element(
+        &self,
+        out: &mut String,
+        defs: &mut String,
+        el: Option<&CoverElement>,
+        def: (f64, f64, f64, f64),
+        def_text: &str,
+        def_fill: &str,
+        def_family: &str,
+        def_style: &str,
+        shadow_css: &str,
+        shadow_id: &str,
+        w: f64,
+        h: f64,
+    ) -> (f64, f64, f64) {
+        let (def_x, def_y, def_w, def_font) = def;
+        let x_pct = el.map(|e| e.x_pct).unwrap_or(def_x);
+        let y_pct = el.map(|e| e.y_pct).unwrap_or(def_y);
+        let w_pct = el.map(|e| e.w_pct).unwrap_or(def_w);
+        let font_pct = el.map(|e| e.font_pct).unwrap_or(def_font);
+        let fill = el.and_then(|e| e.fill.clone()).unwrap_or_else(|| def_fill.to_string());
+        let family = el
+            .and_then(|e| e.font_family.clone())
+            .unwrap_or_else(|| def_family.to_string());
+        let style = el
+            .and_then(|e| e.font_style.clone())
+            .unwrap_or_else(|| def_style.to_string());
+        let content = el
+            .and_then(|e| e.text.clone())
+            .filter(|t| !t.trim().is_empty())
+            .unwrap_or_else(|| def_text.to_string());
+
+        let size = font_pct * h;
+        let block_cx = x_pct * w;
+        let box_w = (w_pct * w).max(1.0);
+        let italic = style.contains("italic");
+        let weight: u16 = if style.contains("bold") { 700 } else { 400 };
+        let lh = 1.0_f64; // Konva default line-height.
+
+        let lines = self.wrap(&content, &family, weight, italic, size, box_w);
+        let total_h = lines.len() as f64 * line_box(size, lh);
+        let block_top = y_pct * h - total_h / 2.0;
+        let vm = self.vmetrics(&family, weight, italic);
+        let shadow = shadow_def(defs, shadow_css, shadow_id);
+        for (i, ln) in lines.iter().enumerate() {
+            self.emit_line(
+                out,
+                &esc(ln),
+                block_cx,
+                block_top + baseline(size, lh, vm) + i as f64 * line_box(size, lh),
+                &TextStyle {
+                    family: &family,
+                    weight,
+                    size,
+                    italic,
+                    letter_spacing: 0.0,
+                    fill: &fill,
+                    opacity: 1.0,
+                    stroke: "0px transparent",
+                    shadow_id: &shadow,
+                    anchor: "middle",
+                },
+            );
+        }
+        (block_top, total_h, block_cx)
     }
 
     fn wrap_svg(&self, r: &Resolved, cover_dir: &Path, pages: u32) -> Result<String> {

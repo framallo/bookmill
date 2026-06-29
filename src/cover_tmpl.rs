@@ -5,7 +5,7 @@
 //! covers. Design lives in TOML now (repo `[cover]` defaults + book `[cover]`
 //! overrides + `[cover.<lang>]` per-language overrides).
 
-use crate::config::{BookConfig, CoverConfig, CoverLang, RepoConfig};
+use crate::config::{BookConfig, CoverConfig, CoverLang, CoverLayout, RepoConfig};
 
 const FRONT_TMPL: &str = include_str!("../templates/cover/front.html.tmpl");
 const WRAP_TMPL: &str = include_str!("../templates/cover/wrap.html.tmpl");
@@ -110,6 +110,9 @@ pub(crate) struct Resolved {
     pub(crate) title: String,
     pub(crate) sub: String,
     pub(crate) blurb: String,
+    /// absolute eBook-front layout from `[cover.<lang>.layout]` (web editor),
+    /// honored by the SVG front renderer only. `None` => default flex layout.
+    pub(crate) layout: Option<CoverLayout>,
 }
 
 /// First-set lookup: book field, then repo field, then `default`.
@@ -247,6 +250,7 @@ pub(crate) fn resolve(repo: &RepoConfig, book: &BookConfig, lang: &str) -> Resol
         title,
         sub,
         blurb,
+        layout: ml.and_then(|m| m.layout.clone()),
     }
 }
 
