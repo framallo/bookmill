@@ -200,6 +200,47 @@ fn resolve_geometry(
     })
 }
 
+/// KDP print interior geometry for the web previewer.
+///
+/// Resolves the trim + bleed (inches) and the full page geometry (paper incl.
+/// bleed + margins) of the book's KDP **print** interior — the edition whose
+/// `KdpPdf` output lands at the canonical `<slug>-<lang>-kdp.pdf` path (i.e. a
+/// `kdp-*` target, not the edition-suffixed `bubok` POD). Falls back to book /
+/// repo trim+bleed defaults. Returns `None` if the book has no print interior.
+pub struct PrintGeometry {
+    /// trim width / height (inches), before bleed
+    pub trim_w: f64,
+    pub trim_h: f64,
+    /// per-side bleed added on the KDP print page (inches)
+    pub bleed: f64,
+    /// full page geometry: paper (= trim + bleed) + margins
+    pub geom: PageGeometry,
+}
+
+pub fn kdp_print_geometry(repo: &Repo, book: &BookConfig) -> Option<PrintGeometry> {
+    // Pick the edition that produces the canonical `-kdp.pdf` (KdpPdf target,
+    // excluding bubok, whose output is edition-suffixed).
+    let ed = book.editions.iter().find_map(|name| {
+        let e = repo.config.editions.get(name)?;
+        let target = e.target.clone().unwrap_or_else(|| "retail".into());
+        (outputs_for_target(&target).contains(&Out::KdpPdf) && target != "bubok").then_some(e)
+    });
+    let trim = ed
+        .and_then(|e| e.trim.clone())
+        .or_else(|| book.pdf.trim.clone())
+        .or_else(|| repo.config.defaults.trim.clone())
+        .unwrap_or_else(|| "6x9".into());
+    let (trim_w, trim_h) = parse_trim(&trim)?;
+    let bleed = ed
+        .and_then(|e| e.bleed.clone())
+        .or_else(|| book.pdf.bleed.clone())
+        .or_else(|| repo.config.defaults.bleed.clone())
+        .and_then(|b| parse_len(&b))
+        .unwrap_or(0.125);
+    let geom = resolve_geometry(repo, book, ed, Out::KdpPdf)?;
+    Some(PrintGeometry { trim_w, trim_h, bleed, geom })
+}
+
 fn langs_for(book: &BookConfig, lang_filter: &Option<String>) -> Vec<String> {
     match lang_filter {
         Some(l) if l != "all" => vec![l.clone()],

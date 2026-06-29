@@ -3,46 +3,87 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>bookmill — previewer (stub)</title>
+<title>bookmill — interior previewer</title>
 <script src="https://unpkg.com/konva@9/konva.min.js"></script>
 <style>
-  :root { --bg:#11151c; --panel:#1b212b; --line:#2c3543; --ink:#e7edf3; --muted:#8a98a8; --accent:#d4a937; }
+  :root { --bg:#11151c; --panel:#1b212b; --line:#2c3543; --ink:#e7edf3; --muted:#8a98a8; --accent:#d4a937;
+          --ok:#4caf72; --warn:#e0a93b; --err:#e5605f; }
+  * { box-sizing:border-box; }
   body { margin:0; font:14px/1.45 system-ui,sans-serif; background:var(--bg); color:var(--ink); }
-  header { display:flex; align-items:center; gap:12px; padding:10px 16px; background:var(--panel); border-bottom:1px solid var(--line); }
-  header h1 { font-size:15px; margin:0; font-weight:600; }
+  header { display:flex; align-items:center; gap:12px; padding:10px 16px; background:var(--panel); border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  header h1 { font-size:15px; margin:0; font-weight:600; white-space:nowrap; }
   .spacer { flex:1; }
-  select, label { background:transparent; color:var(--ink); }
-  select { background:#222b36; border:1px solid var(--line); border-radius:6px; padding:6px 9px; color:var(--ink); }
+  select, button, input { background:#222b36; border:1px solid var(--line); border-radius:6px; padding:6px 9px; color:var(--ink); font:inherit; }
+  button { cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button:disabled { opacity:.4; cursor:default; }
+  label.tog { display:inline-flex; align-items:center; gap:5px; color:var(--muted); font-size:12px; cursor:pointer; }
   a.navlink { color:var(--muted); text-decoration:none; }
-  .host { display:flex; align-items:center; justify-content:center; padding:24px; }
-  #stage { box-shadow:0 8px 40px rgba(0,0,0,.55); }
-  .legend { display:flex; gap:18px; padding:0 16px 10px; color:var(--muted); font-size:12px; }
+  .layout { display:flex; min-height:calc(100vh - 52px); }
+  .stagewrap { flex:1; display:flex; flex-direction:column; align-items:center; padding:20px; overflow:auto; }
+  .navbar { display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+  .navbar .pglabel { color:var(--muted); min-width:130px; text-align:center; }
+  #stage { background:#0c0f14; box-shadow:0 8px 40px rgba(0,0,0,.55); }
+  .legend { display:flex; gap:18px; margin-top:12px; color:var(--muted); font-size:12px; }
   .legend span::before { content:''; display:inline-block; width:14px; height:0; border-top:3px solid; margin-right:6px; vertical-align:middle; }
-  .trim::before { border-color:#ffffff; }
-  .bleed::before { border-color:#ff5a5a; }
-  .safe::before { border-color:#56b6ff; border-top-style:dashed !important; }
-  .note { padding:0 16px 16px; color:var(--muted); font-size:12px; max-width:760px; }
+  .l-trim::before { border-color:#ffffff; }
+  .l-bleed::before { border-color:#ff5a5a; }
+  .l-safe::before { border-color:#56b6ff; border-top-style:dashed !important; }
+  aside { width:340px; background:var(--panel); border-left:1px solid var(--line); padding:14px 14px 40px; overflow:auto; }
+  aside h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:0 0 4px; }
+  .counts { display:flex; gap:10px; margin:6px 0 12px; font-size:12px; }
+  .pill { padding:2px 8px; border-radius:10px; background:#222b36; }
+  .pill.ok { color:var(--ok); } .pill.warn { color:var(--warn); } .pill.err { color:var(--err); }
+  .issue { border:1px solid var(--line); border-left-width:3px; border-radius:6px; padding:8px 10px; margin-bottom:8px; font-size:12.5px; }
+  .issue.ok { border-left-color:var(--ok); }
+  .issue.warn { border-left-color:var(--warn); }
+  .issue.error { border-left-color:var(--err); }
+  .issue .meta { color:var(--muted); font-size:11px; display:flex; gap:6px; margin-bottom:3px; }
+  .issue .pgbtn { cursor:pointer; color:var(--accent); text-decoration:underline; }
+  .muted { color:var(--muted); font-size:12px; }
+  .err-msg { color:var(--err); font-size:12px; white-space:pre-wrap; }
 </style>
 </head>
 <body>
 <header>
-  <h1>bookmill · previewer (v1 stub)</h1>
+  <h1>bookmill · interior previewer</h1>
   <select id="bookSel"></select>
   <select id="langSel"></select>
+  <span style="width:8px"></span>
+  <label class="tog"><input type="checkbox" id="tTrim" checked> trim</label>
+  <label class="tog"><input type="checkbox" id="tBleed" checked> bleed</label>
+  <label class="tog"><input type="checkbox" id="tSafe" checked> safe</label>
   <span class="spacer"></span>
   <a class="navlink" href="/">← cover editor</a>
 </header>
-<div class="legend">
-  <span class="trim">trim</span>
-  <span class="bleed">bleed (0.125&Prime; out)</span>
-  <span class="safe">safe margin (0.125&Prime; in)</span>
+<div class="layout">
+  <div class="stagewrap">
+    <div class="navbar">
+      <button id="first">⏮</button>
+      <button id="prev">◀ prev</button>
+      <span class="pglabel" id="pglabel">—</span>
+      <button id="next">next ▶</button>
+      <button id="last">⏭</button>
+      <span style="width:14px"></span>
+      <span class="muted">page</span>
+      <input id="jump" type="number" min="1" style="width:70px" />
+      <button id="go">go</button>
+    </div>
+    <div id="stage"></div>
+    <div class="legend">
+      <span class="l-trim">trim (cut line)</span>
+      <span class="l-bleed">bleed (page edge)</span>
+      <span class="l-safe">safe margin (text block)</span>
+    </div>
+    <p class="muted" id="status" style="margin-top:10px"></p>
+  </div>
+  <aside>
+    <h2>KDP-style warnings</h2>
+    <div class="counts" id="counts"><span class="muted">not loaded</span></div>
+    <button id="reload" style="margin-bottom:12px">↻ run validate --deep</button>
+    <div id="issues"><p class="muted">Click “run validate --deep” to audit this book (epubcheck + PDF geometry + image DPI + cover + house rules). This may take a while on first run.</p></div>
+  </aside>
 </div>
-<div class="host"><div id="stage"></div></div>
-<p class="note">
-  v1 stub: shows the authoritative rendered cover (resvg output) with KDP trim / bleed / safe
-  guide rectangles overlaid via Konva. The full two-page interior spread previewer
-  (pdftoppm page rasterization + per-page gutter overlays) is a TODO.
-</p>
 <script src="/preview.js"></script>
 </body>
 </html>

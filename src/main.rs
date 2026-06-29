@@ -87,6 +87,10 @@ enum Cmd {
         /// cover-resolution audits (slow). Default is the fast config-only check.
         #[arg(long)]
         deep: bool,
+        /// with --deep, emit the issues as JSON (the data source for the web
+        /// previewer's warnings panel) instead of human-readable lines.
+        #[arg(long)]
+        json: bool,
     },
     /// Print the resolved content file list for a book/lang
     Content { book: String, lang: String },
@@ -233,9 +237,9 @@ fn main() -> Result<()> {
     match cli.cmd {
         Cmd::Create { .. } => unreachable!("handled above"),
         Cmd::List { json } => cmd_list(&repo, json)?,
-        Cmd::Validate { book, deep } => {
+        Cmd::Validate { book, deep, json } => {
             if deep {
-                deep::run(&repo, book)?
+                deep::run(&repo, book, json)?
             } else {
                 cmd_validate(&repo, book)?
             }
@@ -258,9 +262,9 @@ fn main() -> Result<()> {
                 let jobs = tui::jobs_for_req(&repo, &all)?;
                 tui::run_queue_ui(&repo, &jobs)?;
                 covers::run(&repo, Some(req.book.clone()), lang, false, None, covers::Engine::Resvg)?;
-                deep::run(&repo, Some(req.book))?;
+                deep::run(&repo, Some(req.book), false)?;
             }
-            Some(tui::Action::Validate { book }) => deep::run(&repo, Some(book))?,
+            Some(tui::Action::Validate { book }) => deep::run(&repo, Some(book), false)?,
             Some(tui::Action::Covers { book, lang }) => {
                 let lang = (lang != "all").then_some(lang);
                 covers::run(&repo, Some(book), lang, false, None, covers::Engine::Resvg)?;

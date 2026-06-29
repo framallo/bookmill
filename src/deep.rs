@@ -33,41 +33,89 @@ const MIN_PRINT_DPI: u32 = 300;
 /// Ignore tiny placed images (icons, hairline rules) below this pixel size.
 const MIN_IMG_PX: u32 = 50;
 
-/// Tally of check outcomes across the run.
+/// Tally of check outcomes across the run, plus a structured issue log used by
+/// the `--json` output (the data source for the web previewer's warnings panel).
 struct Report {
     pass: u32,
     warn: u32,
     err: u32,
+    /// suppress human-readable prints (JSON mode emits a single object instead).
+    json: bool,
+    /// current book/lang context, stamped onto each emitted issue.
+    cur_book: String,
+    cur_lang: Option<String>,
+    issues: Vec<serde_json::Value>,
 }
 
 impl Report {
-    fn new() -> Self {
-        Self { pass: 0, warn: 0, err: 0 }
+    fn new(json: bool) -> Self {
+        Self {
+            pass: 0,
+            warn: 0,
+            err: 0,
+            json,
+            cur_book: String::new(),
+            cur_lang: None,
+            issues: Vec::new(),
+        }
+    }
+    fn push(&mut self, level: &str, m: &str, page: Option<u32>) {
+        self.issues.push(serde_json::json!({
+            "level": level,
+            "book": self.cur_book,
+            "lang": self.cur_lang,
+            "page": page,
+            "message": m,
+        }));
     }
     fn ok(&mut self, m: String) {
         self.pass += 1;
-        println!("  \u{2713} {m}");
+        self.push("ok", &m, None);
+        if !self.json {
+            println!("  \u{2713} {m}");
+        }
     }
     fn warn(&mut self, m: String) {
         self.warn += 1;
-        println!("  ! {m}");
+        self.push("warn", &m, None);
+        if !self.json {
+            println!("  ! {m}");
+        }
+    }
+    /// A warning carrying a page number (e.g. the image-DPI audit).
+    fn warn_page(&mut self, m: String, page: u32) {
+        self.warn += 1;
+        self.push("warn", &m, Some(page));
+        if !self.json {
+            println!("  ! {m}");
+        }
     }
     fn bad(&mut self, m: String) {
         self.err += 1;
-        println!("  \u{2717} {m}");
+        self.push("error", &m, None);
+        if !self.json {
+            println!("  \u{2717} {m}");
+        }
+    }
+    fn say(&self, m: &str) {
+        if !self.json {
+            println!("{m}");
+        }
     }
 }
 
-/// `bookmill validate [book] --deep`
-pub fn run(repo: &Repo, book: Option<String>) -> Result<()> {
+/// `bookmill validate [book] --deep [--json]`
+pub fn run(repo: &Repo, book: Option<String>, json: bool) -> Result<()> {
     let dirs = match &book {
         Some(s) => vec![repo.find_book(s)?.1],
         None => repo.book_dirs()?,
     };
-    let mut rep = Report::new();
+    let mut rep = Report::new(json);
     for dir in dirs {
         let (b, _) = repo.load_book_at(&dir)?;
-        println!("\n=== {} [{}] ===", b.slug, b.languages.join(","));
+        rep.cur_book = b.slug.clone();
+        rep.cur_lang = None;
+        rep.say(&format!("\n=== {} [{}] ===", b.slug, b.languages.join(",")));
 
         // 1) config / KDP / house rules (same as the fast path).
         config_checks(&b, &mut rep);
@@ -77,6 +125,7 @@ pub fn run(repo: &Repo, book: Option<String>) -> Result<()> {
         //    outputs for the book's editions, with resolved geometry per job.
         let jobs = build::plan_editions(repo, &Some(b.slug.clone()), &None, &None)?;
         for job in &jobs {
+            rep.cur_lang = Some(job.lang.clone());
             match job.out {
                 Out::RetailEpub | Out::KdpEpub => epub_check(repo, job, &mut rep),
                 Out::RetailPdf => pdf_geometry_check(repo, job, &mut rep),
@@ -90,8 +139,20 @@ pub fn run(repo: &Repo, book: Option<String>) -> Result<()> {
 
         // 3) cover resolution per language.
         for lang in &b.languages {
+            rep.cur_lang = Some(lang.clone());
             cover_checks(&b.slug, &dir, lang, &mut rep);
         }
+    }
+
+    if json {
+        let out = serde_json::json!({
+            "summary": { "ok": rep.pass, "warn": rep.warn, "error": rep.err },
+            "issues": rep.issues,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        // JSON mode never sets a non-zero exit (the caller — the web previewer —
+        // wants the issue list regardless of severity).
+        return Ok(());
     }
 
     println!(
@@ -125,13 +186,13 @@ fn epub_check(repo: &Repo, job: &Job, rep: &mut Report) {
     let path = build::job_output_path(repo, job);
     let label = format!("{} {} · {}", job.slug, job.lang, job.out.name());
     if !path.exists() {
-        println!("    (building {} …)", path.display());
+        rep.say(&format!("    (building {} …)", path.display()));
         if let Err(e) = build::build_job(repo, job) {
             rep.bad(format!("EPUB {label}: build failed: {e:#}"));
             return;
         }
     }
-    match run_epubcheck(&path) {
+    match run_epubcheck(&path, rep.json) {
         Ok((warns, true)) if warns == 0 => rep.ok(format!("EPUB {label}: epubcheck clean")),
         Ok((warns, true)) => rep.warn(format!("EPUB {label}: epubcheck OK, {warns} warning(s)")),
         Ok((_, false)) => rep.bad(format!("EPUB {label}: epubcheck reported errors (see above)")),
@@ -142,7 +203,7 @@ fn epub_check(repo: &Repo, job: &Job, rep: &mut Report) {
 /// Run epubcheck on `epub`, echoing ERROR/FATAL/WARNING lines. Returns
 /// (warning_count, success). `epubcheck` is the same binary the legacy Makefile
 /// used (`make validate_*` → `@epubcheck <file>`); found on `$PATH`.
-fn run_epubcheck(epub: &Path) -> Result<(usize, bool)> {
+fn run_epubcheck(epub: &Path, quiet: bool) -> Result<(usize, bool)> {
     let out = Command::new("epubcheck")
         .arg(epub)
         .output()
@@ -156,10 +217,14 @@ fn run_epubcheck(epub: &Path) -> Result<(usize, bool)> {
     for line in text.lines() {
         let l = line.trim();
         if l.starts_with("ERROR") || l.starts_with("FATAL") {
-            println!("      {l}");
+            if !quiet {
+                println!("      {l}");
+            }
         } else if l.starts_with("WARNING") {
             warns += 1;
-            println!("      {l}");
+            if !quiet {
+                println!("      {l}");
+            }
         }
     }
     Ok((warns, out.status.success()))
@@ -172,7 +237,7 @@ fn pdf_geometry_check(repo: &Repo, job: &Job, rep: &mut Report) {
     let ed = job.edition.clone().unwrap_or_else(|| job.target.clone());
     let label = format!("{} {} · {} · {}", job.slug, job.lang, ed, job.out.name());
     if !path.exists() {
-        println!("    (building {} …)", path.display());
+        rep.say(&format!("    (building {} …)", path.display()));
         if let Err(e) = build::build_job(repo, job) {
             rep.bad(format!("PDF {label}: build failed: {e:#}"));
             return;
@@ -316,13 +381,17 @@ fn image_dpi_check(repo: &Repo, job: &Job, rep: &mut Report) {
             "image DPI {label}: {checked} image(s) ≥{MIN_PRINT_DPI}dpi (min {min})"
         )),
         (_, Some(min)) => {
+            // One page-stamped warning per low-DPI image (the previewer keys off
+            // the page number to flag the offending spread).
             for r in &low {
-                println!("      p{} {}×{}px @ {}dpi", r.page, r.w, r.h, r.ppi);
+                rep.warn_page(
+                    format!(
+                        "image DPI {label}: p{} {}×{}px @ {}dpi (below {MIN_PRINT_DPI}dpi; min {min})",
+                        r.page, r.w, r.h, r.ppi
+                    ),
+                    r.page,
+                );
             }
-            rep.warn(format!(
-                "image DPI {label}: {}/{checked} image(s) below {MIN_PRINT_DPI}dpi (min {min})",
-                low.len()
-            ));
         }
     }
 }

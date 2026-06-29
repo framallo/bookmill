@@ -28,8 +28,12 @@ use cover::{Element, Elements, Repo};
 use serde::Deserialize;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
+
+/// Preview rasterization DPI for `pdftoppm` (legible spread, modest file size).
+const PREVIEW_DPI: u32 = 110;
 
 // Embedded frontend (single-binary; no static dir needed).
 const INDEX_HTML: &str = include_str!("../../web/static/index.html");
@@ -39,6 +43,9 @@ const PREVIEW_JS: &str = include_str!("../../web/static/preview.js");
 
 struct AppState {
     repo: Repo,
+    /// The main-crate repo (config model) — used by the interior previewer to
+    /// resolve trim/bleed/margin geometry exactly as `build`/`validate` do.
+    disco: crate::discover::Repo,
     /// spine page count used when a book's print interior PDF is absent
     default_pages: u32,
 }
@@ -54,10 +61,11 @@ pub fn run(repo_root: &Path, port: u16, pages: u32) -> Result<()> {
 
 async fn serve(repo_root: PathBuf, port: u16, pages: u32) -> Result<()> {
     let repo = Repo::open(&repo_root)?;
+    let disco = crate::discover::Repo::find(&repo_root)?;
     println!("bookmill web: repo = {}", repo.root.display());
     println!("bookmill web: books_dir = {}", repo.books_dir.display());
 
-    let state: Shared = Arc::new(AppState { repo, default_pages: pages });
+    let state: Shared = Arc::new(AppState { repo, disco, default_pages: pages });
     let app = Router::new()
         .route("/", get(index))
         .route("/index.html", get(index))
@@ -67,6 +75,9 @@ async fn serve(repo_root: PathBuf, port: u16, pages: u32) -> Result<()> {
         .route("/api/books", get(api_books))
         .route("/api/cover/{book}/{lang}", get(api_cover).post(api_save))
         .route("/api/asset/{book}/{lang}/{kind}", get(api_asset))
+        .route("/api/preview/{book}/{lang}", get(api_preview_meta))
+        .route("/api/preview/{book}/{lang}/page/{n}", get(api_preview_page))
+        .route("/api/warnings/{book}/{lang}", get(api_warnings))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
@@ -199,6 +210,185 @@ async fn api_asset(
         [(header::CONTENT_TYPE, ct), (header::CACHE_CONTROL, "no-cache")],
         bytes,
     ))
+}
+
+// --------------------------------------------------------------------------
+// Interior previewer (two-page spread + KDP-style warnings)
+// --------------------------------------------------------------------------
+
+/// Canonical KDP print interior path for a book/lang.
+fn kdp_pdf_path(root: &Path, slug: &str, lang: &str) -> PathBuf {
+    root.join("output")
+        .join(slug)
+        .join(lang)
+        .join(format!("{slug}-{lang}-kdp.pdf"))
+}
+
+/// Page count of a PDF via `pdfinfo` (parses the `Pages:` line).
+fn pdf_pages(pdf: &Path) -> Option<u32> {
+    let out = Command::new("pdfinfo").arg(pdf).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|l| l.strip_prefix("Pages:").and_then(|r| r.trim().parse::<u32>().ok()))
+}
+
+/// `GET /api/preview/{book}/{lang}` — interior metadata: page count, the KDP PDF
+/// path/existence, and the trim/bleed/margin geometry (resolved from config the
+/// same way `build`/`validate` do).
+async fn api_preview_meta(
+    State(st): State<Shared>,
+    AxPath((book, lang)): AxPath<(String, String)>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let (cfg, _dir) = st.disco.find_book(&book).map_err(err)?;
+    let pdf = kdp_pdf_path(&st.disco.root, &book, &lang);
+    let exists = pdf.exists();
+    let pages = if exists { pdf_pages(&pdf) } else { None };
+    let geometry = crate::build::kdp_print_geometry(&st.disco, &cfg).map(|g| {
+        serde_json::json!({
+            "trimW": g.trim_w,
+            "trimH": g.trim_h,
+            "bleed": g.bleed,
+            "pageW": g.geom.pw,
+            "pageH": g.geom.ph,
+            "margins": {
+                "top": g.geom.top,
+                "bottom": g.geom.bottom,
+                "inner": g.geom.inner,
+                "outer": g.geom.outer,
+                "bindingoffset": g.geom.bindingoffset,
+            },
+        })
+    });
+    Ok(Json(serde_json::json!({
+        "slug": book,
+        "lang": lang,
+        "pdfExists": exists,
+        "pdfPath": pdf.display().to_string(),
+        "pages": pages,
+        "previewDpi": PREVIEW_DPI,
+        "geometry": geometry,
+    })))
+}
+
+/// Rasterize page `n` of the KDP PDF to a cached PNG via `pdftoppm`, returning
+/// the PNG path. Cache key includes the DPI; the cache is invalidated when the
+/// PDF is newer than the cached image.
+fn render_preview_page(root: &Path, slug: &str, lang: &str, pdf: &Path, n: u32) -> anyhow::Result<PathBuf> {
+    let dir = root
+        .join("output")
+        .join(".preview-cache")
+        .join(slug)
+        .join(lang);
+    std::fs::create_dir_all(&dir)?;
+    let prefix = dir.join(format!("p{n}-r{PREVIEW_DPI}"));
+    let png = dir.join(format!("p{n}-r{PREVIEW_DPI}.png"));
+    let fresh = match (std::fs::metadata(&png), std::fs::metadata(pdf)) {
+        (Ok(a), Ok(b)) => match (a.modified(), b.modified()) {
+            (Ok(pm), Ok(sm)) => pm >= sm,
+            _ => false,
+        },
+        _ => false,
+    };
+    if fresh {
+        return Ok(png);
+    }
+    // `-singlefile` makes pdftoppm write exactly `<prefix>.png` (no page suffix).
+    let out = Command::new("pdftoppm")
+        .arg("-png")
+        .arg("-singlefile")
+        .arg("-r")
+        .arg(PREVIEW_DPI.to_string())
+        .arg("-f")
+        .arg(n.to_string())
+        .arg("-l")
+        .arg(n.to_string())
+        .arg(pdf)
+        .arg(&prefix)
+        .output()
+        .map_err(|e| anyhow::anyhow!("running pdftoppm (is poppler on $PATH?): {e}"))?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "pdftoppm failed on page {n}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    Ok(png)
+}
+
+/// `GET /api/preview/{book}/{lang}/page/{n}` — PNG of interior page `n`.
+async fn api_preview_page(
+    State(st): State<Shared>,
+    AxPath((book, lang, n)): AxPath<(String, String, u32)>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let _ = st.disco.find_book(&book).map_err(err)?;
+    let pdf = kdp_pdf_path(&st.disco.root, &book, &lang);
+    if !pdf.exists() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!("no KDP PDF for {book}/{lang} (build it first): {}", pdf.display()),
+        ));
+    }
+    let png = render_preview_page(&st.disco.root, &book, &lang, &pdf, n).map_err(err)?;
+    let bytes = std::fs::read(&png).map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "image/png"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        bytes,
+    ))
+}
+
+/// `GET /api/warnings/{book}/{lang}` — KDP-style warnings, sourced by shelling to
+/// `bookmill validate <book> --deep --json` (the same exe — see render.rs). Issues
+/// are filtered to those for this language (lang-agnostic issues are kept).
+async fn api_warnings(
+    State(st): State<Shared>,
+    AxPath((book, lang)): AxPath<(String, String)>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let _ = st.disco.find_book(&book).map_err(err)?;
+    let bin = render::bookmill_bin();
+    let out = Command::new(&bin)
+        .arg("--repo")
+        .arg(&st.disco.root)
+        .arg("validate")
+        .arg(&book)
+        .arg("--deep")
+        .arg("--json")
+        .output()
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("running {bin} validate: {e}")))?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).map_err(|e| {
+        (
+            StatusCode::BAD_GATEWAY,
+            format!(
+                "validate --json parse failed: {e}\nstderr: {}",
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        )
+    })?;
+    let issues = parsed
+        .get("issues")
+        .and_then(|i| i.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter(|it| match it.get("lang").and_then(|l| l.as_str()) {
+                    Some(l) => l == lang,
+                    None => true, // lang-agnostic (book-level config / house rules)
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    Ok(Json(serde_json::json!({
+        "slug": book,
+        "lang": lang,
+        "summary": parsed.get("summary").cloned().unwrap_or(serde_json::Value::Null),
+        "issues": issues,
+    })))
 }
 
 fn now_ms() -> u128 {
