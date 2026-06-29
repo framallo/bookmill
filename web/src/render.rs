@@ -25,15 +25,18 @@ pub fn bookmill_bin() -> String {
     "bookmill".to_string()
 }
 
-/// Run `bookmill covers` for one book+lang. `pages` is passed when the print
+/// Run `bookmill build cover` for one book+lang. `pages` is passed when the print
 /// interior PDF is absent (the resvg path needs a spine page count up front);
 /// the front PNG — what the editor shows — is unaffected by the value.
 pub fn render_cover(repo_root: &Path, slug: &str, lang: &str, pages: Option<u32>) -> Result<String> {
     let bin = bookmill_bin();
     let mut cmd = Command::new(&bin);
+    // `--repo` is a global arg (must precede the subcommand); `build cover` is the
+    // nested cover subcommand (renamed from the old top-level `covers`).
     cmd.arg("--repo")
         .arg(repo_root)
-        .arg("covers")
+        .arg("build")
+        .arg("cover")
         .arg(slug)
         .arg("--lang")
         .arg(lang);
@@ -42,7 +45,7 @@ pub fn render_cover(repo_root: &Path, slug: &str, lang: &str, pages: Option<u32>
     }
     let out = cmd
         .output()
-        .with_context(|| format!("running {bin} covers {slug} --lang {lang}"))?;
+        .with_context(|| format!("running {bin} build cover {slug} --lang {lang}"))?;
     let mut log = String::new();
     log.push_str(&String::from_utf8_lossy(&out.stdout));
     log.push_str(&String::from_utf8_lossy(&out.stderr));
