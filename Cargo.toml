@@ -34,3 +34,6 @@ color_quant = "1.1"
 oxipng = { version = "9", default-features = false, features = ["parallel"] }
 mozjpeg = "0.10"
 regex = "1"
+# Content hashing for the audiobook incremental-render manifest (which chapters
+# changed since the last render → re-render + tell the proofreader what to re-hear).
+sha2 = "0.10"

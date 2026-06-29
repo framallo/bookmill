@@ -17,6 +17,8 @@
 use crate::config::{default_ane_code, default_voice, Audiobook, AudiobookLang, BookConfig};
 use crate::discover::Repo;
 use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -56,7 +58,6 @@ struct Resolved {
     speak_titles: bool,
     artist: String,
     engine: String,
-    kab_bin: PathBuf,
 }
 
 /// Merge repo + book `[audiobook]` and a language into final settings.
@@ -98,9 +99,8 @@ fn resolve(repo: &Repo, book: &BookConfig, lang: &str) -> Resolved {
         .and_then(|a| a.engine.clone())
         .or_else(|| rep.and_then(|a| a.engine.clone()))
         .unwrap_or_else(|| "kab".into());
-    let kab_bin = resolve_kab_bin(rep, bok);
 
-    Resolved { voice, code, speed, speak_titles, artist, engine, kab_bin }
+    Resolved { voice, code, speed, speak_titles, artist, engine }
 }
 
 /// Locate the kab binary: env `KAB`/`BOOKMILL_KAB` -> book/repo `kab_bin` ->
@@ -195,16 +195,154 @@ fn plan(
     Ok(jobs)
 }
 
+// ---------- render manifest (incremental cache + change report) ----------
+
+/// What a rendered `.m4b` was made from: the engine/voice/speed and a content
+/// hash per chapter. Persisted next to the `.m4b` so the next run can (a) skip
+/// the render when nothing changed and (b) report exactly which chapters changed
+/// — the signal for Federico's proofread-by-listening loop.
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+struct Manifest {
+    engine: String,
+    voice: String,
+    code: String,
+    /// formatted to a fixed precision so float round-trips compare cleanly
+    speed: String,
+    speak_titles: bool,
+    chapters: Vec<ChapterEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+struct ChapterEntry {
+    /// chapter file name (stem shown in change reports)
+    file: String,
+    /// sha256 of the chapter's bytes
+    sha: String,
+}
+
+impl Manifest {
+    /// Build the manifest for a job by hashing each chapter file.
+    fn build(job: &AudioJob, engine: &str) -> Result<Manifest> {
+        let mut chapters = Vec::with_capacity(job.chapters.len());
+        for p in &job.chapters {
+            let bytes = std::fs::read(p)
+                .with_context(|| format!("hashing chapter {}", p.display()))?;
+            let sha = format!("{:x}", Sha256::digest(&bytes));
+            let file = p
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("chapter.md")
+                .to_string();
+            chapters.push(ChapterEntry { file, sha });
+        }
+        Ok(Manifest {
+            engine: engine.to_string(),
+            voice: job.voice.clone(),
+            code: job.code.clone(),
+            speed: format!("{:.4}", job.speed),
+            speak_titles: job.speak_titles,
+            chapters,
+        })
+    }
+
+    /// True if the engine/voice/speed/titles settings differ (forces a full
+    /// re-render regardless of chapter content).
+    fn settings_differ(&self, other: &Manifest) -> bool {
+        self.engine != other.engine
+            || self.voice != other.voice
+            || self.code != other.code
+            || self.speed != other.speed
+            || self.speak_titles != other.speak_titles
+    }
+}
+
+/// Where a job's manifest is stored (hidden, next to the `.m4b`).
+fn manifest_path(job: &AudioJob) -> PathBuf {
+    let dir = job.out.parent().unwrap_or_else(|| Path::new("."));
+    dir.join(format!(".{}-{}.audiomanifest.json", job.slug, job.lang))
+}
+
+fn load_manifest(path: &Path) -> Option<Manifest> {
+    let s = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&s).ok()
+}
+
+fn save_manifest(path: &Path, m: &Manifest) -> Result<()> {
+    let s = serde_json::to_string_pretty(m)?;
+    std::fs::write(path, s).with_context(|| format!("writing {}", path.display()))
+}
+
+/// Stem of a chapter file name for compact change reports ("capitulo-03").
+fn stem(file: &str) -> &str {
+    file.strip_suffix(".md").unwrap_or(file)
+}
+
+/// Print which chapters changed vs. the previous render (added / removed /
+/// edited), so the proofreader knows exactly what to re-listen to.
+fn report_changes(old: Option<&Manifest>, new: &Manifest) {
+    let Some(old) = old else {
+        println!("  first render — {} chapters", new.chapters.len());
+        return;
+    };
+    if old.settings_differ(new) {
+        println!("  voice/speed/engine changed → full re-render");
+        return;
+    }
+    let old_by: std::collections::BTreeMap<&str, &str> =
+        old.chapters.iter().map(|c| (c.file.as_str(), c.sha.as_str())).collect();
+    let new_files: std::collections::BTreeSet<&str> =
+        new.chapters.iter().map(|c| c.file.as_str()).collect();
+
+    let mut edited = Vec::new();
+    let mut added = Vec::new();
+    for c in &new.chapters {
+        match old_by.get(c.file.as_str()) {
+            Some(&sha) if sha != c.sha => edited.push(stem(&c.file)),
+            None => added.push(stem(&c.file)),
+            _ => {}
+        }
+    }
+    let removed: Vec<&str> = old
+        .chapters
+        .iter()
+        .filter(|c| !new_files.contains(c.file.as_str()))
+        .map(|c| stem(&c.file))
+        .collect();
+
+    if edited.is_empty() && added.is_empty() && removed.is_empty() {
+        // Content identical but the .m4b was missing — re-rendering anyway.
+        println!("  re-rendering (audio missing) — {} chapters", new.chapters.len());
+        return;
+    }
+    let mut parts = Vec::new();
+    if !edited.is_empty() {
+        parts.push(format!("edited [{}]", edited.join(", ")));
+    }
+    if !added.is_empty() {
+        parts.push(format!("added [{}]", added.join(", ")));
+    }
+    if !removed.is_empty() {
+        parts.push(format!("removed [{}]", removed.join(", ")));
+    }
+    println!("  changed: {} → re-listen to the edited chapters", parts.join("; "));
+}
+
 // ---------- entry point ----------
 
 /// Render audiobooks for a request (optionally one book / one language), with
 /// optional voice/speed overrides (mirrors the Makefile's `VOICE=` knob).
+///
+/// Incremental: each job is hashed into a manifest stored next to its `.m4b`. If
+/// nothing changed since the last render (same chapters + voice/speed) and the
+/// `.m4b` exists, the job is skipped unless `force` is set. When something did
+/// change, the changed chapters are reported before re-rendering.
 pub fn run(
     repo: &Repo,
     book_slug: Option<String>,
     lang_filter: Option<String>,
     voice_override: Option<String>,
     speed_override: Option<f64>,
+    force: bool,
 ) -> Result<()> {
     let jobs = plan(repo, &book_slug, &lang_filter, &voice_override, speed_override)?;
     if jobs.is_empty() {
@@ -214,6 +352,7 @@ pub fn run(
     let engine = KabEngine { bin: resolve_kab_bin(repo.config.audiobook.as_ref(), None) };
     let n = jobs.len();
     let mut failures = 0;
+    let mut skipped = 0;
     for (i, job) in jobs.iter().enumerate() {
         println!(
             "[{}/{n}] audiobook {} {} · {} ({} chapters, voice {})",
@@ -224,8 +363,36 @@ pub fn run(
             job.chapters.len(),
             job.voice
         );
+        let new_manifest = match Manifest::build(job, engine.name()) {
+            Ok(m) => m,
+            Err(e) => {
+                failures += 1;
+                println!("  \u{2717} {} {}: {e:#}", job.slug, job.lang);
+                continue;
+            }
+        };
+        let mpath = manifest_path(job);
+        let old = load_manifest(&mpath);
+        if !force && job.out.exists() && old.as_ref() == Some(&new_manifest) {
+            skipped += 1;
+            println!(
+                "  \u{2713} up to date — {} chapters unchanged (skipped; --force to re-render)",
+                new_manifest.chapters.len()
+            );
+            continue;
+        }
+        if force {
+            println!("  forced re-render — {} chapters", new_manifest.chapters.len());
+        } else {
+            report_changes(old.as_ref(), &new_manifest);
+        }
         match engine.render(job) {
-            Ok(()) => println!("  \u{2713} {}", job.out.display()),
+            Ok(()) => {
+                if let Err(e) = save_manifest(&mpath, &new_manifest) {
+                    println!("  (warning: could not write render manifest: {e:#})");
+                }
+                println!("  \u{2713} {}", job.out.display());
+            }
             Err(e) => {
                 failures += 1;
                 println!("  \u{2717} {} {}: {e:#}", job.slug, job.lang);
@@ -235,7 +402,8 @@ pub fn run(
     if failures > 0 {
         bail!("{failures} of {n} audiobook(s) failed");
     }
-    println!("\nDone: {n} audiobook(s)");
+    let rendered = n - skipped;
+    println!("\nDone: {rendered} rendered, {skipped} up to date ({n} total)");
     Ok(())
 }
 
@@ -316,4 +484,60 @@ fn stage_chapters(job: &AudioJob) -> Result<PathBuf> {
             .with_context(|| format!("staging {} -> {}", src.display(), dst.display()))?;
     }
     Ok(stage)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ch(file: &str, sha: &str) -> ChapterEntry {
+        ChapterEntry { file: file.into(), sha: sha.into() }
+    }
+
+    fn manifest(chapters: Vec<ChapterEntry>) -> Manifest {
+        Manifest {
+            engine: "kab".into(),
+            voice: "ef_dora".into(),
+            code: "e".into(),
+            speed: "1.0000".into(),
+            speak_titles: true,
+            chapters,
+        }
+    }
+
+    #[test]
+    fn unchanged_manifests_are_equal_so_render_is_skipped() {
+        let a = manifest(vec![ch("c01.md", "aaa"), ch("c02.md", "bbb")]);
+        let b = manifest(vec![ch("c01.md", "aaa"), ch("c02.md", "bbb")]);
+        assert_eq!(a, b, "identical content+settings must compare equal (skip)");
+    }
+
+    #[test]
+    fn an_edited_chapter_breaks_equality() {
+        let a = manifest(vec![ch("c01.md", "aaa"), ch("c02.md", "bbb")]);
+        let b = manifest(vec![ch("c01.md", "aaa"), ch("c02.md", "ZZZ")]);
+        assert_ne!(a, b, "a changed chapter hash must force a re-render");
+    }
+
+    #[test]
+    fn settings_change_forces_rerender() {
+        let base = manifest(vec![ch("c01.md", "aaa")]);
+        let mut diff_voice = manifest(vec![ch("c01.md", "aaa")]);
+        diff_voice.voice = "af_heart".into();
+        assert!(base.settings_differ(&diff_voice));
+        assert_ne!(base, diff_voice);
+
+        let mut diff_speed = manifest(vec![ch("c01.md", "aaa")]);
+        diff_speed.speed = "1.1000".into();
+        assert!(base.settings_differ(&diff_speed));
+
+        let same = manifest(vec![ch("c01.md", "aaa")]);
+        assert!(!base.settings_differ(&same));
+    }
+
+    #[test]
+    fn stem_strips_md() {
+        assert_eq!(stem("capitulo-03.md"), "capitulo-03");
+        assert_eq!(stem("epilogo"), "epilogo");
+    }
 }

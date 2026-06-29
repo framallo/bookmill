@@ -145,6 +145,9 @@ enum Cmd {
         /// TTS engine id (default "kab"; reserved for future engines)
         #[arg(long)]
         engine: Option<String>,
+        /// re-render even if the manifest shows nothing changed
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -229,7 +232,7 @@ fn main() -> Result<()> {
             }
             Some(tui::Action::Audiobook { book, lang }) => {
                 let lang = (lang != "all").then_some(lang);
-                audiobook::run(&repo, Some(book), lang, None, None)?;
+                audiobook::run(&repo, Some(book), lang, None, None, false)?;
             }
             None => println!("(nothing selected)"),
         },
@@ -253,13 +256,13 @@ fn main() -> Result<()> {
                 a as f64 / 1e6
             );
         }
-        Cmd::Audiobook { book, lang, voice, speed, engine } => {
+        Cmd::Audiobook { book, lang, voice, speed, engine, force } => {
             if let Some(e) = &engine {
                 if e != "kab" {
                     anyhow::bail!("unsupported audiobook engine {e:?} (only \"kab\")");
                 }
             }
-            audiobook::run(&repo, book, lang, voice, speed)?;
+            audiobook::run(&repo, book, lang, voice, speed, force)?;
         }
     }
     Ok(())

@@ -26,11 +26,15 @@ builds them (Phase 8 deleted every `meta.md`).
   interior-final at $12.99.
 - **Audiobook: v1 implemented** (`src/audiobook.rs`). `TtsEngine` trait + `kab`
   adapter, config-driven (`[audiobook]`/`[audiobook.<lang>]`), wired into the CLI
-  (`bookmill audiobook`, with `--voice`/`--speed`) and the TUI. Chapters resolve
-  through `[content.<lang>]` (appended epilogues included — the old `capitulo-*.md`
-  Makefile glob dropped them) and are staged numbered so kab's lexical glob keeps
-  bookmill's order. **NOT yet done:** the content-hash segment cache for
-  incremental re-renders (kab `convert` re-renders the whole book each call).
+  (`bookmill audiobook`, with `--voice`/`--speed`/`--force`) and the TUI. Chapters
+  resolve through `[content.<lang>]` (appended epilogues included — the old
+  `capitulo-*.md` Makefile glob dropped them) and are staged numbered so kab's
+  lexical glob keeps bookmill's order. **Incremental manifest cache done:** each
+  render writes `.<slug>-<lang>.audiomanifest.json` (sha256 per chapter + voice/
+  speed/engine); an unchanged book is skipped, and a changed one reports exactly
+  which chapters were edited/added/removed ("re-listen to ch07") — the proofread
+  signal. **Still pending:** per-chapter *audio* reuse (splice only changed
+  clips); today a changed book re-renders fully via `kab convert`.
 - **Project scaffolder: implemented** (`src/create.rs`). `bookmill create`
   auto-detects init (new repo) vs add-book (inside a repo), driven by
   `templates/archetypes.toml` (scope × languages); writes a buildable project
@@ -103,16 +107,20 @@ progress".
 
 ## What's NOT done — the work queue
 
-1. **Audiobook segment cache (the remaining audiobook work).** The v1 engine
-   (`src/audiobook.rs`: `TtsEngine` trait + `kab` adapter, config-driven, wired
-   into CLI + TUI) is done and replaces the Makefile recipe. What's left is the
-   **content-hash AST segment cache** (hash = text + voice + engine/model version
-   + speed) so fixing one line re-renders only that clip — what makes Federico's
-   proofread-by-listening loop cheap. `kab convert` re-renders the whole book, so
-   the cache needs per-segment synth: `ane_book.py` exposes a single-chapter
-   `--text-file … --out …` path the cache can drive, then mux the `.m4b` with
-   chapter markers (kab's `Assemble.swift` does this today). Slot it in as a
-   caching `TtsEngine` that wraps `KabEngine`. Spec: `BOOKMILL-PLAN.md` → "Audiobook".
+1. **Per-chapter audio reuse (the remaining audiobook work).** The v1 engine +
+   the **manifest cache** are done (`src/audiobook.rs`): the manifest hashes each
+   chapter (+voice/speed/engine), skips an unchanged book, and reports which
+   chapters changed. What's left is reusing the *audio* of unchanged chapters so a
+   one-line edit re-renders only that clip. `kab convert` re-renders the whole
+   book, so this needs per-chapter synth: `ane_book.py` exposes a single-chapter
+   `synth --text-file … --out …` path (note: separate invocations reload the
+   CoreML model each time — measure that cost; batching the *changed* subset warm
+   is better), then mux the `.m4b` with chapter markers (port `ane_book.py`'s
+   `_assemble_m4b` / `_build_ffmetadata`, or change `ane_book` to accept a
+   persistent content-addressed cache dir). Slot it behind the `TtsEngine` trait as
+   a caching engine wrapping `KabEngine`, keyed off the existing manifest. Open
+   design fork (needs Federico): accept the model-reload cost vs. modify the
+   sibling `kokoro-coreml` repo. Spec: `BOOKMILL-PLAN.md` → "Audiobook".
 
 2. **Cover editor position round-trip (renderer gap).** The web editor saves
    per-element `[cover.<lang>.layout]` (xPct/yPct/wPct/fontPct/…) to TOML, and
