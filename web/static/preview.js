@@ -15,6 +15,7 @@ let spread = 0;         // spread index: 0 = [—, p1], k = [p2k, p2k+1]
 let stage = null;
 let warnPages = new Set();
 let SLUG = null, LANG = null; // scope: ?book=<slug>&lang=<lang>
+let wantPage = null;          // optional ?page=<n> deep-link (jump on load)
 
 init();
 
@@ -22,6 +23,8 @@ async function init() {
   const q = new URLSearchParams(location.search);
   SLUG = q.get('book');
   LANG = q.get('lang');
+  const pg = parseInt(q.get('page'), 10);
+  wantPage = isNaN(pg) ? null : pg;
 
   // Graceful fallback when opened without query params: pick the first book/lang.
   if (!SLUG || !LANG) {
@@ -64,7 +67,9 @@ async function load() {
     return;
   }
   $('jump').max = meta.pages || 1;
-  spread = 0;
+  // Honor a ?page=<n> deep-link once, then fall back to the first spread.
+  if (wantPage != null) { spread = Math.floor(wantPage / 2); wantPage = null; }
+  else spread = 0;
   draw();
 }
 
