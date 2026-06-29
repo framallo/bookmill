@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>bookmill — book</title>
+<style>
+  :root { --bg:#11151c; --panel:#1b212b; --line:#2c3543; --ink:#e7edf3; --muted:#8a98a8; --accent:#d4a937; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.45 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+  header { display:flex; align-items:center; gap:10px; padding:12px 20px; background:var(--panel); border-bottom:1px solid var(--line); }
+  a.crumb { color:var(--muted); text-decoration:none; font-size:13px; }
+  a.crumb:hover { color:var(--ink); }
+  .spacer { flex:1; }
+  main { max-width:920px; margin:0 auto; padding:24px 20px 60px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .slug { color:var(--muted); font-family:ui-monospace,Menlo,monospace; font-size:12px; }
+  .meta { display:flex; gap:16px; flex-wrap:wrap; color:var(--muted); font-size:13px; margin:10px 0 6px; }
+  .tag { font-size:11px; padding:2px 8px; border-radius:10px; background:#222b36; border:1px solid var(--line); color:var(--ink); }
+  .tag.prot { background:#3a2a12; color:var(--accent); border-color:#5a431c; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); border-bottom:1px solid var(--line); padding-bottom:6px; margin:26px 0 12px; }
+  .langcard { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:14px; }
+  .langcard .lh { display:flex; align-items:baseline; gap:10px; margin-bottom:8px; }
+  .langcard .lh .code { font-size:16px; font-weight:600; }
+  .langcard .title { font-size:15px; }
+  .langcard .sub { color:var(--muted); font-style:italic; }
+  .facts { display:flex; gap:18px; flex-wrap:wrap; color:var(--muted); font-size:12.5px; margin:10px 0 14px; }
+  .facts b { color:var(--ink); font-weight:600; }
+  .actions { display:flex; gap:10px; }
+  .btn { text-decoration:none; padding:8px 14px; border-radius:8px; border:1px solid var(--line); background:#222b36; color:var(--ink); font-size:13px; }
+  .btn:hover { border-color:var(--accent); }
+  .btn.primary { background:var(--accent); color:#1a1206; border-color:var(--accent); font-weight:600; }
+  .muted { color:var(--muted); }
+  .editions { display:flex; gap:6px; flex-wrap:wrap; }
+</style>
+</head>
+<body>
+<header>
+  <a class="crumb" href="/">← all books</a>
+  <span class="spacer"></span>
+</header>
+<main id="main">
+  <p class="muted">Loading…</p>
+</main>
+<script src="/book.js"></script>
+</body>
+</html>

@@ -35,8 +35,13 @@ use tower_http::cors::CorsLayer;
 /// Preview rasterization DPI for `pdftoppm` (legible spread, modest file size).
 const PREVIEW_DPI: u32 = 110;
 
-// Embedded frontend (single-binary; no static dir needed).
-const INDEX_HTML: &str = include_str!("../../web/static/index.html");
+// Embedded frontend (single-binary; no static dir needed). Three-level nav:
+// home (books list) → book detail → cover editor / interior previewer.
+const HOME_HTML: &str = include_str!("../../web/static/home.html");
+const HOME_JS: &str = include_str!("../../web/static/home.js");
+const BOOK_HTML: &str = include_str!("../../web/static/book.html");
+const BOOK_JS: &str = include_str!("../../web/static/book.js");
+const COVER_HTML: &str = include_str!("../../web/static/cover.html");
 const APP_JS: &str = include_str!("../../web/static/app.js");
 const PREVIEW_HTML: &str = include_str!("../../web/static/preview.html");
 const PREVIEW_JS: &str = include_str!("../../web/static/preview.js");
@@ -67,12 +72,17 @@ async fn serve(repo_root: PathBuf, port: u16, pages: u32) -> Result<()> {
 
     let state: Shared = Arc::new(AppState { repo, disco, default_pages: pages });
     let app = Router::new()
-        .route("/", get(index))
-        .route("/index.html", get(index))
+        .route("/", get(home))
+        .route("/index.html", get(home))
+        .route("/home.js", get(home_js))
+        .route("/book.html", get(book_html))
+        .route("/book.js", get(book_js))
+        .route("/cover.html", get(cover_html))
         .route("/app.js", get(app_js))
         .route("/preview.html", get(preview_html))
         .route("/preview.js", get(preview_js))
         .route("/api/books", get(api_books))
+        .route("/api/book/{slug}", get(api_book))
         .route("/api/cover/{book}/{lang}", get(api_cover).post(api_save))
         .route("/api/asset/{book}/{lang}/{kind}", get(api_asset))
         .route("/api/preview/{book}/{lang}", get(api_preview_meta))
@@ -83,8 +93,9 @@ async fn serve(repo_root: PathBuf, port: u16, pages: u32) -> Result<()> {
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    println!("\n  Cover editor:  http://{addr}/");
-    println!("  Previewer:     http://{addr}/preview.html\n");
+    println!("\n  Home (books):  http://{addr}/");
+    println!("  Cover editor:  http://{addr}/cover.html?book=<slug>&lang=<lang>");
+    println!("  Previewer:     http://{addr}/preview.html?book=<slug>&lang=<lang>\n");
     axum::serve(listener, app).await?;
     Ok(())
 }
@@ -93,17 +104,33 @@ async fn serve(repo_root: PathBuf, port: u16, pages: u32) -> Result<()> {
 // static handlers (embedded)
 // --------------------------------------------------------------------------
 
-async fn index() -> impl IntoResponse {
-    Html(INDEX_HTML)
+fn js(body: &'static str) -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "application/javascript")], body)
+}
+
+async fn home() -> impl IntoResponse {
+    Html(HOME_HTML)
+}
+async fn home_js() -> impl IntoResponse {
+    js(HOME_JS)
+}
+async fn book_html() -> impl IntoResponse {
+    Html(BOOK_HTML)
+}
+async fn book_js() -> impl IntoResponse {
+    js(BOOK_JS)
+}
+async fn cover_html() -> impl IntoResponse {
+    Html(COVER_HTML)
 }
 async fn preview_html() -> impl IntoResponse {
     Html(PREVIEW_HTML)
 }
 async fn app_js() -> impl IntoResponse {
-    ([(header::CONTENT_TYPE, "application/javascript")], APP_JS)
+    js(APP_JS)
 }
 async fn preview_js() -> impl IntoResponse {
-    ([(header::CONTENT_TYPE, "application/javascript")], PREVIEW_JS)
+    js(PREVIEW_JS)
 }
 
 // --------------------------------------------------------------------------
@@ -130,6 +157,52 @@ async fn api_books(State(st): State<Shared>) -> Result<impl IntoResponse, (Statu
     Ok(Json(serde_json::json!({
         "repoRoot": st.repo.root.display().to_string(),
         "books": list,
+    })))
+}
+
+/// `GET /api/book/{slug}` — config-derived attributes for the book detail page:
+/// languages, editions, author/series, and a per-language summary (title/subtitle,
+/// built page count, KDP listing facts). Read from the book's `bookmill.toml` via
+/// the main-crate config model (`crate::discover` / `crate::config`).
+async fn api_book(
+    State(st): State<Shared>,
+    AxPath(slug): AxPath<String>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let (cfg, _dir) = st.disco.find_book(&slug).map_err(err)?;
+    let author = cfg.meta.author.clone().unwrap_or_else(|| st.repo.author.clone());
+
+    let mut langs = serde_json::Map::new();
+    for lang in &cfg.languages {
+        let pdf = kdp_pdf_path(&st.disco.root, &slug, lang);
+        let pages = if pdf.exists() { pdf_pages(&pdf) } else { None };
+        let listing = cfg.listing.get(lang).map(|l| {
+            serde_json::json!({
+                "keywords": l.keywords,
+                "bisac": l.bisac,
+                "readingAge": l.reading_age,
+                "blurbChars": l.blurb.as_ref().map(|b| b.chars().count()),
+            })
+        });
+        langs.insert(
+            lang.clone(),
+            serde_json::json!({
+                "title": cfg.title.get(lang),
+                "subtitle": cfg.subtitle.get(lang),
+                "kdpPdfExists": pdf.exists(),
+                "pages": pages,
+                "listing": listing,
+            }),
+        );
+    }
+
+    Ok(Json(serde_json::json!({
+        "slug": cfg.slug,
+        "languages": cfg.languages,
+        "editions": cfg.editions,
+        "author": author,
+        "series": cfg.meta.series,
+        "protected": cover::is_protected(&slug),
+        "langs": langs,
     })))
 }
 

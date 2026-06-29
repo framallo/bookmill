@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>bookmill — cover editor</title>
+<title>bookmill — edit cover</title>
 <script src="https://unpkg.com/konva@9/konva.min.js"></script>
 <style>
   :root { --bg:#11151c; --panel:#1b212b; --line:#2c3543; --ink:#e7edf3; --muted:#8a98a8; --accent:#d4a937; }
@@ -39,13 +39,14 @@
 </head>
 <body>
 <header>
-  <h1>bookmill · cover editor</h1>
-  <select id="bookSel"></select>
-  <select id="langSel"></select>
+  <a class="navlink" href="/">← all books</a>
+  <a class="navlink" id="backBook" href="#">← book</a>
+  <h1>Edit cover</h1>
+  <span id="bookLabel" class="hint"></span>
   <span id="protBadge" class="pill" style="display:none">protected · comparison render</span>
   <span class="spacer"></span>
   <span id="status"></span>
-  <a class="navlink" href="/preview.html">previewer →</a>
+  <a class="navlink" id="toPreview" href="#">preview →</a>
 </header>
 
 <div class="wrap">

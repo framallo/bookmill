@@ -8,45 +8,36 @@ let stage, artLayer, textLayer, guideLayer, tr;
 let nodes = {};                      // {title, subtitle, author} -> Konva.Text
 let current = null;                  // selected key
 let bgRect, bgImage;
+let SLUG = null, LANG = null;        // scope: ?book=<slug>&lang=<lang>
 
 init();
 
 async function init() {
-  const res = await fetch('/api/books').then(r => r.json());
-  const sel = $('bookSel');
-  res.books.forEach(b => {
-    const o = document.createElement('option');
-    o.value = b.slug;
-    const t = b.titles.es || b.titles.en || b.slug;
-    o.textContent = t + (b.protected ? '  (protected)' : '');
-    o.dataset.langs = JSON.stringify(b.languages);
-    sel.appendChild(o);
-  });
-  sel.onchange = onBookChange;
-  $('langSel').onchange = loadCover;
+  const q = new URLSearchParams(location.search);
+  SLUG = q.get('book');
+  LANG = q.get('lang');
+
+  // Graceful fallback when opened without query params: pick the first book/lang.
+  if (!SLUG || !LANG) {
+    const res = await fetch('/api/books').then(r => r.json());
+    const b = res.books[0];
+    if (b) { SLUG = SLUG || b.slug; LANG = LANG || (b.languages[0] || 'es'); }
+  }
+
+  $('bookLabel').textContent = `${SLUG} · ${LANG.toUpperCase()}`;
+  $('backBook').href = `/book.html?book=${encodeURIComponent(SLUG)}`;
+  $('toPreview').href = `/preview.html?book=${encodeURIComponent(SLUG)}&lang=${encodeURIComponent(LANG)}`;
+
   $('saveBtn').onclick = save;
   $('guidesOn').onchange = () => { guideLayer.visible($('guidesOn').checked); guideLayer.draw(); };
 
   bindStyleInputs();
-  if (res.books.length) { onBookChange(); }
-}
-
-function onBookChange() {
-  const opt = $('bookSel').selectedOptions[0];
-  const langs = JSON.parse(opt.dataset.langs || '["es","en"]');
-  const langSel = $('langSel');
-  langSel.innerHTML = '';
-  langs.forEach(l => {
-    const o = document.createElement('option');
-    o.value = l; o.textContent = l.toUpperCase();
-    langSel.appendChild(o);
-  });
   loadCover();
 }
 
 async function loadCover() {
-  const slug = $('bookSel').value;
-  const lang = $('langSel').value;
+  const slug = SLUG;
+  const lang = LANG;
   status('loading…');
   const data = await fetch(`/api/cover/${slug}/${lang}`).then(r => r.json());
   buildStage(data);
@@ -218,7 +209,7 @@ function elJSON(key) {
 }
 
 async function save() {
-  const slug = $('bookSel').value, lang = $('langSel').value;
+  const slug = SLUG, lang = LANG;
   const body = {
     title: elJSON('title'),
     subtitle: elJSON('subtitle'),

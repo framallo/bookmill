@@ -46,15 +46,16 @@
 </head>
 <body>
 <header>
-  <h1>bookmill · interior previewer</h1>
-  <select id="bookSel"></select>
-  <select id="langSel"></select>
+  <a class="navlink" href="/">← all books</a>
+  <a class="navlink" id="backBook" href="#">← book</a>
+  <h1>Preview</h1>
+  <span id="bookLabel" class="muted"></span>
   <span style="width:8px"></span>
   <label class="tog"><input type="checkbox" id="tTrim" checked> trim</label>
   <label class="tog"><input type="checkbox" id="tBleed" checked> bleed</label>
   <label class="tog"><input type="checkbox" id="tSafe" checked> safe</label>
   <span class="spacer"></span>
-  <a class="navlink" href="/">← cover editor</a>
+  <a class="navlink" id="toCover" href="#">edit cover →</a>
 </header>
 <div class="layout">
   <div class="stagewrap">

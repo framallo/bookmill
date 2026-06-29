@@ -14,21 +14,26 @@ let meta = null;        // /api/preview metadata (geometry, pages, dpi)
 let spread = 0;         // spread index: 0 = [—, p1], k = [p2k, p2k+1]
 let stage = null;
 let warnPages = new Set();
+let SLUG = null, LANG = null; // scope: ?book=<slug>&lang=<lang>
 
 init();
 
 async function init() {
-  const res = await fetch('/api/books').then((r) => r.json());
-  const sel = $('bookSel');
-  res.books.forEach((b) => {
-    const o = document.createElement('option');
-    o.value = b.slug;
-    o.textContent = b.titles.es || b.titles.en || b.slug;
-    o.dataset.langs = JSON.stringify(b.languages);
-    sel.appendChild(o);
-  });
-  sel.onchange = onBook;
-  $('langSel').onchange = onLang;
+  const q = new URLSearchParams(location.search);
+  SLUG = q.get('book');
+  LANG = q.get('lang');
+
+  // Graceful fallback when opened without query params: pick the first book/lang.
+  if (!SLUG || !LANG) {
+    const res = await fetch('/api/books').then((r) => r.json());
+    const b = res.books[0];
+    if (b) { SLUG = SLUG || b.slug; LANG = LANG || (b.languages[0] || 'es'); }
+  }
+
+  $('bookLabel').textContent = `${SLUG} · ${LANG.toUpperCase()}`;
+  $('backBook').href = `/book.html?book=${encodeURIComponent(SLUG)}`;
+  $('toCover').href = `/cover.html?book=${encodeURIComponent(SLUG)}&lang=${encodeURIComponent(LANG)}`;
+
   ['tTrim', 'tBleed', 'tSafe'].forEach((id) => ($(id).onchange = draw));
   $('prev').onclick = () => gotoSpread(spread - 1);
   $('next').onclick = () => gotoSpread(spread + 1);
@@ -37,24 +42,11 @@ async function init() {
   $('go').onclick = jumpToInput;
   $('jump').onkeydown = (e) => { if (e.key === 'Enter') jumpToInput(); };
   $('reload').onclick = loadWarnings;
-  if (res.books.length) onBook();
+  load();
 }
 
-function onBook() {
-  const langs = JSON.parse($('bookSel').selectedOptions[0].dataset.langs || '["es","en"]');
-  const ls = $('langSel');
-  ls.innerHTML = '';
-  langs.forEach((l) => {
-    const o = document.createElement('option');
-    o.value = l;
-    o.textContent = l.toUpperCase();
-    ls.appendChild(o);
-  });
-  onLang();
-}
-
-async function onLang() {
-  const slug = $('bookSel').value, lang = $('langSel').value;
+async function load() {
+  const slug = SLUG, lang = LANG;
   warnPages = new Set();
   resetWarningsPanel();
   $('status').textContent = 'loading metadata…';
@@ -102,7 +94,7 @@ function spreadPages() {
 async function draw() {
   if (!meta || !meta.pdfExists) return;
   const g = meta.geometry;
-  const slug = $('bookSel').value, lang = $('langSel').value;
+  const slug = SLUG, lang = LANG;
   const [lp, rp] = spreadPages();
   const P = meta.pages || 1;
 
@@ -197,7 +189,7 @@ function resetWarningsPanel() {
 }
 
 async function loadWarnings() {
-  const slug = $('bookSel').value, lang = $('langSel').value;
+  const slug = SLUG, lang = LANG;
   $('reload').disabled = true;
   $('counts').innerHTML = '<span class="muted">running validate --deep… (may take a while)</span>';
   $('issues').innerHTML = '';

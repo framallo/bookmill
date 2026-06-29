@@ -48,6 +48,11 @@ async fn main() -> anyhow::Result<()> {
 
     let static_dir = static_dir();
     let app = Router::new()
+        // Home is the books list (index.html was renamed to cover.html in the
+        // three-level nav). The folded `bookmill web` binary is the full UI; this
+        // standalone crate serves the static pages + the cover-editor API only
+        // (it lacks /api/book, /api/preview, /api/warnings — use `bookmill web`).
+        .route("/", get(|| async { axum::response::Redirect::to("/home.html") }))
         .route("/api/books", get(api_books))
         .route("/api/cover/{book}/{lang}", get(api_cover).post(api_save))
         .route("/api/asset/{book}/{lang}/{kind}", get(api_asset))
