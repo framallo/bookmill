@@ -51,7 +51,7 @@ builds them (Phase 8 deleted every `meta.md`).
 bookmill/
   Cargo.toml  Cargo.lock        # main crate
   src/
-    main.rs        CLI (clap): list/validate/content/tui/build/covers/shrink/audiobook
+    main.rs        CLI (clap): create/list/validate/content/tui/build{,cover,shrink}/audiobook
     config.rs      TOML model + layered resolution + load-time validation
     discover.rs    walk repo, find books (book cfg has top-level `slug`)
     build.rs       request → Vec<Job> (book×edition/format×lang×output); runs the queue
@@ -83,7 +83,7 @@ bookmill validate <slug>         # fast config/listing/house-rule check
 bookmill validate <slug> --deep  # + epubcheck + PDF geometry + cover resolution (needs epubcheck, pdfinfo on PATH)
 bookmill build <slug> --format all --lang all     # epub|pdf|kdp|print|all
 bookmill build <slug> --edition kdp-epub          # build by edition instead of format
-bookmill covers <slug> --lang all                 # front PNG + wrap PDF + eBook JPG
+bookmill build cover <slug> --lang all            # front PNG + wrap PDF + eBook JPG
 bookmill tui                                       # interactive terminal UI
 
 # Web cover editor (separate crate):

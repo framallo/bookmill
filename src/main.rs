@@ -15,7 +15,7 @@ mod discover;
 mod tui;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use discover::Repo;
 use std::path::PathBuf;
 
@@ -91,45 +91,15 @@ enum Cmd {
     Content { book: String, lang: String },
     /// Interactive terminal UI
     Tui,
-    /// Build outputs (orchestrator — engines land next)
+    /// Build outputs: interiors (default), covers, or shrink an EPUB
+    #[command(args_conflicts_with_subcommands = true)]
     Build {
-        book: Option<String>,
-        /// build a specific format (epub|pdf|kdp|print|all); else build by editions
-        #[arg(long)]
-        format: Option<String>,
-        /// build a specific edition (e.g. kdp-paperback, gumroad); else all editions
-        #[arg(long)]
-        edition: Option<String>,
-        /// limit to a language (es|en|all)
-        #[arg(long)]
-        lang: Option<String>,
-    },
-    /// Render covers (front PNG + paperback wrap PDF + eBook JPG)
-    Covers {
-        book: Option<String>,
-        /// limit to a language (es|en|all)
-        #[arg(long)]
-        lang: Option<String>,
-        /// only emit the cover HTML (skip headless Chrome rasterization);
-        /// useful to verify the template/config without touching image assets
-        /// (chrome engine only)
-        #[arg(long)]
-        html_only: bool,
-        /// override the spine page count (else read from the built -kdp.pdf);
-        /// lets covers render before the print interior exists
-        #[arg(long)]
-        pages: Option<u32>,
-        /// rasterization engine: resvg (default, pure Rust, no Chrome) | chrome
-        #[arg(long)]
-        engine: Option<String>,
-    },
-    /// Shrink images inside an EPUB in place (native; Python-free)
-    Shrink {
-        /// path to the .epub
-        epub: PathBuf,
-        /// max image width in px (default 1200)
-        #[arg(long, default_value_t = 1200)]
-        px: u32,
+        /// cover / shrink subcommand; omit to build interiors (epub/pdf)
+        #[command(subcommand)]
+        what: Option<BuildSub>,
+        /// interior build options (used when no subcommand is given)
+        #[command(flatten)]
+        interior: InteriorArgs,
     },
     /// Build audiobook (kab default engine)
     Audiobook {
@@ -149,6 +119,61 @@ enum Cmd {
         #[arg(long)]
         force: bool,
     },
+}
+
+/// `build` subcommands. Interior (epub/pdf) is the default when none is given.
+#[derive(Subcommand)]
+enum BuildSub {
+    /// Build interiors (epub/pdf/kdp) — the default `build` action
+    Interior(InteriorArgs),
+    /// Render covers (front PNG + paperback wrap PDF + eBook JPG)
+    Cover(CoverArgs),
+    /// Shrink images inside an EPUB in place (native; Python-free)
+    Shrink(ShrinkArgs),
+}
+
+/// Interior build options (also the default action for `build`).
+#[derive(Args, Default)]
+struct InteriorArgs {
+    book: Option<String>,
+    /// build a specific format (epub|pdf|kdp|print|all); else build by editions
+    #[arg(long)]
+    format: Option<String>,
+    /// build a specific edition (e.g. kdp-paperback, gumroad); else all editions
+    #[arg(long)]
+    edition: Option<String>,
+    /// limit to a language (es|en|all)
+    #[arg(long)]
+    lang: Option<String>,
+}
+
+#[derive(Args)]
+struct CoverArgs {
+    book: Option<String>,
+    /// limit to a language (es|en|all)
+    #[arg(long)]
+    lang: Option<String>,
+    /// only emit the cover HTML (skip headless Chrome rasterization);
+    /// useful to verify the template/config without touching image assets
+    /// (chrome engine only)
+    #[arg(long)]
+    html_only: bool,
+    /// override the spine page count (else read from the built -kdp.pdf);
+    /// lets covers render before the print interior exists
+    #[arg(long)]
+    pages: Option<u32>,
+    /// rasterization engine: resvg (default, pure Rust, no Chrome) | chrome
+    #[arg(long)]
+    engine: Option<String>,
+}
+
+#[derive(Args)]
+struct ShrinkArgs {
+    /// path to the .epub
+    epub: PathBuf,
+    /// max image width in px (default 1200)
+    #[arg(long, default_value_t = 1200)]
+    px: u32,
 }
 
 fn main() -> Result<()> {
@@ -236,25 +261,29 @@ fn main() -> Result<()> {
             }
             None => println!("(nothing selected)"),
         },
-        Cmd::Build { book, format, edition, lang } => {
-            if format.is_some() {
-                build::run(&repo, book, format, lang)?;
-            } else {
-                build::run_editions(&repo, book, lang, edition)?;
+        Cmd::Build { what, interior } => {
+            match what.unwrap_or(BuildSub::Interior(interior)) {
+                BuildSub::Interior(a) => {
+                    if a.format.is_some() {
+                        build::run(&repo, a.book, a.format, a.lang)?;
+                    } else {
+                        build::run_editions(&repo, a.book, a.lang, a.edition)?;
+                    }
+                }
+                BuildSub::Cover(a) => {
+                    let engine = covers::Engine::parse(a.engine.as_deref())?;
+                    covers::run(&repo, a.book, a.lang, a.html_only, a.pages, engine)?
+                }
+                BuildSub::Shrink(a) => {
+                    let (before, after) = epub_shrink::shrink_epub(&a.epub, a.px)?;
+                    println!(
+                        "{}: {:.1}MB -> {:.1}MB",
+                        a.epub.display(),
+                        before as f64 / 1e6,
+                        after as f64 / 1e6
+                    );
+                }
             }
-        }
-        Cmd::Covers { book, lang, html_only, pages, engine } => {
-            let engine = covers::Engine::parse(engine.as_deref())?;
-            covers::run(&repo, book, lang, html_only, pages, engine)?
-        }
-        Cmd::Shrink { epub, px } => {
-            let (b, a) = epub_shrink::shrink_epub(&epub, px)?;
-            println!(
-                "{}: {:.1}MB -> {:.1}MB",
-                epub.display(),
-                b as f64 / 1e6,
-                a as f64 / 1e6
-            );
         }
         Cmd::Audiobook { book, lang, voice, speed, engine, force } => {
             if let Some(e) = &engine {

@@ -53,15 +53,17 @@ templates.
 bookmill create [flags]              scaffold a new project (init) or add a book to an existing repo
 bookmill list [--json]               list discovered books
 bookmill validate [book] [--deep]    config/listing/house-rule check (+epubcheck, PDF geometry, cover res with --deep)
-bookmill build [book] [--format|--edition] [--lang]   build EPUB/PDF outputs
-bookmill covers [book] [--lang]      render front PNG + paperback wrap PDF + eBook JPG
-bookmill audiobook [book] [--lang] [--voice] [--speed]   render a chaptered .m4b (kab engine)
-bookmill shrink <epub> [--px]        shrink EPUB images in place (native)
-bookmill tui                         interactive terminal UI (build/covers/validate/audiobook)
+bookmill build [book] [--format|--edition] [--lang]   build interiors (EPUB/PDF)
+bookmill build cover [book] [--lang]      render front PNG + paperback wrap PDF + eBook JPG
+bookmill build shrink <epub> [--px]       shrink EPUB images in place (native)
+bookmill audiobook [book] [--lang] [--voice] [--speed] [--force]   render a chaptered .m4b (kab engine)
+bookmill tui                         interactive terminal UI (build/cover/validate/audiobook)
 ```
 
-`--format` is `epub | pdf | kdp | print | all`; `--edition` builds by distribution
-channel instead (see below). `--lang` is a language code or `all`.
+`build` is the umbrella for produced artifacts: bare `build` builds **interiors**
+(the default action), `build cover` renders covers, `build shrink` shrinks an
+EPUB. `--format` is `epub | pdf | kdp | print | all`; `--edition` builds by
+distribution channel instead (see below). `--lang` is a language code or `all`.
 
 ### `bookmill create`
 

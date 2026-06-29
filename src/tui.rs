@@ -141,9 +141,9 @@ pub fn run(repo: &Repo) -> Result<Option<Action>> {
             let langflag = if lang != "all" { format!(" --lang {lang}") } else { String::new() };
             let cmd = match action.0 {
                 "Validate" => format!("bookmill validate {} --deep", book.slug),
-                "Covers" => format!("bookmill covers {}{langflag}", book.slug),
+                "Covers" => format!("bookmill build cover {}{langflag}", book.slug),
                 "Audiobook" => format!("bookmill audiobook {}{langflag}", book.slug),
-                "Release" => format!("bookmill build {0}{langflag} ; covers ; validate --deep", book.slug),
+                "Release" => format!("bookmill build {0}{langflag} ; build cover ; validate --deep", book.slug),
                 _ => {
                     let mut c = format!("bookmill build {}", book.slug);
                     if by_edition {
