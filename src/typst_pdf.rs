@@ -16,8 +16,11 @@
 //!
 //! The Markdown -> Typst converter is intentionally small: headings (with the
 //! `{.unnumbered}`/`{.spot}` attributes), paragraphs, `**bold**`/`*italic*`,
-//! links, standalone images, and `---` scene breaks. Anything else falls through
-//! as escaped literal text.
+//! links, standalone images, `---` scene breaks, GFM pipe tables, and inline
+//! `^[...]` footnotes. Anything else falls through as escaped literal text.
+//! Reference-style GFM footnotes (`[^id]` + `[^id]:` definitions) are deferred:
+//! they need a two-pass collect across blocks and no book in the series uses
+//! them; inline `^[...]` covers the footnote need for now.
 
 use crate::build::{BookMeta, PageGeometry};
 use crate::discover::Repo;
@@ -110,6 +113,15 @@ bottom: {bottom:.4}in, inside: {inside:.4}in, outside: {outside:.4}in))\n",
         inside = inside,
         outside = g.outer,
     ));
+    // Retail-only paper-texture page background (mirrors the pandoc retail path's
+    // `pdf/texture-bg.tex`): scale `<repo>/images/paper-texture.jpg` to the full
+    // page behind every page. KDP print PDFs must NOT get it. Skip silently if the
+    // image is absent.
+    if retail && repo.root.join("images/paper-texture.jpg").exists() {
+        s.push_str(
+            "#set page(background: image(\"/images/paper-texture.jpg\", width: 100%, height: 100%))\n",
+        );
+    }
     s.push_str(&format!("#set text(size: 11pt, lang: {})\n", ty_str(lang)));
     s.push_str("#set par(justify: true, leading: 0.72em, first-line-indent: 1.2em)\n");
     s.push_str("#set heading(numbering: \"1\")\n");
@@ -148,6 +160,12 @@ text(fill: islatitle, weight: \"bold\", size: 22pt, it.body)\n  }})\n}}\n",
 text(weight: \"bold\", size: 13pt, it.body))\n",
     );
     s.push_str("\n");
+
+    // Front matter (copyright page, TOC) is numbered in lowercase roman; the body
+    // restarts at arabic 1 at the first chapter (see the `numbering: "1"` +
+    // counter reset below). Title/cover pages pass `footer: none`, so no visible
+    // number there, but the counter still advances like a real book's front matter.
+    s.push_str("#set page(numbering: \"i\")\n");
 
     // ---- front matter ----
     // optional retail cover plate (page 1)
@@ -247,6 +265,10 @@ fn emit_blocks(s: &mut String, blocks: &[Block], root: &Path) {
                 }
                 i += 1;
             }
+            Block::Table { header, rows } => {
+                emit_table(s, header, rows);
+                i += 1;
+            }
             Block::Rule => {
                 s.push_str("#scenebreak\n");
                 i += 1;
@@ -258,6 +280,30 @@ fn emit_blocks(s: &mut String, blocks: &[Block], root: &Path) {
             }
         }
     }
+}
+
+/// Emit a GFM table as a Typst `#table(...)` with bold header cells. Column count
+/// is taken from the header; short body rows are padded so the grid stays valid.
+fn emit_table(s: &mut String, header: &[String], rows: &[Vec<String>]) {
+    let cols = header.len().max(1);
+    s.push_str(&format!(
+        "#table(\n  columns: {cols},\n  table.header({}),\n",
+        header
+            .iter()
+            .map(|c| format!("[*{}*]", inline(c)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
+    for row in rows {
+        let mut cells: Vec<String> =
+            row.iter().map(|c| format!("[{}]", inline(c))).collect();
+        while cells.len() < cols {
+            cells.push("[]".to_string());
+        }
+        cells.truncate(cols);
+        s.push_str(&format!("  {},\n", cells.join(", ")));
+    }
+    s.push_str(")\n\n");
 }
 
 fn emit_heading(s: &mut String, level: usize, text: &str, unnumbered: bool) {
@@ -280,6 +326,9 @@ enum Block {
     Para(String),
     Image { src: String, spot: bool, width: Option<f64> },
     Rule,
+    /// GFM pipe table: a header row plus body rows, each a vector of raw cell
+    /// strings (inline markdown, converted at emit time).
+    Table { header: Vec<String>, rows: Vec<Vec<String>> },
 }
 
 /// Split markdown into blocks. Drops fenced code blocks (```; used by the
@@ -288,32 +337,62 @@ enum Block {
 /// blank-line-delimited paragraphs.
 fn parse_blocks(md: &str) -> Vec<Block> {
     let mut out = Vec::new();
-    let mut para: Vec<&str> = Vec::new();
+    let mut para: Vec<String> = Vec::new();
     let mut in_fence = false;
 
-    let flush = |para: &mut Vec<&str>, out: &mut Vec<Block>| {
+    let flush = |para: &mut Vec<String>, out: &mut Vec<Block>| {
         if !para.is_empty() {
             out.push(Block::Para(para.join(" ")));
             para.clear();
         }
     };
 
-    for raw in md.lines() {
-        let line = raw.trim_end();
+    let lines: Vec<&str> = md.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i].trim_end();
         let trimmed = line.trim();
 
         // fenced code block: drop everything inside (and the fences)
         if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
             flush(&mut para, &mut out);
             in_fence = !in_fence;
+            i += 1;
             continue;
         }
         if in_fence {
+            i += 1;
             continue;
         }
 
         if trimmed.is_empty() {
             flush(&mut para, &mut out);
+            i += 1;
+            continue;
+        }
+
+        // GFM pipe table: a `| … |` header row immediately followed by a
+        // `|---|---|` separator row. Consumes the whole contiguous table.
+        if is_table_row(trimmed)
+            && lines
+                .get(i + 1)
+                .map(|l| is_table_separator(l.trim()))
+                .unwrap_or(false)
+        {
+            flush(&mut para, &mut out);
+            let header = split_table_row(trimmed);
+            let mut rows = Vec::new();
+            let mut j = i + 2;
+            while j < lines.len() {
+                let t = lines[j].trim();
+                if t.is_empty() || !is_table_row(t) {
+                    break;
+                }
+                rows.push(split_table_row(t));
+                j += 1;
+            }
+            out.push(Block::Table { header, rows });
+            i = j;
             continue;
         }
 
@@ -321,6 +400,7 @@ fn parse_blocks(md: &str) -> Vec<Block> {
         if is_rule(trimmed) {
             flush(&mut para, &mut out);
             out.push(Block::Rule);
+            i += 1;
             continue;
         }
 
@@ -328,6 +408,7 @@ fn parse_blocks(md: &str) -> Vec<Block> {
         if let Some(h) = parse_heading(trimmed) {
             flush(&mut para, &mut out);
             out.push(h);
+            i += 1;
             continue;
         }
 
@@ -335,13 +416,42 @@ fn parse_blocks(md: &str) -> Vec<Block> {
         if let Some(img) = parse_image(trimmed) {
             flush(&mut para, &mut out);
             out.push(img);
+            i += 1;
             continue;
         }
 
-        para.push(line);
+        para.push(line.to_string());
+        i += 1;
     }
     flush(&mut para, &mut out);
     out
+}
+
+/// A line that looks like a GFM table row: contains a `|` and (after trimming a
+/// single optional leading/trailing pipe) is non-empty.
+fn is_table_row(s: &str) -> bool {
+    let s = s.trim();
+    s.contains('|') && s.trim_matches('|').contains(|c| c != '|')
+}
+
+/// A GFM header/body separator row, e.g. `|---|:--:|---:|`. Cells contain only
+/// `-`, `:`, and spaces, and at least one `-`.
+fn is_table_separator(s: &str) -> bool {
+    if !s.contains('|') || !s.contains('-') {
+        return false;
+    }
+    split_table_row(s)
+        .iter()
+        .all(|c| !c.is_empty() && c.chars().all(|ch| ch == '-' || ch == ':' || ch == ' '))
+}
+
+/// Split a `| a | b | c |` row into trimmed cell strings, dropping the optional
+/// leading/trailing pipe. Does not handle escaped `\|` inside cells (unused here).
+fn split_table_row(s: &str) -> Vec<String> {
+    let s = s.trim();
+    let s = s.strip_prefix('|').unwrap_or(s);
+    let s = s.strip_suffix('|').unwrap_or(s);
+    s.split('|').map(|c| c.trim().to_string()).collect()
 }
 
 fn is_rule(s: &str) -> bool {
@@ -424,6 +534,19 @@ fn inline(s: &str) -> String {
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
+        // inline footnote ^[text]  ->  #footnote[text]
+        // (pandoc-style inline footnote; reference-style GFM `[^id]` is deferred —
+        // see module note. No book in the series uses footnotes yet.)
+        if c == '^' && chars.get(i + 1) == Some(&'[') {
+            if let Some(end) = find_char(&chars, i + 2, ']') {
+                let inner: String = chars[i + 2..end].iter().collect();
+                out.push_str("#footnote[");
+                out.push_str(&inline(&inner));
+                out.push(']');
+                i = end + 1;
+                continue;
+            }
+        }
         // bold **...**
         if c == '*' && chars.get(i + 1) == Some(&'*') {
             if let Some(end) = find_seq(&chars, i + 2, &['*', '*']) {
@@ -497,7 +620,7 @@ fn parse_inline_link(chars: &[char], start: usize) -> Option<(String, String, us
 /// Escape a single char that is special in Typst markup.
 fn push_escaped(out: &mut String, c: char) {
     match c {
-        '\\' | '#' | '$' | '*' | '_' | '`' | '<' | '>' | '@' | '[' | ']' | '~' => {
+        '\\' | '#' | '$' | '*' | '_' | '`' | '<' | '>' | '@' | '[' | ']' | '~' | '^' => {
             out.push('\\');
             out.push(c);
         }
@@ -580,6 +703,44 @@ mod tests {
         assert!(is_rule("---"));
         assert!(is_rule("* * *"));
         assert!(!is_rule("-- a"));
+    }
+
+    #[test]
+    fn inline_footnote() {
+        assert_eq!(inline("a^[note]b"), "a#footnote[note]b");
+        // a bare caret is escaped (Typst superscript), not treated as a footnote
+        assert_eq!(inline("2^3"), "2\\^3");
+    }
+
+    #[test]
+    fn table_parse_and_emit() {
+        let md = "| A | B |\n|---|---|\n| 1 | two |\n| 3 | |\n";
+        let blocks = parse_blocks(md);
+        assert_eq!(blocks.len(), 1);
+        match &blocks[0] {
+            Block::Table { header, rows } => {
+                assert_eq!(header, &vec!["A".to_string(), "B".to_string()]);
+                assert_eq!(rows.len(), 2);
+                assert_eq!(rows[0], vec!["1".to_string(), "two".to_string()]);
+            }
+            _ => panic!("not a table"),
+        }
+        let mut s = String::new();
+        emit_blocks(&mut s, &blocks, Path::new("/repo"));
+        assert!(s.contains("#table("));
+        assert!(s.contains("columns: 2"));
+        assert!(s.contains("table.header([*A*], [*B*])"));
+        assert!(s.contains("[1], [two]"));
+        // a separator line alone (no header above) must not become a table
+        assert!(!s.contains("table.header([])"));
+    }
+
+    #[test]
+    fn table_separator_detection() {
+        assert!(is_table_separator("|---|---|"));
+        assert!(is_table_separator("| :--- | ---: | :--: |"));
+        assert!(!is_table_separator("| a | b |"));
+        assert!(!is_table_separator("---")); // scene-break rule, not a table sep
     }
 
     #[test]
