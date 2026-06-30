@@ -131,15 +131,17 @@ progress".
    `cover_svg.rs` to honor `[cover.<lang>.layout]` is the fix (design doc
    §A.2/§A.3; web/README.md "Known v1 limitation").
 
-3. **Native PDF engine** — **DONE as opt-in** (`--engine typst`, `src/typst_pdf.rs`):
-   markdown→Typst markup → `typst compile` (typst 0.15 via brew; shells the CLI, not
-   the crate). Reproduces page geometry+bleed, recto opens, numbered chapter headings,
-   full-bleed plates, spots, scene breaks, bold/italic/links, title/copyright/TOC —
-   verified on the text + picture books (correct 6×9 / 6.125×9.25, ~instant vs xelatex).
-   Pandoc/xelatex stays the **default**. Remaining to fully *replace* pandoc: retail
-   texture bg, exact front-matter roman/arabic split, tables/footnotes; then flip the
-   default and drop the `pdf/*.tex` + lua filter. (EPUB still via pandoc; DOCX via
-   pandoc as `--format docx`.)
+3. **Native PDF engine** — **DONE, feature-complete** (`src/typst_pdf.rs`, typst 0.15
+   via brew; shells the CLI). markdown→Typst→`typst compile`. Reproduces geometry+bleed,
+   recto opens, numbered chapter headings, full-bleed plates, spots, scene breaks,
+   bold/italic/links, title/copyright/TOC, **retail texture bg**, **front-matter roman /
+   body arabic numbering**, **GFM tables**, and inline `^[…]` footnotes (reference-style
+   `[^id]` deferred — no book uses them). **~instant vs xelatex** (whole 20-interior
+   series in ~3s vs ~2h). Selected via CLI `--engine typst` or repo `[build].engine`;
+   **the Argentina repo is now `engine = "typst"`** (config-driven). Pandoc/xelatex is
+   still the hardcoded fallback default and EPUB+DOCX still use pandoc. To make Typst the
+   *global* default: `Engine` `#[default]` + `parse(None)` → Typst, then optionally drop
+   `pdf/*.tex` + the lua filter.
 
 4. **EN translations for the two es-only fables** —
    `libre-para-elegir-en-la-isla` (Friedman) and `lo-que-nadie-sabe-de-la-isla`
