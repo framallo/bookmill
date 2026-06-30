@@ -40,13 +40,16 @@ impl Engine {
     }
 }
 
-/// Submitted / separately-managed books whose tracked `cover/` image assets must
-/// NOT be overwritten. With the resvg engine these render to a side-by-side
+/// Books whose tracked `cover/` image assets must NOT be overwritten by the
+/// native resvg render: with the resvg engine these render to a side-by-side
 /// comparison path under `output/` instead of in place.
-const PROTECTED: &[&str] = &[
-    "la-riqueza-de-la-isla",                  // SUBMITTED to KDP
-    "no-hay-plata-en-la-isla-de-las-ratas",   // new cover wired separately
-];
+///
+/// Empty: `la-riqueza-de-la-isla` and `no-hay-plata-en-la-isla-de-las-ratas`
+/// were verified to render faithfully via the native resvg path (front PNG +
+/// wrap PDF with spine text + full-bleed wrap art), so they now render in place
+/// like every other book and no longer need Chrome / `render-covers.sh`. The
+/// mechanism is kept so a future book can be protected again with one edit.
+const PROTECTED: &[&str] = &[];
 
 fn chrome_bin() -> String {
     std::env::var("CHROME")
