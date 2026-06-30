@@ -25,6 +25,27 @@ pub enum Out {
     KdpPdf,
 }
 
+/// PDF rendering engine. `Pandoc` (default) shells out to `pandoc --pdf-engine=
+/// xelatex`; `Typst` renders a native `.typ` document via the `typst` CLI
+/// (opt-in via `--engine typst`). Only affects PDF outputs; EPUB is unchanged.
+#[derive(Clone, Copy, PartialEq, Default, Debug)]
+pub enum Engine {
+    #[default]
+    Pandoc,
+    Typst,
+}
+
+impl Engine {
+    /// Parse `--engine` (case-insensitive). None / "pandoc" => Pandoc; "typst" => Typst.
+    pub fn parse(s: Option<&str>) -> Result<Engine> {
+        match s.map(|x| x.to_ascii_lowercase()).as_deref() {
+            None | Some("pandoc") | Some("xelatex") => Ok(Engine::Pandoc),
+            Some("typst") => Ok(Engine::Typst),
+            Some(other) => bail!("unknown --engine {other:?} (expected \"pandoc\" or \"typst\")"),
+        }
+    }
+}
+
 impl Out {
     pub fn name(self) -> &'static str {
         match self {
@@ -51,6 +72,8 @@ pub struct Job {
     /// Full PDF page geometry (paper size + margins) in inches, resolved from
     /// config (edition trim+bleed + book/repo margins). None for EPUB outputs.
     pub geometry: Option<PageGeometry>,
+    /// PDF engine (pandoc default; typst opt-in). Ignored for EPUB outputs.
+    pub engine: Engine,
 }
 
 /// Full print page geometry, in inches. Paper size comes from edition trim+bleed;
@@ -270,6 +293,7 @@ pub fn plan_format(
                     out: *out,
                     epub_px: DEFAULT_EPUB_PX,
                     geometry: resolve_geometry(repo, &book, None, *out),
+                    engine: Engine::default(),
                 });
             }
         }
@@ -359,6 +383,7 @@ pub fn plan_editions(
                         out: *out,
                         epub_px: img_px,
                         geometry: resolve_geometry(repo, &book, ed, *out),
+                        engine: Engine::default(),
                     });
                 }
             }
@@ -393,8 +418,12 @@ pub fn run(
     book_slug: Option<String>,
     format: Option<String>,
     lang_filter: Option<String>,
+    engine: Engine,
 ) -> Result<()> {
-    let jobs = plan_format(repo, &book_slug, &format, &lang_filter)?;
+    let mut jobs = plan_format(repo, &book_slug, &format, &lang_filter)?;
+    for j in &mut jobs {
+        j.engine = engine;
+    }
     run_queue_stdout(repo, &jobs)
 }
 
@@ -404,8 +433,12 @@ pub fn run_editions(
     book_slug: Option<String>,
     lang_filter: Option<String>,
     edition_filter: Option<String>,
+    engine: Engine,
 ) -> Result<()> {
-    let jobs = plan_editions(repo, &book_slug, &lang_filter, &edition_filter)?;
+    let mut jobs = plan_editions(repo, &book_slug, &lang_filter, &edition_filter)?;
+    for j in &mut jobs {
+        j.engine = engine;
+    }
     run_queue_stdout(repo, &jobs)
 }
 
@@ -564,6 +597,7 @@ pub fn build_job(repo: &Repo, job: &Job) -> Result<()> {
         job.geometry,
         job.edition.as_deref(),
         &job.target,
+        job.engine,
     )
 }
 
@@ -591,6 +625,7 @@ fn build_one(
     geometry: Option<PageGeometry>,
     edition: Option<&str>,
     target: &str,
+    engine: Engine,
 ) -> Result<()> {
     let slug = &book.slug;
     let content = book
@@ -627,6 +662,40 @@ fn build_one(
             if let Some(c) = &cover {
                 emit_cover_jpg(c, &odir.join(format!("{base}-cover.jpg")));
             }
+        }
+        Out::RetailPdf if engine == Engine::Typst => {
+            let m = resolve_book_meta(repo, book, lang)?;
+            crate::typst_pdf::run(
+                repo,
+                &m,
+                cpdf.as_deref(),
+                &chaps,
+                openright,
+                true,
+                cover.as_deref(),
+                geometry,
+                lang,
+                &odir.join(format!("{base}.pdf")),
+            )?;
+        }
+        Out::KdpPdf if engine == Engine::Typst => {
+            let fname = match (target, edition) {
+                ("bubok", Some(ed)) => format!("{base}-{ed}.pdf"),
+                _ => format!("{base}-kdp.pdf"),
+            };
+            let m = resolve_book_meta(repo, book, lang)?;
+            crate::typst_pdf::run(
+                repo,
+                &m,
+                cpdf.as_deref(),
+                &chaps,
+                openright,
+                false,
+                None,
+                geometry,
+                lang,
+                &odir.join(fname),
+            )?;
         }
         Out::RetailPdf => {
             // only stamp a cover page when the book has cover art
@@ -766,42 +835,57 @@ top={:.4}in,bottom={:.4}in,inner={:.4}in,outer={:.4}in,bindingoffset={:.4}in}}\n
 /// output dir and returns its path. Carries title/subtitle/author/date/lang/
 /// language/documentclass/rights; page geometry is handled separately (the PDF
 /// `.geometry.tex` header), so it is intentionally NOT emitted here.
-fn write_metadata(repo: &Repo, book: &BookConfig, lang: &str, odir: &Path) -> Result<PathBuf> {
+/// Resolved per-(book, lang) front-matter values, shared by the pandoc metadata
+/// file and the native Typst document.
+pub struct BookMeta {
+    pub title: String,
+    pub subtitle: Option<String>,
+    pub author: String,
+    pub year: String,
+    pub rights: String,
+}
+
+/// Resolve title/subtitle/author/year/rights for a (book, lang) from config,
+/// applying the same precedence the pandoc metadata uses.
+pub fn resolve_book_meta(repo: &Repo, book: &BookConfig, lang: &str) -> Result<BookMeta> {
     let title = book
         .title
         .get(lang)
-        .with_context(|| format!("no [title.{lang}] for {}", book.slug))?;
-    let subtitle = book.subtitle.get(lang);
+        .with_context(|| format!("no [title.{lang}] for {}", book.slug))?
+        .clone();
+    let subtitle = book.subtitle.get(lang).cloned();
     let author = book
         .meta
         .author
         .clone()
         .or_else(|| repo.config.author.clone())
         .unwrap_or_else(|| "Federico Ramallo".into());
-    let date = book
-        .meta
-        .date
-        .clone()
-        .or_else(|| repo.config.date.clone());
+    let date = book.meta.date.clone().or_else(|| repo.config.date.clone());
     let year = date.as_ref().map(date_year).unwrap_or_else(|| "2026".into());
-    // Rights: explicit [meta].rights wins; else a localized default.
     let rights = book
         .meta
         .rights
         .clone()
         .unwrap_or_else(|| localized_rights(lang, &author, &year));
+    Ok(BookMeta { title, subtitle, author, year, rights })
+}
+
+fn write_metadata(repo: &Repo, book: &BookConfig, lang: &str, odir: &Path) -> Result<PathBuf> {
+    let m = resolve_book_meta(repo, book, lang)?;
+    let (title, subtitle, author, year, rights) =
+        (&m.title, m.subtitle.as_ref(), &m.author, &m.year, &m.rights);
 
     let mut y = String::from("---\n");
     y.push_str(&format!("title: {}\n", yaml_str(title)));
     if let Some(s) = subtitle {
         y.push_str(&format!("subtitle: {}\n", yaml_str(s)));
     }
-    y.push_str(&format!("author: {}\n", yaml_str(&author)));
-    y.push_str(&format!("date: {}\n", yaml_str(&year)));
+    y.push_str(&format!("author: {}\n", yaml_str(author)));
+    y.push_str(&format!("date: {}\n", yaml_str(year)));
     y.push_str(&format!("lang: {lang}\n"));
     y.push_str(&format!("language: {lang}\n"));
     y.push_str("documentclass: book\n");
-    y.push_str(&format!("rights: {}\n", yaml_str(&rights)));
+    y.push_str(&format!("rights: {}\n", yaml_str(rights)));
     y.push_str("---\n");
 
     let p = odir.join(".gen-meta.md");
