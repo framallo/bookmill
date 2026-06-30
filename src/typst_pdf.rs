@@ -126,7 +126,9 @@ bottom: {bottom:.4}in, inside: {inside:.4}in, outside: {outside:.4}in))\n",
     );
     // small centered tailpiece (spot)
     s.push_str(
-        "#let spot(p) = { v(1.5em); align(center, image(p, width: 2.4in)); v(1em) }\n",
+        // Fit inside a 2.4in box (preserve aspect), mirroring pandoc's
+        // keepaspectratio — a tall vignette stays narrow so it keeps ≥300dpi.
+        "#let spot(p) = { v(1.5em); align(center, image(p, width: 2.4in, height: 2.4in, fit: \"contain\")); v(1em) }\n",
     );
     // centered scene break
     s.push_str(
