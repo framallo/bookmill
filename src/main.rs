@@ -282,7 +282,10 @@ fn main() -> Result<()> {
         Cmd::Build { what, interior } => {
             match what.unwrap_or(BuildSub::Interior(interior)) {
                 BuildSub::Interior(a) => {
-                    let engine = build::Engine::parse(a.engine.as_deref())?;
+                    // CLI --engine wins; else the repo's [build].engine config; else pandoc.
+                    let engine = build::Engine::parse(
+                        a.engine.as_deref().or(repo.config.build.engine.as_deref()),
+                    )?;
                     if a.format.is_some() {
                         build::run(&repo, a.book, a.format, a.lang, engine)?;
                     } else {
