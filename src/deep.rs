@@ -136,6 +136,8 @@ pub fn run(repo: &Repo, book: Option<String>, json: bool) -> Result<()> {
                     // Catch "insufficient bleed" (a full-page plate that leaves a
                     // white margin) before KDP rejects it.
                     bleed_coverage_check(repo, job, &mut rep);
+                    // Spine-text eligibility (KDP allows spine text only ≥100pp).
+                    spine_eligibility_check(repo, job, &mut rep);
                 }
             }
         }
@@ -458,6 +460,49 @@ fn audit_dpi_rows(list: &str, min_dpi: u32, min_px: u32) -> (usize, Option<u32>,
         }
     }
     (checked, min_seen, low)
+}
+
+// ---------- Spine-text eligibility ----------
+
+/// KDP allows printed **spine text** only at this page count or above (thinner
+/// books ship a blank spine).
+const SPINE_TEXT_MIN_PAGES: u32 = 100;
+
+/// Report the interior page count and whether the cover may carry **spine text**
+/// (KDP's ≥100-page rule). Informational — a blank spine on a thin book is correct,
+/// not an error. Runs once per (book, lang) on the canonical kdp-paperback interior
+/// (not the per-region bubok copies) to avoid duplicate lines.
+fn spine_eligibility_check(repo: &Repo, job: &Job, rep: &mut Report) {
+    if !matches!(job.target.as_str(), "kdp-paperback" | "kdp-hardcover") {
+        return;
+    }
+    let path = build::job_output_path(repo, job);
+    let ed = job.edition.clone().unwrap_or_else(|| job.target.clone());
+    let label = format!("{} {} · {} · {}", job.slug, job.lang, ed, job.out.name());
+    let Some(pages) = pdf_pages(&path) else { return }; // missing artifact already noted
+    if pages >= SPINE_TEXT_MIN_PAGES {
+        rep.ok(format!(
+            "spine {label}: interior {pages}pp — spine text allowed (≥{SPINE_TEXT_MIN_PAGES}pp)"
+        ));
+    } else {
+        rep.ok(format!(
+            "spine {label}: interior {pages}pp — spine text NOT allowed (<{SPINE_TEXT_MIN_PAGES}pp); ship a blank spine"
+        ));
+    }
+}
+
+/// Page count of a PDF via `pdfinfo` (poppler). None if missing/unreadable.
+fn pdf_pages(pdf: &Path) -> Option<u32> {
+    if !pdf.exists() {
+        return None;
+    }
+    let out = Command::new("pdfinfo").arg(pdf).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|l| l.strip_prefix("Pages:").and_then(|r| r.trim().parse::<u32>().ok()))
 }
 
 // ---------- Interior bleed coverage ----------
