@@ -63,8 +63,10 @@ bookmill tui                         interactive terminal UI (build/cover/valida
 
 `build` is the umbrella for produced artifacts: bare `build` builds **interiors**
 (the default action), `build cover` renders covers, `build shrink` shrinks an
-EPUB. `--format` is `epub | pdf | kdp | print | all`; `--edition` builds by
-distribution channel instead (see below). `--lang` is a language code or `all`.
+EPUB. `--format` is `epub | pdf | kdp | print | docx | all` (`docx` = an editor
+review doc); `--edition` builds by distribution channel instead (see below).
+`--lang` is a language code or `all`. PDF builds default to pandoc/xelatex;
+`--engine typst` renders a native Typst PDF instead (opt-in, no LaTeX).
 
 ### `bookmill create`
 

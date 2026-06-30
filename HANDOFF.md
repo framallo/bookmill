@@ -131,9 +131,15 @@ progress".
    `cover_svg.rs` to honor `[cover.<lang>.layout]` is the fix (design doc
    §A.2/§A.3; web/README.md "Known v1 limitation").
 
-3. **Native PDF engine (v2 portability).** Replace the pandoc/xelatex shell-out
-   with AST→Typst via the `typst` crate (and comrak for MD→AST, epub-builder for
-   EPUB, docx-rs for DOCX). Goal: zero external deps, one static binary.
+3. **Native PDF engine** — **DONE as opt-in** (`--engine typst`, `src/typst_pdf.rs`):
+   markdown→Typst markup → `typst compile` (typst 0.15 via brew; shells the CLI, not
+   the crate). Reproduces page geometry+bleed, recto opens, numbered chapter headings,
+   full-bleed plates, spots, scene breaks, bold/italic/links, title/copyright/TOC —
+   verified on the text + picture books (correct 6×9 / 6.125×9.25, ~instant vs xelatex).
+   Pandoc/xelatex stays the **default**. Remaining to fully *replace* pandoc: retail
+   texture bg, exact front-matter roman/arabic split, tables/footnotes; then flip the
+   default and drop the `pdf/*.tex` + lua filter. (EPUB still via pandoc; DOCX via
+   pandoc as `--format docx`.)
 
 4. **EN translations for the two es-only fables** —
    `libre-para-elegir-en-la-isla` (Friedman) and `lo-que-nadie-sabe-de-la-isla`
@@ -157,7 +163,8 @@ progress".
 
 ### Open decisions (need Federico)
 
-1. DOCX: native `docx-rs` writer, drop entirely, or keep pandoc just for `--format docx`.
+1. ~~DOCX~~ **DECIDED: pandoc `--format docx`** (editor review doc) — shipped. A
+   native `docx-rs` writer is a possible later swap if pandoc is dropped entirely.
 2. Distribution: personal (pipx-style) vs shareable/OSS.
 3. Graphite cover-editing depth: SVG-bridge (works now) vs procedural integration
    (waits on Graphite's headless API).

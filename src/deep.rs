@@ -139,6 +139,8 @@ pub fn run(repo: &Repo, book: Option<String>, json: bool) -> Result<()> {
                     // Spine-text eligibility (KDP allows spine text only ≥100pp).
                     spine_eligibility_check(repo, job, &mut rep);
                 }
+                // Editor .docx is not an edition output and not a publish artifact.
+                Out::Docx => {}
             }
         }
 

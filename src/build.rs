@@ -23,6 +23,8 @@ pub enum Out {
     KdpEpub,
     RetailPdf,
     KdpPdf,
+    /// Editor review document (`.docx`, via pandoc). Not a publish format.
+    Docx,
 }
 
 /// PDF rendering engine. `Pandoc` (default) shells out to `pandoc --pdf-engine=
@@ -53,6 +55,7 @@ impl Out {
             Out::KdpEpub => "KdpEpub",
             Out::RetailPdf => "RetailPdf",
             Out::KdpPdf => "KdpPdf",
+            Out::Docx => "Docx",
         }
     }
 }
@@ -130,6 +133,7 @@ fn outputs_for_format(fmt: &str) -> Vec<Out> {
         "pdf" => vec![Out::RetailPdf],
         "kdp" => vec![Out::KdpEpub, Out::KdpPdf],
         "print" => vec![Out::KdpPdf],
+        "docx" => vec![Out::Docx],
         _ => vec![Out::RetailEpub, Out::KdpEpub, Out::RetailPdf, Out::KdpPdf],
     }
 }
@@ -581,6 +585,7 @@ pub fn job_output_path(repo: &Repo, job: &Job) -> PathBuf {
             ("bubok", Some(ed)) => format!("{base}-{ed}.pdf"),
             _ => format!("{base}-kdp.pdf"),
         },
+        Out::Docx => format!("{base}.docx"),
     };
     odir.join(fname)
 }
@@ -741,8 +746,26 @@ fn build_one(
                 &odir.join(fname),
             )?;
         }
+        Out::Docx => {
+            // Editor review doc — clean Word document via pandoc (engine-agnostic).
+            run_docx(repo, &meta, &chaps, &odir.join(format!("{base}.docx")))?;
+        }
     }
     Ok(())
+}
+
+/// Build a `.docx` editor review document via pandoc (no template — pandoc's
+/// default Word styles). A flowing doc for editors, not a publish artifact.
+fn run_docx(repo: &Repo, meta: &Path, chaps: &[PathBuf], out: &Path) -> Result<()> {
+    let mut c = Command::new("pandoc");
+    c.current_dir(&repo.root)
+        .args(["-f", EPUB_FROM, "--to=docx", "--top-level-division=chapter"])
+        .args(["--toc", "--toc-depth=1"])
+        .arg("-o")
+        .arg(out)
+        .arg(meta)
+        .args(chaps);
+    sh(c, "pandoc docx")
 }
 
 #[allow(clippy::too_many_arguments)]
