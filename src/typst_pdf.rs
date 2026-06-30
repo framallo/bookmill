@@ -1,9 +1,16 @@
 //! Native Typst PDF engine — the sole PDF backend.
 //!
 //! Converts the resolved chapter markdown into a single Typst document and
-//! compiles it with the `typst` CLI. Every PDF output (retail + KDP print)
-//! renders through this engine. (EPUB renders via `epub_native` and the editor
-//! `.docx` via `docx_native` — all native Rust, no pandoc anywhere.)
+//! compiles it with the **`typst` crate as a library** — no `typst` binary on
+//! PATH is required. Every PDF output (retail + KDP print) renders through this
+//! engine. (EPUB renders via `epub_native` and the editor `.docx` via
+//! `docx_native` — all native Rust, no pandoc and no external tools anywhere.)
+//!
+//! The compile step is driven by a small [`World`] (`BookWorld`) that:
+//!   * serves the generated markup as the *main* source file;
+//!   * resolves `image("/…")` references from the repo root (the same rooting
+//!     the CLI's `--root` gave us), via Typst's `VirtualPath::realize`;
+//!   * loads fonts with `typst_kit` (Typst's embedded defaults + system fonts).
 //!
 //! Reproduced interior conventions:
 //!   * page geometry (paper size incl. bleed + margins) from `PageGeometry`;
@@ -24,11 +31,22 @@
 
 use crate::build::{BookMeta, PageGeometry};
 use crate::discover::Repo;
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::sync::OnceLock;
 
-/// Render a book (one language / one PDF flavor) to `out` via the `typst` CLI.
+use typst::diag::{FileError, FileResult};
+use typst::foundations::{Bytes, Datetime, Duration};
+use typst::syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot};
+use typst::text::{Font, FontBook};
+use typst::utils::LazyHash;
+use typst::{Library, LibraryExt, World};
+use typst_kit::fonts::FontStore;
+use typst_layout::PagedDocument;
+use typst_pdf::PdfOptions;
+
+/// Render a book (one language / one PDF flavor) to `out` by compiling the
+/// generated Typst markup with the `typst` crate (no external CLI).
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     repo: &Repo,
@@ -45,22 +63,136 @@ pub fn run(
     let doc = build_doc(repo, meta, cpdf, chaps, openright, retail, cover, geometry, lang)?;
     let odir = out.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(odir)?;
+    // Keep the generated markup on disk for debugging only — it is NOT handed to
+    // any `typst` binary; compilation happens natively below.
     let typ = odir.join(".typst-build.typ");
-    std::fs::write(&typ, doc).with_context(|| format!("writing {}", typ.display()))?;
+    std::fs::write(&typ, &doc).with_context(|| format!("writing {}", typ.display()))?;
 
-    let mut c = Command::new("typst");
-    c.arg("compile")
-        .arg("--root")
-        .arg(&repo.root)
-        .arg(&typ)
-        .arg(out);
-    let st = c
-        .status()
-        .with_context(|| "running typst (is the `typst` CLI installed?)")?;
-    if !st.success() {
-        bail!("typst compile failed for {}", out.display());
-    }
+    // Compile natively. The World resolves images under the repo root, exactly
+    // as the CLI's `--root <repo.root>` did.
+    let world = BookWorld::new(repo.root.clone(), doc)?;
+    let result = typst::compile::<PagedDocument>(&world);
+    let document = result.output.map_err(|diags| {
+        anyhow!(
+            "typst compile failed for {}:\n{}",
+            out.display(),
+            join_diags(diags.iter().map(|d| d.message.to_string()))
+        )
+    })?;
+    let pdf = typst_pdf::pdf(&document, &PdfOptions::default()).map_err(|diags| {
+        anyhow!(
+            "typst PDF export failed for {}:\n{}",
+            out.display(),
+            join_diags(diags.iter().map(|d| d.message.to_string()))
+        )
+    })?;
+    std::fs::write(out, pdf).with_context(|| format!("writing {}", out.display()))?;
+    // Drop the memoization cache so repeated builds in one process don't grow it
+    // unbounded (each book is a distinct document; nothing is reused).
+    comemo::evict(0);
     Ok(())
+}
+
+fn join_diags(msgs: impl Iterator<Item = String>) -> String {
+    let v: Vec<String> = msgs.collect();
+    if v.is_empty() {
+        "(no diagnostics)".to_string()
+    } else {
+        v.join("\n")
+    }
+}
+
+// ---------- Typst compilation World ----------
+
+/// Process-wide font store: Typst's embedded defaults plus the system fonts.
+/// Scanning the system font directories is done once and shared by every build.
+fn font_store() -> &'static FontStore {
+    static FONTS: OnceLock<FontStore> = OnceLock::new();
+    FONTS.get_or_init(|| {
+        let mut store = FontStore::new();
+        // Embedded defaults first (Libertinus Serif / New Computer Modern / …),
+        // then everything installed on the system (Playfair Display, etc.).
+        store.extend(typst_kit::fonts::embedded());
+        store.extend(typst_kit::fonts::system());
+        store
+    })
+}
+
+/// A minimal Typst [`World`]: the generated markup is the main source, image
+/// (and any source) files resolve under `root`, fonts come from [`font_store`].
+struct BookWorld {
+    root: PathBuf,
+    library: LazyHash<Library>,
+    fonts: &'static FontStore,
+    main_id: FileId,
+    main: Source,
+}
+
+impl BookWorld {
+    fn new(root: PathBuf, markup: String) -> Result<Self> {
+        // Main source lives at a fixed project-rooted vpath; image paths in the
+        // markup are absolute (`/images/…`) so they resolve from `root`.
+        let vpath = VirtualPath::new("/.typst-build.typ")
+            .map_err(|e| anyhow!("invalid main source path: {e}"))?;
+        let main_id = FileId::new(RootedPath::new(VirtualRoot::Project, vpath));
+        let main = Source::new(main_id, markup);
+        Ok(Self {
+            root,
+            library: LazyHash::new(Library::default()),
+            fonts: font_store(),
+            main_id,
+            main,
+        })
+    }
+
+    /// Map a `FileId` to a real path under the repo root, mirroring `--root`.
+    /// Package roots are unsupported (the documents import no packages).
+    fn realize(&self, id: FileId) -> FileResult<PathBuf> {
+        match id.root() {
+            VirtualRoot::Project => {
+                id.vpath().realize(&self.root).map_err(|_| FileError::AccessDenied)
+            }
+            VirtualRoot::Package(_) => Err(FileError::AccessDenied),
+        }
+    }
+}
+
+impl World for BookWorld {
+    fn library(&self) -> &LazyHash<Library> {
+        &self.library
+    }
+
+    fn book(&self) -> &LazyHash<FontBook> {
+        self.fonts.book()
+    }
+
+    fn main(&self) -> FileId {
+        self.main_id
+    }
+
+    fn source(&self, id: FileId) -> FileResult<Source> {
+        if id == self.main_id {
+            return Ok(self.main.clone());
+        }
+        let path = self.realize(id)?;
+        let text = std::fs::read_to_string(&path).map_err(|e| FileError::from_io(e, &path))?;
+        Ok(Source::new(id, text))
+    }
+
+    fn file(&self, id: FileId) -> FileResult<Bytes> {
+        let path = self.realize(id)?;
+        let data = std::fs::read(&path).map_err(|e| FileError::from_io(e, &path))?;
+        Ok(Bytes::new(data))
+    }
+
+    fn font(&self, index: usize) -> Option<Font> {
+        self.fonts.font(index)
+    }
+
+    fn today(&self, _offset: Option<Duration>) -> Option<Datetime> {
+        // The documents never call `today()`; return a constant so it's defined.
+        Datetime::from_ymd(2024, 1, 1)
+    }
 }
 
 // ---------- document assembly ----------
