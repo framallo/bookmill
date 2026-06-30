@@ -246,27 +246,13 @@ fn cover_one_chrome(
     Ok(())
 }
 
-/// Page count of a PDF via `pdfinfo`.
+/// Page count of a PDF (native, via `lopdf`).
 fn page_count(pdf: &Path) -> Result<u32> {
     if !pdf.exists() {
         bail!("not found: {}", pdf.display());
     }
-    let out = Command::new("pdfinfo")
-        .arg(pdf)
-        .output()
-        .context("running pdfinfo")?;
-    if !out.success_like() {
-        bail!("pdfinfo failed on {}", pdf.display());
-    }
-    let text = String::from_utf8_lossy(&out.stdout);
-    for line in text.lines() {
-        if let Some(rest) = line.strip_prefix("Pages:") {
-            if let Ok(n) = rest.trim().parse::<u32>() {
-                return Ok(n);
-            }
-        }
-    }
-    bail!("could not parse page count from pdfinfo")
+    crate::pdfmeta::page_count(pdf)
+        .with_context(|| format!("could not read page count from {}", pdf.display()))
 }
 
 fn resolve_books(repo: &Repo, slug: &Option<String>) -> Result<Vec<(BookConfig, PathBuf)>> {
@@ -282,12 +268,3 @@ fn resolve_books(repo: &Repo, slug: &Option<String>) -> Result<Vec<(BookConfig, 
     }
 }
 
-/// Tiny helper so `Output` reads naturally.
-trait OutputExt {
-    fn success_like(&self) -> bool;
-}
-impl OutputExt for std::process::Output {
-    fn success_like(&self) -> bool {
-        self.status.success()
-    }
-}

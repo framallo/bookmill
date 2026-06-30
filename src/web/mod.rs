@@ -297,15 +297,9 @@ fn kdp_pdf_path(root: &Path, slug: &str, lang: &str) -> PathBuf {
         .join(format!("{slug}-{lang}-kdp.pdf"))
 }
 
-/// Page count of a PDF via `pdfinfo` (parses the `Pages:` line).
+/// Page count of a PDF (native, via `lopdf`). None if missing/unreadable.
 fn pdf_pages(pdf: &Path) -> Option<u32> {
-    let out = Command::new("pdfinfo").arg(pdf).output().ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .find_map(|l| l.strip_prefix("Pages:").and_then(|r| r.trim().parse::<u32>().ok()))
+    crate::pdfmeta::page_count(pdf)
 }
 
 /// `GET /api/preview/{book}/{lang}` — interior metadata: page count, the KDP PDF

@@ -10,6 +10,7 @@ mod cover_svg;
 mod docx_native;
 mod epub_native;
 mod epub_shrink;
+mod pdfmeta;
 mod cover_tmpl;
 mod covers;
 mod deep;

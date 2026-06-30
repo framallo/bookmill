@@ -12,7 +12,6 @@ use crate::config::BookConfig;
 use crate::discover::Repo;
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{Duration, Instant};
 
 const DEFAULT_EPUB_PX: u32 = 1200;
@@ -374,19 +373,11 @@ pub fn plan_editions(
     Ok(jobs)
 }
 
-/// Page count of a PDF via `pdfinfo`. None if the file is missing or unreadable
-/// (so callers can treat "not built yet" distinctly from an out-of-range count).
+/// Page count of a PDF (native, via `lopdf`). None if the file is missing or
+/// unreadable (so callers can treat "not built yet" distinctly from an
+/// out-of-range count).
 fn pdf_page_count(pdf: &Path) -> Option<u32> {
-    if !pdf.exists() {
-        return None;
-    }
-    let out = Command::new("pdfinfo").arg(pdf).output().ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&out.stdout);
-    text.lines()
-        .find_map(|l| l.strip_prefix("Pages:").and_then(|r| r.trim().parse::<u32>().ok()))
+    crate::pdfmeta::page_count(pdf)
 }
 
 // ---------- entry points ----------

@@ -3,12 +3,14 @@
 //! On top of the fast config/listing/house-rule checks (`config::validate_book`),
 //! this verifies the *built artifacts* per book × edition × language:
 //!   1. EPUB   — build (or reuse) the EPUB and run **epubcheck** on it.
-//!   2. PDF    — build (or reuse) the print/digital PDF and verify, via `pdfinfo`,
-//!               that the page size equals the edition's expected trim+bleed
-//!               (e.g. kdp-paperback picture book = 6.125×9.25in = 441×666pt;
-//!               6×9 text = 432×648pt). For the KDP print PDF it also audits
-//!               interior image DPI via `pdfimages -list` (effective resolution
-//!               at print size), warning on any image below ~300dpi.
+//!   2. PDF    — build (or reuse) the print/digital PDF and verify, natively via
+//!               `lopdf` (no poppler), that the page size equals the edition's
+//!               expected trim+bleed (e.g. kdp-paperback picture book =
+//!               6.125×9.25in = 441×666pt; 6×9 text = 432×648pt). For the KDP
+//!               print PDF it also audits interior image DPI via `pdfimages
+//!               -list` (placed effective resolution at print size — poppler;
+//!               lopdf can't surface placed ppi), warning on any image below
+//!               ~300dpi.
 //!   3. Cover  — front PNG ≥ 1600×2560, wrap PDF page size sane (else low-res warn).
 //!
 //! Reuses already-built outputs under `output/` when present (safe: gitignored,
@@ -278,33 +280,15 @@ fn pdf_geometry_check(repo: &Repo, job: &Job, rep: &mut Report) {
                 ));
             }
         }
-        Err(e) => rep.warn(format!("PDF {label}: pdfinfo failed: {e:#}")),
+        Err(e) => rep.warn(format!("PDF {label}: page-size read failed: {e:#}")),
     }
 }
 
-/// First-page size in points, via `pdfinfo` (the same tool covers.rs uses for
-/// page counts). Parses the `Page size:  W x H pts [...]` line.
+/// First-page size in points (width, height), native via `lopdf` (first page's
+/// `MediaBox`). Replaces parsing poppler `pdfinfo`'s `Page size:` line.
 fn pdf_page_size(pdf: &Path) -> Result<(f64, f64)> {
-    let out = Command::new("pdfinfo")
-        .arg(pdf)
-        .output()
-        .context("running pdfinfo")?;
-    if !out.status.success() {
-        anyhow::bail!("pdfinfo failed on {}", pdf.display());
-    }
-    let text = String::from_utf8_lossy(&out.stdout);
-    for line in text.lines() {
-        if let Some(rest) = line.strip_prefix("Page size:") {
-            let nums: Vec<f64> = rest
-                .split_whitespace()
-                .filter_map(|t| t.trim_end_matches("pts").parse::<f64>().ok())
-                .collect();
-            if nums.len() >= 2 {
-                return Ok((nums[0], nums[1]));
-            }
-        }
-    }
-    anyhow::bail!("could not parse 'Page size' from pdfinfo on {}", pdf.display())
+    crate::pdfmeta::page_size_pt(pdf)
+        .with_context(|| format!("could not read page size from {}", pdf.display()))
 }
 
 // ---------- Covers ----------
@@ -350,7 +334,7 @@ fn cover_checks(slug: &str, dir: &Path, lang: &str, rep: &mut Report) {
                     ));
                 }
             }
-            Err(e) => rep.warn(format!("cover {slug} {lang}: wrap pdfinfo: {e:#}")),
+            Err(e) => rep.warn(format!("cover {slug} {lang}: wrap page-size: {e:#}")),
         }
     }
 
@@ -493,18 +477,9 @@ fn spine_eligibility_check(repo: &Repo, job: &Job, rep: &mut Report) {
     }
 }
 
-/// Page count of a PDF via `pdfinfo` (poppler). None if missing/unreadable.
+/// Page count of a PDF (native, via `lopdf`). None if missing/unreadable.
 fn pdf_pages(pdf: &Path) -> Option<u32> {
-    if !pdf.exists() {
-        return None;
-    }
-    let out = Command::new("pdfinfo").arg(pdf).output().ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .find_map(|l| l.strip_prefix("Pages:").and_then(|r| r.trim().parse::<u32>().ok()))
+    crate::pdfmeta::page_count(pdf)
 }
 
 // ---------- Interior bleed coverage ----------

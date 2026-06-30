@@ -46,3 +46,6 @@ toml_edit = "0.22"
 epub-builder = "0.8"
 comrak = "0.52"
 docx-rs = "0.4"
+# Native (poppler-free) PDF metadata: page count + first-page MediaBox size.
+# Replaces shelling out to `pdfinfo`. Lean: no date/parallel/serde extras.
+lopdf = { version = "0.43", default-features = false }
