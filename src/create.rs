@@ -22,13 +22,12 @@ use std::path::{Path, PathBuf};
 const BUNDLED_ARCHETYPES: &str = include_str!("../templates/archetypes.toml");
 
 /// Shared build assets written into a new repo on `init` so it builds out of the
-/// box — the EPUB template/CSS and Lua filter that `build.rs` references from the
-/// repo root. PDFs render via the native Typst engine, which needs no scaffolded
-/// assets. `(relative path, contents)`.
+/// box. Only the EPUB stylesheet is needed: EPUBs render natively
+/// (epub-builder + comrak) and reference `css/epub.css`; PDFs render via the
+/// native Typst engine and DOCX via docx-rs — none of them need scaffolded
+/// templates or filters. `(relative path, contents)`.
 const SCAFFOLD_ASSETS: &[(&str, &str)] = &[
-    ("templates/epub.html", include_str!("../templates/scaffold/templates/epub.html")),
     ("css/epub.css", include_str!("../templates/scaffold/css/epub.css")),
-    ("scripts/drop-spot-epub.lua", include_str!("../templates/scaffold/scripts/drop-spot-epub.lua")),
 ];
 
 /// Write the shared build assets into `root` (skip any that already exist, so a
@@ -232,8 +231,8 @@ fn init_project(
     // .gitignore (create or extend).
     ensure_gitignore(target)?;
 
-    // Shared build assets (LaTeX headers, EPUB template/CSS, Lua filters) so the
-    // new project builds without hunting them down.
+    // Shared build assets (the EPUB stylesheet) so the new project builds without
+    // hunting them down. Everything else is rendered natively.
     write_scaffold_assets(target)?;
 
     // First book.

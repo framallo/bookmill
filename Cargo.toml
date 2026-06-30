@@ -43,3 +43,6 @@ axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }
 tower-http = { version = "0.6", features = ["cors"] }
 toml_edit = "0.22"
+epub-builder = "0.8"
+comrak = "0.52"
+docx-rs = "0.4"

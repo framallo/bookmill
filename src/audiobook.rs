@@ -1,6 +1,7 @@
 //! Audiobook engine (v1): drive the proven `kab` (Kokoro on the Apple Neural
-//! Engine) converter from the resolved config — the same "shell out to the proven
-//! toolchain in v1, go native later" approach `build.rs` takes with pandoc/xelatex.
+//! Engine) converter from the resolved config — `kab` is the one remaining
+//! external renderer (interiors are all native Rust now: Typst PDF, epub-builder
+//! EPUB, docx-rs DOCX).
 //!
 //! A render request expands to one [`AudioJob`] per (book × language). Each job
 //! resolves its chapter list through the shared `[content.<lang>]` selection

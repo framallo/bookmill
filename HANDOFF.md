@@ -42,8 +42,9 @@ builds them (Phase 8 deleted every `meta.md`).
 - **Web cover editor: works, folded into the binary as `bookmill web`.** Drag
   positions now round-trip into the render (`[cover.<lang>.layout]` honored by
   `cover_svg.rs`). The standalone `web/` crate still builds but is superseded.
-- **PDF engine is native Typst** — the sole PDF backend (no LaTeX). pandoc is
-  used only for EPUB and the `docx` review doc.
+- **Every interior is native Rust — no pandoc dependency.** PDF via the Typst
+  engine (no LaTeX), EPUB via `epub_native` (epub-builder + comrak), `docx`
+  review doc via `docx_native` (docx-rs).
 - **Git: this is the first commit.** Before now the whole project was untracked.
 
 ## Repo layout
@@ -60,7 +61,10 @@ bookmill/
     covers.rs      `bookmill covers` orchestrator (HTML → headless Chrome → PNG/PDF)
     cover_tmpl.rs  fills templates/cover/{front,wrap}.html.tmpl from [cover] config
     cover_svg.rs   SVG cover renderer (resvg path) — see GAP below
-    epub_shrink.rs native EPUB image shrinker (Python-free)
+    epub_native.rs native EPUB3 builder (epub-builder + comrak; no pandoc)
+    docx_native.rs native `.docx` review-doc writer (docx-rs; no pandoc)
+    epub_shrink.rs native EPUB image shrinker (Python-free); also repairs the
+                   epub-builder 0.8.3 duplicate-id OPF bug
     tui.rs         Ratatui terminal UI (build/covers/validate/audiobook actions)
   templates/cover/ front.html.tmpl, wrap.html.tmpl (byte-identical to make-covers.py)
   docs/            design research (kdp-requirements, edition-options, web-ui-design, epub-shrink-tuning)
@@ -93,10 +97,11 @@ The standalone `web/` crate still works (`cd web && cargo run`) but is supersede
 by `bookmill web`, which serves the same editor from the single binary (cover.rs /
 render.rs shared by source via `#[path]`, frontend embedded).
 
-External tools still required: **typst** (native PDF engine), **pandoc** (EPUB +
-`docx` review doc), **headless Chrome** (covers via `bookmill covers`),
-**epubcheck + pdfinfo** (`validate --deep`), and **kab** (audiobook, once
-implemented). The endgame is to drop all but the audiobook engine.
+External tools still required: **typst** (native PDF engine), **headless Chrome**
+(covers via `bookmill covers`), **epubcheck + pdfinfo** (`validate --deep`), and
+**kab** (audiobook). EPUB and the `docx` review doc are now native Rust, so
+**pandoc is no longer required** — the remaining endgame is to drop all but the
+audiobook engine.
 
 ## What's done (Phases 1–14, condensed)
 
@@ -139,8 +144,16 @@ progress".
    `[^id]` deferred — no book uses them). **~instant vs xelatex** (whole 20-interior
    series in ~3s vs ~2h). **Typst is now the sole PDF engine** — the `--engine` flag,
    the `Engine` enum, and the `[build].engine` config are gone, and the pandoc/xelatex
-   PDF path plus the `pdf/*.tex` scaffold assets + lua filter have been deleted. pandoc
-   remains only for EPUB and the `docx` review doc.
+   PDF path plus the `pdf/*.tex` scaffold assets + lua filter have been deleted.
+
+   **Native EPUB + DOCX (pandoc fully removed)** — `src/epub_native.rs` builds
+   EPUB3 with `epub-builder` + `comrak` (GFM tables/footnotes; `{.spot}` images
+   dropped, pandoc attribute blocks stripped; embedded cover, depth-1 nav,
+   `css/epub.css`), and `src/docx_native.rs` writes the `docx` review doc with
+   `docx-rs`. `epubcheck` passes with **0 errors** on the text/image/table test
+   books. The `pandoc` call sites, `EPUB_FROM`, the `templates/epub.html` pandoc
+   template, and the `drop-spot-epub.lua` filter are deleted. **bookmill no longer
+   shells out to pandoc anywhere.**
 
 4. **EN translations for the two es-only fables** —
    `libre-para-elegir-en-la-isla` (Friedman) and `lo-que-nadie-sabe-de-la-isla`
@@ -164,8 +177,8 @@ progress".
 
 ### Open decisions (need Federico)
 
-1. ~~DOCX~~ **DECIDED: pandoc `--format docx`** (editor review doc) — shipped. A
-   native `docx-rs` writer is a possible later swap if pandoc is dropped entirely.
+1. ~~DOCX~~ **DONE: native `docx-rs` writer** (`src/docx_native.rs`). The earlier
+   pandoc `--format docx` path was replaced when pandoc was dropped entirely.
 2. Distribution: personal (pipx-style) vs shareable/OSS.
 3. Graphite cover-editing depth: SVG-bridge (works now) vs procedural integration
    (waits on Graphite's headless API).

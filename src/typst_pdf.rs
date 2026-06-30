@@ -2,8 +2,8 @@
 //!
 //! Converts the resolved chapter markdown into a single Typst document and
 //! compiles it with the `typst` CLI. Every PDF output (retail + KDP print)
-//! renders through this engine; pandoc is used only for EPUB and the editor
-//! `.docx` review doc.
+//! renders through this engine. (EPUB renders via `epub_native` and the editor
+//! `.docx` via `docx_native` — all native Rust, no pandoc anywhere.)
 //!
 //! Reproduced interior conventions:
 //!   * page geometry (paper size incl. bleed + margins) from `PageGeometry`;
@@ -634,7 +634,7 @@ fn ty_str(s: &str) -> String {
 }
 
 /// Map a markdown image src to a Typst (`--root`-relative) path. Markdown srcs
-/// are relative to the repo root (the pandoc build runs there); absolute srcs
+/// are relative to the repo root (the build runs there); absolute srcs
 /// under the repo are made root-relative; URLs are left untouched.
 fn typst_img_path(root: &Path, src: &str) -> String {
     if src.starts_with("http://") || src.starts_with("https://") {

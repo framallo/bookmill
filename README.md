@@ -8,7 +8,8 @@ one layered `bookmill.toml`.
 It replaces a Make + pandoc + Python cover-script pipeline with one Rust tool:
 config-driven metadata (no per-book `meta.md`), native Chrome-free covers, native
 EPUB image shrinking, deep KDP/epubcheck validation, a terminal UI, and a project
-scaffolder.
+scaffolder. **There is no pandoc dependency** — every interior (EPUB, print PDF,
+and the `docx` review doc) is rendered by native Rust.
 
 ```
 manuscript (Markdown)  ──bookmill──▶  EPUB · print PDF · wrap cover · eBook cover · audiobook
@@ -21,13 +22,13 @@ manuscript (Markdown)  ──bookmill──▶  EPUB · print PDF · wrap cover 
 cargo install --path .          # builds target/release/bookmill, installs to ~/.cargo/bin
 ```
 
-External tools used by some commands (the goal is to drop all but the audiobook
-engine over time):
+External tools used by some commands. EPUB (epub-builder + comrak) and the `docx`
+review doc (docx-rs) are now native Rust, so **pandoc is no longer required**:
 
 | Command | Needs |
 |---|---|
 | `build` (PDF) | `typst` (native PDF engine; no LaTeX) |
-| `build` (EPUB / `docx`) | `pandoc` |
+| `build` (EPUB / `docx`) | nothing external (native Rust) |
 | `covers` (`--engine chrome`) | headless Chrome (the default `resvg` engine is pure Rust) |
 | `validate --deep` | `epubcheck`, `pdfinfo` |
 | `audiobook` | [`kab`](https://github.com/framallo) (Kokoro TTS on the Apple Neural Engine) |
@@ -67,7 +68,8 @@ bookmill tui                         interactive terminal UI (build/cover/valida
 EPUB. `--format` is `epub | pdf | kdp | print | docx | all` (`docx` = an editor
 review doc); `--edition` builds by distribution channel instead (see below).
 `--lang` is a language code or `all`. PDFs render through the native Typst
-engine (no LaTeX); EPUB and the `docx` review doc go through pandoc.
+engine (no LaTeX); EPUB through epub-builder + comrak; the `docx` review doc
+through docx-rs — all native Rust, no pandoc.
 
 ### `bookmill create`
 
@@ -154,8 +156,10 @@ src/
   config.rs      layered TOML model + resolution + validation
   discover.rs    repo/book discovery
   create.rs      `bookmill create` scaffolder (archetypes + bundled assets)
-  build.rs       request → jobs → queue (Typst PDF + pandoc EPUB/docx)
+  build.rs       request → jobs → queue (Typst PDF + native EPUB/docx)
   typst_pdf.rs   native Typst PDF engine (sole PDF backend)
+  epub_native.rs native EPUB3 builder (epub-builder + comrak; no pandoc)
+  docx_native.rs native `.docx` review-doc writer (docx-rs; no pandoc)
   audiobook.rs   TtsEngine trait + kab adapter
   covers.rs / cover_svg.rs / cover_tmpl.rs   cover rendering (resvg default)
   epub_shrink.rs native EPUB image shrinker
@@ -174,9 +178,11 @@ examples/sample-repo/   self-contained demo repo
 
 Build, covers, and validation are in daily production use. The audiobook engine
 renders via kab (a content-hash segment cache for incremental re-renders is the
-next step). PDFs render through the native Typst engine — the sole PDF backend,
-with no LaTeX; pandoc remains only for EPUB and the `docx` review doc. See
-`HANDOFF.md` for the full work queue.
+next step). Every interior is native Rust: PDFs through the Typst engine (no
+LaTeX), EPUB through epub-builder + comrak, and the `docx` review doc through
+docx-rs — there is no pandoc dependency. The only external tools are `typst`,
+`epubcheck`/`pdfinfo` (validation), headless Chrome (optional cover engine), and
+`kab` (audiobook). See `HANDOFF.md` for the full work queue.
 
 ## License
 

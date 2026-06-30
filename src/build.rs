@@ -1,11 +1,12 @@
 //! Build orchestrator: drive the rendering toolchains from the resolved config.
 //! Supports --format builds and edition/target-driven builds.
 //!
+//! Every output is produced by native Rust — there is NO pandoc dependency:
 //! PDFs (retail + KDP print) render through the native Typst engine
-//! (`typst_pdf`); EPUB and the editor `.docx` review doc still shell out to
-//! pandoc. A build request is expanded up front into a flat list of JOBS
-//! (book × edition-or-format × lang × output), then run through a queue with
-//! per-job progress + ETA.
+//! (`typst_pdf`), EPUB through `epub_native` (epub-builder + comrak), and the
+//! editor `.docx` review doc through `docx_native` (docx-rs). A build request is
+//! expanded up front into a flat list of JOBS (book × edition-or-format × lang ×
+//! output), then run through a queue with per-job progress + ETA.
 
 use crate::config::BookConfig;
 use crate::discover::Repo;
@@ -14,7 +15,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-const EPUB_FROM: &str = "gfm+raw_attribute+attributes+implicit_figures";
 const DEFAULT_EPUB_PX: u32 = 1200;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -23,7 +23,7 @@ pub enum Out {
     KdpEpub,
     RetailPdf,
     KdpPdf,
-    /// Editor review document (`.docx`, via pandoc). Not a publish format.
+    /// Editor review document (`.docx`, native via docx-rs). Not a publish format.
     Docx,
 }
 
@@ -610,16 +610,16 @@ fn build_one(
     let cover = some_if_exists(dir.join("cover").join(format!("front-{lang}.png")));
     let odir = repo.root.join("output").join(slug).join(lang);
     std::fs::create_dir_all(&odir)?;
-    // Pandoc metadata is generated from config (no per-book/lang meta.md).
-    let meta = write_metadata(repo, book, lang, &odir)
-        .with_context(|| format!("generating metadata for {slug} [{lang}]"))?;
+    // Front-matter values (title/author/lang/rights) resolved from config; shared
+    // by every native engine (Typst, EPUB, DOCX).
+    let m = resolve_book_meta(repo, book, lang)?;
     let base = format!("{slug}-{lang}");
     let openright = book.pdf.chapter_opens.as_deref() == Some("recto");
 
     match out {
         Out::RetailEpub => {
             let o = odir.join(format!("{base}.epub"));
-            run_epub(repo, &meta, cepub.as_deref(), &chaps, cover.as_deref(), lang, true, &o)?;
+            crate::epub_native::run(repo, &m, cepub.as_deref(), &chaps, cover.as_deref(), lang, true, &o)?;
             shrink_epub(repo, &o, epub_px);
             if let Some(c) = &cover {
                 emit_cover_jpg(c, &odir.join(format!("{base}-cover.jpg")));
@@ -627,14 +627,13 @@ fn build_one(
         }
         Out::KdpEpub => {
             let o = odir.join(format!("{base}-kdp.epub"));
-            run_epub(repo, &meta, cepub.as_deref(), &chaps, cover.as_deref(), lang, false, &o)?;
+            crate::epub_native::run(repo, &m, cepub.as_deref(), &chaps, cover.as_deref(), lang, false, &o)?;
             shrink_epub(repo, &o, epub_px);
             if let Some(c) = &cover {
                 emit_cover_jpg(c, &odir.join(format!("{base}-cover.jpg")));
             }
         }
         Out::RetailPdf => {
-            let m = resolve_book_meta(repo, book, lang)?;
             crate::typst_pdf::run(
                 repo,
                 &m,
@@ -655,7 +654,6 @@ fn build_one(
                 ("bubok", Some(ed)) => format!("{base}-{ed}.pdf"),
                 _ => format!("{base}-kdp.pdf"),
             };
-            let m = resolve_book_meta(repo, book, lang)?;
             crate::typst_pdf::run(
                 repo,
                 &m,
@@ -670,66 +668,15 @@ fn build_one(
             )?;
         }
         Out::Docx => {
-            // Editor review doc — clean Word document via pandoc (engine-agnostic).
-            run_docx(repo, &meta, &chaps, &odir.join(format!("{base}.docx")))?;
+            // Editor review doc — clean Word document via the native docx-rs engine.
+            crate::docx_native::run(repo, &m, &chaps, &odir.join(format!("{base}.docx")))?;
         }
     }
     Ok(())
 }
 
-/// Build a `.docx` editor review document via pandoc (no template — pandoc's
-/// default Word styles). A flowing doc for editors, not a publish artifact.
-fn run_docx(repo: &Repo, meta: &Path, chaps: &[PathBuf], out: &Path) -> Result<()> {
-    let mut c = Command::new("pandoc");
-    c.current_dir(&repo.root)
-        .args(["-f", EPUB_FROM, "--to=docx", "--top-level-division=chapter"])
-        .args(["--toc", "--toc-depth=1"])
-        .arg("-o")
-        .arg(out)
-        .arg(meta)
-        .args(chaps);
-    sh(c, "pandoc docx")
-}
-
-#[allow(clippy::too_many_arguments)]
-fn run_epub(
-    repo: &Repo,
-    meta: &Path,
-    cepub: Option<&Path>,
-    chaps: &[PathBuf],
-    cover: Option<&Path>,
-    lang: &str,
-    toc: bool,
-    out: &Path,
-) -> Result<()> {
-    let mut c = Command::new("pandoc");
-    c.current_dir(&repo.root)
-        .args(["-f", EPUB_FROM, "--to=epub3", "--top-level-division=chapter"])
-        .arg("--template=templates/epub.html")
-        .arg("--lua-filter=scripts/drop-spot-epub.lua")
-        .arg("--css=css/epub.css")
-        .args(["--metadata", &format!("lang={lang}")]);
-    if let Some(cv) = cover {
-        c.arg(format!("--epub-cover-image={}", cv.display()));
-    }
-    if toc {
-        c.args(["--toc", "--toc-depth=1"]);
-    }
-    c.arg("-o").arg(out).arg(meta);
-    if let Some(cp) = cepub {
-        c.arg(cp);
-    }
-    c.args(chaps);
-    sh(c, "pandoc epub")
-}
-
-/// Generate the pandoc metadata file for one (book, lang) from config, replacing
-/// the old per-book/lang `meta.md`. Writes a `.gen-meta.md` YAML block into the
-/// output dir and returns its path. Carries title/subtitle/author/date/lang/
-/// language/documentclass/rights; page geometry is handled separately (the Typst
-/// engine sets it directly), so it is intentionally NOT emitted here.
-/// Resolved per-(book, lang) front-matter values, shared by the pandoc EPUB
-/// metadata file and the native Typst document.
+/// Resolved per-(book, lang) front-matter values, shared by every native engine
+/// (Typst PDF, EPUB, DOCX).
 pub struct BookMeta {
     pub title: String,
     pub subtitle: Option<String>,
@@ -738,8 +685,7 @@ pub struct BookMeta {
     pub rights: String,
 }
 
-/// Resolve title/subtitle/author/year/rights for a (book, lang) from config,
-/// applying the same precedence the pandoc metadata uses.
+/// Resolve title/subtitle/author/year/rights for a (book, lang) from config.
 pub fn resolve_book_meta(repo: &Repo, book: &BookConfig, lang: &str) -> Result<BookMeta> {
     let title = book
         .title
@@ -763,29 +709,6 @@ pub fn resolve_book_meta(repo: &Repo, book: &BookConfig, lang: &str) -> Result<B
     Ok(BookMeta { title, subtitle, author, year, rights })
 }
 
-fn write_metadata(repo: &Repo, book: &BookConfig, lang: &str, odir: &Path) -> Result<PathBuf> {
-    let m = resolve_book_meta(repo, book, lang)?;
-    let (title, subtitle, author, year, rights) =
-        (&m.title, m.subtitle.as_ref(), &m.author, &m.year, &m.rights);
-
-    let mut y = String::from("---\n");
-    y.push_str(&format!("title: {}\n", yaml_str(title)));
-    if let Some(s) = subtitle {
-        y.push_str(&format!("subtitle: {}\n", yaml_str(s)));
-    }
-    y.push_str(&format!("author: {}\n", yaml_str(author)));
-    y.push_str(&format!("date: {}\n", yaml_str(year)));
-    y.push_str(&format!("lang: {lang}\n"));
-    y.push_str(&format!("language: {lang}\n"));
-    y.push_str("documentclass: book\n");
-    y.push_str(&format!("rights: {}\n", yaml_str(rights)));
-    y.push_str("---\n");
-
-    let p = odir.join(".gen-meta.md");
-    std::fs::write(&p, y).with_context(|| format!("writing {}", p.display()))?;
-    Ok(p)
-}
-
 /// Localized "all rights reserved" line, matching the old meta.md wording.
 fn localized_rights(lang: &str, author: &str, year: &str) -> String {
     match lang {
@@ -802,12 +725,6 @@ fn date_year(d: &toml::Value) -> String {
         toml::Value::Datetime(dt) => dt.to_string(),
         other => other.to_string(),
     }
-}
-
-/// Quote a string as a YAML double-quoted scalar (escapes `\` and `"`).
-fn yaml_str(s: &str) -> String {
-    let esc = s.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{esc}\"")
 }
 
 /// Emit the KDP eBook cover JPG (RGB, sRGB) from the front PNG — pure Rust.
@@ -848,12 +765,4 @@ fn shrink_epub(_repo: &Repo, epub: &Path, px: u32) {
 
 fn some_if_exists(p: PathBuf) -> Option<PathBuf> {
     p.exists().then_some(p)
-}
-
-fn sh(mut c: Command, what: &str) -> Result<()> {
-    let st = c.status().with_context(|| format!("running {what}"))?;
-    if !st.success() {
-        bail!("{what} failed");
-    }
-    Ok(())
 }

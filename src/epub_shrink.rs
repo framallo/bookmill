@@ -92,37 +92,41 @@ pub fn shrink_epub(epub: &Path, max_w: u32) -> Result<(u64, u64)> {
         }
     }
 
-    // Rewrite references for any .png -> .jpg renames so the OPF media-types and
-    // every src/href stay consistent (keeps the EPUB epubcheck-clean).
-    if !renames.is_empty() {
-        // basename old -> basename new (XHTML/NCX/CSS use relative paths, but
-        // the trailing filename is what's stable to swap).
-        let base_map: HashMap<String, String> = renames
-            .iter()
-            .map(|(o, n)| (basename(o).to_string(), basename(n).to_string()))
-            .collect();
-        let opf_re = regex::Regex::new(r#"<item\b[^>]*?/?>"#).unwrap();
-        let href_re = regex::Regex::new(r#"href="([^"]*)""#).unwrap();
-        let mt_re = regex::Regex::new(r#"media-type="[^"]*""#).unwrap();
+    // OPF post-fixes (always run on the manifest; rename rewrites are conditional):
+    //   * `fix_opf_lang_id` repairs the duplicate-id the epub-builder 0.8.3 OPF
+    //     template emits — it gives `dc:language` and `dc:creator` the SAME id
+    //     (`epub-creator-0`), which epubcheck rejects (RSC-005). We re-prefix the
+    //     language id so each id is unique.
+    //   * rename rewrites keep OPF media-types + every src/href consistent after a
+    //     .png -> .jpg re-encode (keeps the EPUB epubcheck-clean).
+    let base_map: HashMap<String, String> = renames
+        .iter()
+        .map(|(o, n)| (basename(o).to_string(), basename(n).to_string()))
+        .collect();
+    let opf_re = regex::Regex::new(r#"<item\b[^>]*?/?>"#).unwrap();
+    let href_re = regex::Regex::new(r#"href="([^"]*)""#).unwrap();
+    let mt_re = regex::Regex::new(r#"media-type="[^"]*""#).unwrap();
 
-        for e in entries.iter_mut() {
-            if e.is_dir {
-                continue;
+    for e in entries.iter_mut() {
+        if e.is_dir {
+            continue;
+        }
+        let lower = e.name.to_ascii_lowercase();
+        if lower.ends_with(".opf") {
+            if let Ok(s) = std::str::from_utf8(&e.data) {
+                let mut out = fix_opf_lang_id(s);
+                if !base_map.is_empty() {
+                    out = rewrite_opf(&out, &base_map, &opf_re, &href_re, &mt_re);
+                }
+                e.data = out.into_bytes();
             }
-            let lower = e.name.to_ascii_lowercase();
-            if lower.ends_with(".opf") {
-                if let Ok(s) = std::str::from_utf8(&e.data) {
-                    let out = rewrite_opf(s, &base_map, &opf_re, &href_re, &mt_re);
-                    e.data = out.into_bytes();
+        } else if !base_map.is_empty() && is_text_ref(&lower) {
+            if let Ok(s) = std::str::from_utf8(&e.data) {
+                let mut out = s.to_string();
+                for (old, new) in &base_map {
+                    out = out.replace(old.as_str(), new.as_str());
                 }
-            } else if is_text_ref(&lower) {
-                if let Ok(s) = std::str::from_utf8(&e.data) {
-                    let mut out = s.to_string();
-                    for (old, new) in &base_map {
-                        out = out.replace(old.as_str(), new.as_str());
-                    }
-                    e.data = out.into_bytes();
-                }
+                e.data = out.into_bytes();
             }
         }
     }
@@ -235,6 +239,18 @@ fn find_cover_image(entries: &[(&str, &[u8])]) -> Option<String> {
         }
     }
     None
+}
+
+/// Repair the epub-builder 0.8.3 OPF template bug: it stamps `dc:language` with
+/// `id="epub-creator-N"`, the same id namespace as `dc:creator`, so a one-author
+/// one-language book gets two `epub-creator-0` ids (epubcheck RSC-005). Re-prefix
+/// the language id to `epub-lang-N`; the `dc:creator` id and its `refines`
+/// pointer are untouched and stay consistent.
+fn fix_opf_lang_id(opf: &str) -> String {
+    opf.replace(
+        "<dc:language id=\"epub-creator-",
+        "<dc:language id=\"epub-lang-",
+    )
 }
 
 /// Rewrite the OPF manifest: for any item whose href basename was renamed, swap

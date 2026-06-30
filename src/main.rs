@@ -7,6 +7,8 @@ mod build;
 mod config;
 mod create;
 mod cover_svg;
+mod docx_native;
+mod epub_native;
 mod epub_shrink;
 mod cover_tmpl;
 mod covers;
@@ -279,7 +281,8 @@ fn main() -> Result<()> {
         Cmd::Build { what, interior } => {
             match what.unwrap_or(BuildSub::Interior(interior)) {
                 BuildSub::Interior(a) => {
-                    // PDFs render via the native Typst engine; EPUB/DOCX via pandoc.
+                    // All outputs are native Rust: PDFs via Typst, EPUB via
+                    // epub-builder/comrak, DOCX via docx-rs. No pandoc.
                     if a.format.is_some() {
                         build::run(&repo, a.book, a.format, a.lang)?;
                     } else {
