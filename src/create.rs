@@ -22,15 +22,10 @@ use std::path::{Path, PathBuf};
 const BUNDLED_ARCHETYPES: &str = include_str!("../templates/archetypes.toml");
 
 /// Shared build assets written into a new repo on `init` so it builds out of the
-/// box — the LaTeX headers, EPUB template/CSS, and Lua filters that `build.rs`
-/// references from the repo root. `(relative path, contents)`.
+/// box — the EPUB template/CSS and Lua filter that `build.rs` references from the
+/// repo root. PDFs render via the native Typst engine, which needs no scaffolded
+/// assets. `(relative path, contents)`.
 const SCAFFOLD_ASSETS: &[(&str, &str)] = &[
-    ("pdf/float-here.tex", include_str!("../templates/scaffold/pdf/float-here.tex")),
-    ("pdf/facing-plate.tex", include_str!("../templates/scaffold/pdf/facing-plate.tex")),
-    ("pdf/chapter-title.tex", include_str!("../templates/scaffold/pdf/chapter-title.tex")),
-    ("pdf/texture-bg.tex", include_str!("../templates/scaffold/pdf/texture-bg.tex")),
-    ("pdf/cover-page.tex", include_str!("../templates/scaffold/pdf/cover-page.tex")),
-    ("pdf/facing-plate.lua", include_str!("../templates/scaffold/pdf/facing-plate.lua")),
     ("templates/epub.html", include_str!("../templates/scaffold/templates/epub.html")),
     ("css/epub.css", include_str!("../templates/scaffold/css/epub.css")),
     ("scripts/drop-spot-epub.lua", include_str!("../templates/scaffold/scripts/drop-spot-epub.lua")),

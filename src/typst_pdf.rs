@@ -1,9 +1,9 @@
-//! Native Typst PDF engine (opt-in via `--engine typst`).
+//! Native Typst PDF engine — the sole PDF backend.
 //!
 //! Converts the resolved chapter markdown into a single Typst document and
-//! compiles it with the `typst` CLI — a step toward dropping the external
-//! pandoc/xelatex toolchain. The default PDF path stays on pandoc; this engine
-//! is selected only when the user passes `--engine typst`.
+//! compiles it with the `typst` CLI. Every PDF output (retail + KDP print)
+//! renders through this engine; pandoc is used only for EPUB and the editor
+//! `.docx` review doc.
 //!
 //! Reproduced interior conventions:
 //!   * page geometry (paper size incl. bleed + margins) from `PageGeometry`;
@@ -113,10 +113,9 @@ bottom: {bottom:.4}in, inside: {inside:.4}in, outside: {outside:.4}in))\n",
         inside = inside,
         outside = g.outer,
     ));
-    // Retail-only paper-texture page background (mirrors the pandoc retail path's
-    // `pdf/texture-bg.tex`): scale `<repo>/images/paper-texture.jpg` to the full
-    // page behind every page. KDP print PDFs must NOT get it. Skip silently if the
-    // image is absent.
+    // Retail-only paper-texture page background: scale
+    // `<repo>/images/paper-texture.jpg` to the full page behind every page. KDP
+    // print PDFs must NOT get it. Skip silently if the image is absent.
     if retail && repo.root.join("images/paper-texture.jpg").exists() {
         s.push_str(
             "#set page(background: image(\"/images/paper-texture.jpg\", width: 100%, height: 100%))\n",

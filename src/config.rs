@@ -77,9 +77,6 @@ pub struct BuildOpts {
     pub output_dir: Option<String>,
     #[serde(default)]
     pub formats: Vec<String>,
-    /// default PDF engine for this repo: "pandoc" (default) | "typst".
-    /// CLI `--engine` overrides it.
-    pub engine: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]

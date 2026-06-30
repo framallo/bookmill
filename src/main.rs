@@ -160,9 +160,6 @@ struct InteriorArgs {
     /// limit to a language (es|en|all)
     #[arg(long)]
     lang: Option<String>,
-    /// PDF engine: pandoc (default, xelatex) | typst (native, opt-in)
-    #[arg(long)]
-    engine: Option<String>,
 }
 
 #[derive(Args)]
@@ -282,14 +279,11 @@ fn main() -> Result<()> {
         Cmd::Build { what, interior } => {
             match what.unwrap_or(BuildSub::Interior(interior)) {
                 BuildSub::Interior(a) => {
-                    // CLI --engine wins; else the repo's [build].engine config; else pandoc.
-                    let engine = build::Engine::parse(
-                        a.engine.as_deref().or(repo.config.build.engine.as_deref()),
-                    )?;
+                    // PDFs render via the native Typst engine; EPUB/DOCX via pandoc.
                     if a.format.is_some() {
-                        build::run(&repo, a.book, a.format, a.lang, engine)?;
+                        build::run(&repo, a.book, a.format, a.lang)?;
                     } else {
-                        build::run_editions(&repo, a.book, a.lang, a.edition, engine)?;
+                        build::run_editions(&repo, a.book, a.lang, a.edition)?;
                     }
                 }
                 BuildSub::Cover(a) => {

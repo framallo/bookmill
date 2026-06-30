@@ -26,7 +26,8 @@ engine over time):
 
 | Command | Needs |
 |---|---|
-| `build` (PDF) | `pandoc` + `xelatex` |
+| `build` (PDF) | `typst` (native PDF engine; no LaTeX) |
+| `build` (EPUB / `docx`) | `pandoc` |
 | `covers` (`--engine chrome`) | headless Chrome (the default `resvg` engine is pure Rust) |
 | `validate --deep` | `epubcheck`, `pdfinfo` |
 | `audiobook` | [`kab`](https://github.com/framallo) (Kokoro TTS on the Apple Neural Engine) |
@@ -65,8 +66,8 @@ bookmill tui                         interactive terminal UI (build/cover/valida
 (the default action), `build cover` renders covers, `build shrink` shrinks an
 EPUB. `--format` is `epub | pdf | kdp | print | docx | all` (`docx` = an editor
 review doc); `--edition` builds by distribution channel instead (see below).
-`--lang` is a language code or `all`. PDF builds default to pandoc/xelatex;
-`--engine typst` renders a native Typst PDF instead (opt-in, no LaTeX).
+`--lang` is a language code or `all`. PDFs render through the native Typst
+engine (no LaTeX); EPUB and the `docx` review doc go through pandoc.
 
 ### `bookmill create`
 
@@ -153,7 +154,8 @@ src/
   config.rs      layered TOML model + resolution + validation
   discover.rs    repo/book discovery
   create.rs      `bookmill create` scaffolder (archetypes + bundled assets)
-  build.rs       request → jobs → queue (pandoc/xelatex today)
+  build.rs       request → jobs → queue (Typst PDF + pandoc EPUB/docx)
+  typst_pdf.rs   native Typst PDF engine (sole PDF backend)
   audiobook.rs   TtsEngine trait + kab adapter
   covers.rs / cover_svg.rs / cover_tmpl.rs   cover rendering (resvg default)
   epub_shrink.rs native EPUB image shrinker
@@ -172,8 +174,9 @@ examples/sample-repo/   self-contained demo repo
 
 Build, covers, and validation are in daily production use. The audiobook engine
 renders via kab (a content-hash segment cache for incremental re-renders is the
-next step). The PDF engine still shells out to pandoc/xelatex; a native
-AST→Typst engine is planned. See `HANDOFF.md` for the full work queue.
+next step). PDFs render through the native Typst engine — the sole PDF backend,
+with no LaTeX; pandoc remains only for EPUB and the `docx` review doc. See
+`HANDOFF.md` for the full work queue.
 
 ## License
 

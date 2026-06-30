@@ -1,10 +1,11 @@
-//! Build orchestrator (v1): drive the proven pandoc/xelatex toolchain from the
-//! resolved config. Supports --format builds and edition/target-driven builds.
+//! Build orchestrator: drive the rendering toolchains from the resolved config.
+//! Supports --format builds and edition/target-driven builds.
 //!
-//! A build request is expanded up front into a flat list of JOBS
+//! PDFs (retail + KDP print) render through the native Typst engine
+//! (`typst_pdf`); EPUB and the editor `.docx` review doc still shell out to
+//! pandoc. A build request is expanded up front into a flat list of JOBS
 //! (book × edition-or-format × lang × output), then run through a queue with
-//! per-job progress + ETA. Native Typst/comrak/epub-builder engines replace the
-//! pandoc shell-outs later.
+//! per-job progress + ETA.
 
 use crate::config::BookConfig;
 use crate::discover::Repo;
@@ -14,7 +15,6 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 const EPUB_FROM: &str = "gfm+raw_attribute+attributes+implicit_figures";
-const PDF_FROM: &str = "gfm+raw_attribute+attributes-implicit_figures";
 const DEFAULT_EPUB_PX: u32 = 1200;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -25,27 +25,6 @@ pub enum Out {
     KdpPdf,
     /// Editor review document (`.docx`, via pandoc). Not a publish format.
     Docx,
-}
-
-/// PDF rendering engine. `Pandoc` (default) shells out to `pandoc --pdf-engine=
-/// xelatex`; `Typst` renders a native `.typ` document via the `typst` CLI
-/// (opt-in via `--engine typst`). Only affects PDF outputs; EPUB is unchanged.
-#[derive(Clone, Copy, PartialEq, Default, Debug)]
-pub enum Engine {
-    #[default]
-    Pandoc,
-    Typst,
-}
-
-impl Engine {
-    /// Parse `--engine` (case-insensitive). None / "pandoc" => Pandoc; "typst" => Typst.
-    pub fn parse(s: Option<&str>) -> Result<Engine> {
-        match s.map(|x| x.to_ascii_lowercase()).as_deref() {
-            None | Some("pandoc") | Some("xelatex") => Ok(Engine::Pandoc),
-            Some("typst") => Ok(Engine::Typst),
-            Some(other) => bail!("unknown --engine {other:?} (expected \"pandoc\" or \"typst\")"),
-        }
-    }
 }
 
 impl Out {
@@ -75,13 +54,11 @@ pub struct Job {
     /// Full PDF page geometry (paper size + margins) in inches, resolved from
     /// config (edition trim+bleed + book/repo margins). None for EPUB outputs.
     pub geometry: Option<PageGeometry>,
-    /// PDF engine (pandoc default; typst opt-in). Ignored for EPUB outputs.
-    pub engine: Engine,
 }
 
 /// Full print page geometry, in inches. Paper size comes from edition trim+bleed;
-/// margins from book [pdf.margins] / repo [defaults.margins]. Emitted into the
-/// generated `.geometry.tex` header (replaces the old meta.md `geometry:` block).
+/// margins from book [pdf.margins] / repo [defaults.margins]. Passed to the
+/// native Typst engine, which sets the page size and margins directly.
 #[derive(Clone, Copy, Debug)]
 pub struct PageGeometry {
     pub pw: f64,
@@ -297,7 +274,6 @@ pub fn plan_format(
                     out: *out,
                     epub_px: DEFAULT_EPUB_PX,
                     geometry: resolve_geometry(repo, &book, None, *out),
-                    engine: Engine::default(),
                 });
             }
         }
@@ -387,7 +363,6 @@ pub fn plan_editions(
                         out: *out,
                         epub_px: img_px,
                         geometry: resolve_geometry(repo, &book, ed, *out),
-                        engine: Engine::default(),
                     });
                 }
             }
@@ -422,12 +397,8 @@ pub fn run(
     book_slug: Option<String>,
     format: Option<String>,
     lang_filter: Option<String>,
-    engine: Engine,
 ) -> Result<()> {
-    let mut jobs = plan_format(repo, &book_slug, &format, &lang_filter)?;
-    for j in &mut jobs {
-        j.engine = engine;
-    }
+    let jobs = plan_format(repo, &book_slug, &format, &lang_filter)?;
     run_queue_stdout(repo, &jobs)
 }
 
@@ -437,12 +408,8 @@ pub fn run_editions(
     book_slug: Option<String>,
     lang_filter: Option<String>,
     edition_filter: Option<String>,
-    engine: Engine,
 ) -> Result<()> {
-    let mut jobs = plan_editions(repo, &book_slug, &lang_filter, &edition_filter)?;
-    for j in &mut jobs {
-        j.engine = engine;
-    }
+    let jobs = plan_editions(repo, &book_slug, &lang_filter, &edition_filter)?;
     run_queue_stdout(repo, &jobs)
 }
 
@@ -602,7 +569,6 @@ pub fn build_job(repo: &Repo, job: &Job) -> Result<()> {
         job.geometry,
         job.edition.as_deref(),
         &job.target,
-        job.engine,
     )
 }
 
@@ -630,7 +596,6 @@ fn build_one(
     geometry: Option<PageGeometry>,
     edition: Option<&str>,
     target: &str,
-    engine: Engine,
 ) -> Result<()> {
     let slug = &book.slug;
     let content = book
@@ -668,7 +633,7 @@ fn build_one(
                 emit_cover_jpg(c, &odir.join(format!("{base}-cover.jpg")));
             }
         }
-        Out::RetailPdf if engine == Engine::Typst => {
+        Out::RetailPdf => {
             let m = resolve_book_meta(repo, book, lang)?;
             crate::typst_pdf::run(
                 repo,
@@ -683,7 +648,9 @@ fn build_one(
                 &odir.join(format!("{base}.pdf")),
             )?;
         }
-        Out::KdpPdf if engine == Engine::Typst => {
+        Out::KdpPdf => {
+            // Default KDP print interior is "{base}-kdp.pdf". Regional POD print
+            // editions (bubok) get their own filename so they don't clobber it.
             let fname = match (target, edition) {
                 ("bubok", Some(ed)) => format!("{base}-{ed}.pdf"),
                 _ => format!("{base}-kdp.pdf"),
@@ -699,50 +666,6 @@ fn build_one(
                 None,
                 geometry,
                 lang,
-                &odir.join(fname),
-            )?;
-        }
-        Out::RetailPdf => {
-            // only stamp a cover page when the book has cover art
-            let cover_tex = cover.as_ref().map(|c| {
-                let ct = odir.join(".cover.tex");
-                let _ = std::fs::write(
-                    &ct,
-                    format!(
-                        "\\def\\coverimagepath{{{}}}\n",
-                        c.canonicalize().unwrap_or_else(|_| c.clone()).display()
-                    ),
-                );
-                ct
-            });
-            run_pdf(
-                repo,
-                &meta,
-                cpdf.as_deref(),
-                &chaps,
-                openright,
-                true,
-                cover_tex.as_deref(),
-                geometry,
-                &odir.join(format!("{base}.pdf")),
-            )?;
-        }
-        Out::KdpPdf => {
-            // Default KDP print interior is "{base}-kdp.pdf". Regional POD print
-            // editions (bubok) get their own filename so they don't clobber it.
-            let fname = match (target, edition) {
-                ("bubok", Some(ed)) => format!("{base}-{ed}.pdf"),
-                _ => format!("{base}-kdp.pdf"),
-            };
-            run_pdf(
-                repo,
-                &meta,
-                cpdf.as_deref(),
-                &chaps,
-                openright,
-                false,
-                None,
-                geometry,
                 &odir.join(fname),
             )?;
         }
@@ -800,66 +723,13 @@ fn run_epub(
     sh(c, "pandoc epub")
 }
 
-#[allow(clippy::too_many_arguments)]
-fn run_pdf(
-    repo: &Repo,
-    meta: &Path,
-    cpdf: Option<&Path>,
-    chaps: &[PathBuf],
-    openright: bool,
-    retail: bool,
-    cover_tex: Option<&Path>,
-    geometry: Option<PageGeometry>,
-    out: &Path,
-) -> Result<()> {
-    let classopt = format!("twoside,{}", if openright { "openright" } else { "openany" });
-    let mut c = Command::new("pandoc");
-    c.current_dir(&repo.root)
-        .args(["-f", PDF_FROM, "--pdf-engine=xelatex", "--to=latex"])
-        .args(["-V", &format!("classoption={classopt}")])
-        .arg("--top-level-division=chapter");
-    // Full page geometry from config (paper size + margins). Loads the geometry
-    // package and sets every dimension here, so layout no longer needs meta.md's
-    // `geometry:` block. Emitted before the other header includes.
-    if let Some(g) = geometry {
-        let geo = out.parent().unwrap_or_else(|| Path::new(".")).join(".geometry.tex");
-        std::fs::write(
-            &geo,
-            format!(
-                "\\usepackage{{geometry}}\n\\geometry{{paperwidth={:.4}in,paperheight={:.4}in,\
-top={:.4}in,bottom={:.4}in,inner={:.4}in,outer={:.4}in,bindingoffset={:.4}in}}\n",
-                g.pw, g.ph, g.top, g.bottom, g.inner, g.outer, g.bindingoffset
-            ),
-        )?;
-        c.arg(format!("--include-in-header={}", geo.display()));
-    }
-    c.arg("--include-in-header=pdf/float-here.tex")
-        .arg("--include-in-header=pdf/facing-plate.tex")
-        .arg("--include-in-header=pdf/chapter-title.tex")
-        .arg("--lua-filter=pdf/facing-plate.lua");
-    if retail {
-        c.arg("--include-in-header=pdf/texture-bg.tex");
-        // only stamp the cover page when the book actually has cover art
-        if let Some(ct) = cover_tex {
-            c.arg(format!("--include-in-header={}", ct.display()));
-            c.arg("--include-in-header=pdf/cover-page.tex");
-        }
-    }
-    c.arg("-o").arg(out).arg(meta);
-    if let Some(cp) = cpdf {
-        c.arg(cp);
-    }
-    c.args(chaps);
-    sh(c, "pandoc pdf")
-}
-
 /// Generate the pandoc metadata file for one (book, lang) from config, replacing
 /// the old per-book/lang `meta.md`. Writes a `.gen-meta.md` YAML block into the
 /// output dir and returns its path. Carries title/subtitle/author/date/lang/
-/// language/documentclass/rights; page geometry is handled separately (the PDF
-/// `.geometry.tex` header), so it is intentionally NOT emitted here.
-/// Resolved per-(book, lang) front-matter values, shared by the pandoc metadata
-/// file and the native Typst document.
+/// language/documentclass/rights; page geometry is handled separately (the Typst
+/// engine sets it directly), so it is intentionally NOT emitted here.
+/// Resolved per-(book, lang) front-matter values, shared by the pandoc EPUB
+/// metadata file and the native Typst document.
 pub struct BookMeta {
     pub title: String,
     pub subtitle: Option<String>,

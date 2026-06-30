@@ -42,8 +42,8 @@ builds them (Phase 8 deleted every `meta.md`).
 - **Web cover editor: works, folded into the binary as `bookmill web`.** Drag
   positions now round-trip into the render (`[cover.<lang>.layout]` honored by
   `cover_svg.rs`). The standalone `web/` crate still builds but is superseded.
-- **PDF engine still shells out** to pandoc/xelatex — the native Typst swap (v2)
-  is not done.
+- **PDF engine is native Typst** — the sole PDF backend (no LaTeX). pandoc is
+  used only for EPUB and the `docx` review doc.
 - **Git: this is the first commit.** Before now the whole project was untracked.
 
 ## Repo layout
@@ -93,10 +93,10 @@ The standalone `web/` crate still works (`cd web && cargo run`) but is supersede
 by `bookmill web`, which serves the same editor from the single binary (cover.rs /
 render.rs shared by source via `#[path]`, frontend embedded).
 
-External tools still required: **pandoc + xelatex** (PDF), **headless Chrome**
-(covers via `bookmill covers`), **epubcheck + pdfinfo** (`validate --deep`), and
-**kab** (audiobook, once implemented). The endgame is to drop all but the
-audiobook engine.
+External tools still required: **typst** (native PDF engine), **pandoc** (EPUB +
+`docx` review doc), **headless Chrome** (covers via `bookmill covers`),
+**epubcheck + pdfinfo** (`validate --deep`), and **kab** (audiobook, once
+implemented). The endgame is to drop all but the audiobook engine.
 
 ## What's done (Phases 1–14, condensed)
 
@@ -137,11 +137,10 @@ progress".
    bold/italic/links, title/copyright/TOC, **retail texture bg**, **front-matter roman /
    body arabic numbering**, **GFM tables**, and inline `^[…]` footnotes (reference-style
    `[^id]` deferred — no book uses them). **~instant vs xelatex** (whole 20-interior
-   series in ~3s vs ~2h). Selected via CLI `--engine typst` or repo `[build].engine`;
-   **the Argentina repo is now `engine = "typst"`** (config-driven). Pandoc/xelatex is
-   still the hardcoded fallback default and EPUB+DOCX still use pandoc. To make Typst the
-   *global* default: `Engine` `#[default]` + `parse(None)` → Typst, then optionally drop
-   `pdf/*.tex` + the lua filter.
+   series in ~3s vs ~2h). **Typst is now the sole PDF engine** — the `--engine` flag,
+   the `Engine` enum, and the `[build].engine` config are gone, and the pandoc/xelatex
+   PDF path plus the `pdf/*.tex` scaffold assets + lua filter have been deleted. pandoc
+   remains only for EPUB and the `docx` review doc.
 
 4. **EN translations for the two es-only fables** —
    `libre-para-elegir-en-la-isla` (Friedman) and `lo-que-nadie-sabe-de-la-isla`
