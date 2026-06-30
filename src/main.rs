@@ -13,6 +13,7 @@ mod covers;
 mod deep;
 mod discover;
 mod tui;
+mod typst_pdf;
 mod web;
 
 use anyhow::Result;
@@ -159,6 +160,9 @@ struct InteriorArgs {
     /// limit to a language (es|en|all)
     #[arg(long)]
     lang: Option<String>,
+    /// PDF engine: pandoc (default, xelatex) | typst (native, opt-in)
+    #[arg(long)]
+    engine: Option<String>,
 }
 
 #[derive(Args)]
@@ -278,10 +282,11 @@ fn main() -> Result<()> {
         Cmd::Build { what, interior } => {
             match what.unwrap_or(BuildSub::Interior(interior)) {
                 BuildSub::Interior(a) => {
+                    let engine = build::Engine::parse(a.engine.as_deref())?;
                     if a.format.is_some() {
-                        build::run(&repo, a.book, a.format, a.lang)?;
+                        build::run(&repo, a.book, a.format, a.lang, engine)?;
                     } else {
-                        build::run_editions(&repo, a.book, a.lang, a.edition)?;
+                        build::run_editions(&repo, a.book, a.lang, a.edition, engine)?;
                     }
                 }
                 BuildSub::Cover(a) => {
