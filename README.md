@@ -22,15 +22,17 @@ manuscript (Markdown)  ──bookmill──▶  EPUB · print PDF · wrap cover 
 cargo install --path .          # builds target/release/bookmill, installs to ~/.cargo/bin
 ```
 
-External tools used by some commands. EPUB (epub-builder + comrak) and the `docx`
-review doc (docx-rs) are now native Rust, so **pandoc is no longer required**:
+**`bookmill build` needs no external tools at all** — PDF (Typst compiled
+in-process via the `typst` crate, no LaTeX, no `typst` binary), EPUB
+(epub-builder + comrak), and `docx` (docx-rs) are all native Rust. Verified by
+building with an empty `PATH`. The only external tools left are used by optional,
+non-build commands:
 
 | Command | Needs |
 |---|---|
-| `build` (PDF) | `typst` (native PDF engine; no LaTeX) |
-| `build` (EPUB / `docx`) | nothing external (native Rust) |
-| `covers` (`--engine chrome`) | headless Chrome (the default `resvg` engine is pure Rust) |
-| `validate --deep` | `epubcheck`, `pdfinfo` |
+| `build` (PDF / EPUB / `docx`) | **nothing — fully native Rust** |
+| `build cover` | nothing (native `resvg`); `--engine chrome` optionally uses headless Chrome |
+| `validate --deep` | `epubcheck` (Java) + `pdfimages` (poppler, image-DPI/bleed audit only) |
 | `audiobook` | [`kab`](https://github.com/framallo) (Kokoro TTS on the Apple Neural Engine) |
 
 ## Quickstart
@@ -177,12 +179,13 @@ examples/sample-repo/   self-contained demo repo
 ## Status
 
 Build, covers, and validation are in daily production use. The audiobook engine
-renders via kab (a content-hash segment cache for incremental re-renders is the
-next step). Every interior is native Rust: PDFs through the Typst engine (no
-LaTeX), EPUB through epub-builder + comrak, and the `docx` review doc through
-docx-rs — there is no pandoc dependency. The only external tools are `typst`,
-`epubcheck`/`pdfinfo` (validation), headless Chrome (optional cover engine), and
-`kab` (audiobook). See `HANDOFF.md` for the full work queue.
+renders via kab (with a content-hash per-chapter cache). Every interior is native
+Rust: PDFs through the in-process **Typst crate** (no LaTeX, no `typst` binary),
+EPUB through epub-builder + comrak, the `docx` review doc through docx-rs, and PDF
+page metadata through `lopdf` (no `pdfinfo`) — **`bookmill build` runs with no
+external tools at all**. The only externals remain in optional commands:
+`epubcheck` + `pdfimages` (`validate --deep`), `kab` (audiobook), and headless
+Chrome (only the opt-in `build cover --engine chrome`). See `HANDOFF.md`.
 
 ## License
 

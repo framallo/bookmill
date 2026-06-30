@@ -97,11 +97,15 @@ The standalone `web/` crate still works (`cd web && cargo run`) but is supersede
 by `bookmill web`, which serves the same editor from the single binary (cover.rs /
 render.rs shared by source via `#[path]`, frontend embedded).
 
-External tools still required: **typst** (native PDF engine), **headless Chrome**
-(covers via `bookmill covers`), **epubcheck + pdfinfo** (`validate --deep`), and
-**kab** (audiobook). EPUB and the `docx` review doc are now native Rust, so
-**pandoc is no longer required** — the remaining endgame is to drop all but the
-audiobook engine.
+**`bookmill build` needs NO external tools** — PDF via the in-process `typst`
+crate (no `typst` binary, no LaTeX), EPUB via epub-builder + comrak, `docx` via
+docx-rs, PDF page metadata via `lopdf` (no `pdfinfo`). Verified building with an
+empty `PATH`. Remaining externals are optional-command-only: **epubcheck** (Java)
++ **pdfimages** (poppler) for `validate --deep`'s image-DPI/bleed audit, **kab**
+for audiobook, and **headless Chrome** only for the opt-in `build cover --engine
+chrome` (default cover render is native resvg). Endgame reached for the build
+path; only the reference validator (epubcheck) and the TTS engine (kab) remain,
+both optional.
 
 ## What's done (Phases 1–14, condensed)
 
