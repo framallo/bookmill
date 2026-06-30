@@ -110,20 +110,18 @@ progress".
 
 ## What's NOT done — the work queue
 
-1. **Per-chapter audio reuse (the remaining audiobook work).** The v1 engine +
-   the **manifest cache** are done (`src/audiobook.rs`): the manifest hashes each
-   chapter (+voice/speed/engine), skips an unchanged book, and reports which
-   chapters changed. What's left is reusing the *audio* of unchanged chapters so a
-   one-line edit re-renders only that clip. `kab convert` re-renders the whole
-   book, so this needs per-chapter synth: `ane_book.py` exposes a single-chapter
-   `synth --text-file … --out …` path (note: separate invocations reload the
-   CoreML model each time — measure that cost; batching the *changed* subset warm
-   is better), then mux the `.m4b` with chapter markers (port `ane_book.py`'s
-   `_assemble_m4b` / `_build_ffmetadata`, or change `ane_book` to accept a
-   persistent content-addressed cache dir). Slot it behind the `TtsEngine` trait as
-   a caching engine wrapping `KabEngine`, keyed off the existing manifest. Open
-   design fork (needs Federico): accept the model-reload cost vs. modify the
-   sibling `kokoro-coreml` repo. Spec: `BOOKMILL-PLAN.md` → "Audiobook".
+1. ~~**Per-chapter audio reuse**~~ — **DONE** (persistent content-addressed cache
+   across three repos). `ane_book.py` gained `--cache-dir`: each chapter's WAV is
+   keyed by `sha256(version, model_tag, voice, lang, speed, spoken_text)` and
+   reused across runs, so a one-line edit re-renders only that chapter (proven by a
+   stubbed incrementality test). `kab convert` passes `--cache-dir` through;
+   `src/audiobook.rs` points it at `output/<slug>/<lang>/.audiocache`.
+   **Cross-repo branch state (not yet merged to each repo's main / not pushed):**
+   `kokoro-coreml` → `feat/chapter-cache`, `kokoro-audiobook-mcp` (kab) →
+   `feat/chapter-cache` (the rebuilt kab binary at `.build/release/kab` already has
+   `--cache-dir`; if you switch kab back to main and rebuild, bookmill's
+   `--cache-dir` will error). Real Kokoro TTS bytes weren't rendered on this run
+   (heavy ANE load) — only the cache/reuse/passthrough logic is tested.
 
 2. **Cover editor position round-trip (renderer gap).** The web editor saves
    per-element `[cover.<lang>.layout]` (xPct/yPct/wPct/fontPct/…) to TOML, and
