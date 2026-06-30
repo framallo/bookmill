@@ -430,6 +430,18 @@ impl TtsEngine for KabEngine {
         // kab's lexical `sorted(glob(...))` reproduces bookmill's exact order.
         let stage = stage_chapters(job)?;
 
+        // Persistent per-chapter audio cache, alongside the .m4b and its
+        // manifest. ane_book.py keys each chapter's WAV by a hash of the spoken
+        // text (+ voice/lang/speed/model) so a one-line edit re-renders only
+        // that chapter on the next run; the cache survives across runs.
+        let cache_dir = job
+            .out
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(".audiocache");
+        std::fs::create_dir_all(&cache_dir)
+            .with_context(|| format!("creating audio cache dir {}", cache_dir.display()))?;
+
         let mut c = Command::new(&self.bin);
         c.arg("convert")
             .arg("--chapters-dir")
@@ -441,6 +453,8 @@ impl TtsEngine for KabEngine {
             .args(["--artist", &job.artist])
             .arg("--out")
             .arg(&job.out)
+            .arg("--cache-dir")
+            .arg(&cache_dir)
             .args(["--speed", &format!("{}", job.speed)]);
         if !job.speak_titles {
             c.arg("--drop-title");
@@ -539,5 +553,71 @@ mod tests {
     fn stem_strips_md() {
         assert_eq!(stem("capitulo-03.md"), "capitulo-03");
         assert_eq!(stem("epilogo"), "epilogo");
+    }
+
+    /// The KabEngine must pass `--cache-dir <out_parent>/.audiocache` (and create
+    /// it) so ane_book.py can reuse unchanged chapters across runs. Verified with
+    /// a fake `kab` that records its argv and produces the expected .m4b.
+    #[test]
+    fn render_passes_cache_dir_and_creates_it() {
+        use std::io::Write;
+
+        let tmp = std::env::temp_dir().join(format!("bookmill_audio_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // A real chapter file to stage.
+        let chap = tmp.join("capitulo-01.md");
+        std::fs::write(&chap, "# Capítulo uno\n\nHola.\n").unwrap();
+
+        let out = tmp.join("out").join("slug-es.m4b");
+        let arglog = tmp.join("argv.txt");
+
+        // Fake kab: dump argv to a file, then create the requested --out file so
+        // render()'s post-condition (out exists) passes.
+        let fake = tmp.join("fake-kab.sh");
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nout=''\nwhile [ $# -gt 0 ]; do if [ \"$1\" = \"--out\" ]; then out=\"$2\"; fi; shift; done\nmkdir -p \"$(dirname \"$out\")\"\necho fake > \"$out\"\nexit 0\n",
+            arglog.display()
+        );
+        let mut f = std::fs::File::create(&fake).unwrap();
+        f.write_all(script.as_bytes()).unwrap();
+        drop(f);
+        let mut perm = std::fs::metadata(&fake).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut perm, 0o755);
+        std::fs::set_permissions(&fake, perm).unwrap();
+
+        let job = AudioJob {
+            slug: "slug".into(),
+            lang: "es".into(),
+            title: "T".into(),
+            artist: "A".into(),
+            voice: "ef_dora".into(),
+            code: "e".into(),
+            speed: 1.0,
+            speak_titles: true,
+            chapters: vec![chap],
+            out: out.clone(),
+        };
+
+        let engine = KabEngine { bin: fake };
+        engine.render(&job).expect("render should succeed with fake kab");
+
+        let expected_cache = out.parent().unwrap().join(".audiocache");
+        assert!(expected_cache.is_dir(), "cache dir must be created");
+
+        let argv = std::fs::read_to_string(&arglog).unwrap();
+        let lines: Vec<&str> = argv.lines().collect();
+        let i = lines
+            .iter()
+            .position(|a| *a == "--cache-dir")
+            .expect("--cache-dir must be passed to kab");
+        assert_eq!(
+            lines[i + 1],
+            expected_cache.to_str().unwrap(),
+            "--cache-dir must point at <out>/.audiocache"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
