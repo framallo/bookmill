@@ -339,8 +339,10 @@ fn read_element(item: &Item) -> Option<Element> {
 // --------------------------------------------------------------------------
 
 /// Books whose tracked cover/ assets bookmill will NOT overwrite (mirrors
-/// covers.rs::PROTECTED) — their re-render lands at a comparison path.
-const PROTECTED: &[&str] = &["la-riqueza-de-la-isla", "no-hay-plata-en-la-isla-de-las-ratas"];
+/// covers.rs::PROTECTED) — their re-render lands at a comparison path. Empty now
+/// that the two formerly-protected covers render faithfully via native resvg
+/// in place; kept so a book can be re-protected with one edit.
+const PROTECTED: &[&str] = &[];
 
 pub fn is_protected(slug: &str) -> bool {
     PROTECTED.contains(&slug)

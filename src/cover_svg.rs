@@ -729,7 +729,9 @@ impl CoverRenderer {
             spine_x + spine_w - 3.0,
             r.accent
         ));
-        if pages >= 79 {
+        // KDP allows spine text only at >=100 pages (matches make-covers.py); below
+        // that the spine stays blank but keeps its accent border rules.
+        if pages >= 100 {
             let scx = spine_x + spine_w / 2.0;
             let scy = fh / 2.0;
             let spine_text = format!("{}   \u{00b7}   {}", r.title, r.author);

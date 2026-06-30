@@ -313,7 +313,8 @@ pub fn wrap_html(repo: &RepoConfig, book: &BookConfig, lang: &str, pages: u32) -
     let spine_pct = round4(spine / full_w * 100.0);
     let front_pct = round4((r.trim_w + r.bleed) / full_w * 100.0);
 
-    let spine_inner = if pages >= 79 {
+    // KDP allows spine text only at >=100 pages (matches make-covers.py).
+    let spine_inner = if pages >= 100 {
         format!(
             "<div class=\"spinetxt\"><span>{}&nbsp;&nbsp;&middot;&nbsp;&nbsp;{}</span></div>",
             esc(&r.title),
