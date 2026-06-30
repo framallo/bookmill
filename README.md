@@ -31,8 +31,8 @@ non-build commands:
 | Command | Needs |
 |---|---|
 | `build` (PDF / EPUB / `docx`) | **nothing — fully native Rust** |
-| `build cover` | nothing (native `resvg`); `--engine chrome` optionally uses headless Chrome |
-| `validate --deep` | `epubcheck` (Java) + `pdfimages` (poppler, image-DPI/bleed audit only) |
+| `build cover` | **nothing — native `resvg`** (all books, incl. the formerly Chrome-only protected covers); `--engine chrome` is an opt-in fallback only |
+| `validate --deep` | `epubcheck` (Java reference EPUB validator) — the only external tool left, and only here |
 | `audiobook` | [`kab`](https://github.com/framallo) (Kokoro TTS on the Apple Neural Engine) |
 
 ## Quickstart
@@ -182,10 +182,11 @@ Build, covers, and validation are in daily production use. The audiobook engine
 renders via kab (with a content-hash per-chapter cache). Every interior is native
 Rust: PDFs through the in-process **Typst crate** (no LaTeX, no `typst` binary),
 EPUB through epub-builder + comrak, the `docx` review doc through docx-rs, and PDF
-page metadata through `lopdf` (no `pdfinfo`) — **`bookmill build` runs with no
-external tools at all**. The only externals remain in optional commands:
-`epubcheck` + `pdfimages` (`validate --deep`), `kab` (audiobook), and headless
-Chrome (only the opt-in `build cover --engine chrome`). See `HANDOFF.md`.
+page metadata + image-DPI/bleed audits through `lopdf` (no poppler) — and covers
+render via native `resvg`. **The whole build + cover pipeline runs with no
+external tools at all.** The only external left is **`epubcheck`** (the Java
+reference EPUB validator), used solely by `validate --deep`, plus `kab` for the
+optional `audiobook` command. See `HANDOFF.md`.
 
 ## License
 

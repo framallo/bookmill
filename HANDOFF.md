@@ -97,15 +97,16 @@ The standalone `web/` crate still works (`cd web && cargo run`) but is supersede
 by `bookmill web`, which serves the same editor from the single binary (cover.rs /
 render.rs shared by source via `#[path]`, frontend embedded).
 
-**`bookmill build` needs NO external tools** — PDF via the in-process `typst`
-crate (no `typst` binary, no LaTeX), EPUB via epub-builder + comrak, `docx` via
-docx-rs, PDF page metadata via `lopdf` (no `pdfinfo`). Verified building with an
-empty `PATH`. Remaining externals are optional-command-only: **epubcheck** (Java)
-+ **pdfimages** (poppler) for `validate --deep`'s image-DPI/bleed audit, **kab**
-for audiobook, and **headless Chrome** only for the opt-in `build cover --engine
-chrome` (default cover render is native resvg). Endgame reached for the build
-path; only the reference validator (epubcheck) and the TTS engine (kab) remain,
-both optional.
+**The whole build + cover pipeline needs NO external tools** — PDF via the
+in-process `typst` crate (no `typst` binary, no LaTeX), EPUB via epub-builder +
+comrak, `docx` via docx-rs, all PDF metadata + image-DPI/bleed audits via `lopdf`
+(no poppler — `pdfinfo`/`pdfimages` both gone), and covers via native `resvg` for
+**every** book (the two formerly-protected hand-tuned covers were verified
+pixel-faithful and un-protected; Chrome retired — it's now only an opt-in `build
+cover --engine chrome` fallback). Verified building PDF/EPUB/DOCX **and** both
+protected covers with an empty `PATH`. The **only** external tool left is
+**`epubcheck`** (Java reference EPUB validator) used solely by `validate --deep`,
+plus **`kab`** for the optional `audiobook` command.
 
 ## What's done (Phases 1–14, condensed)
 
