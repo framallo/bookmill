@@ -7,10 +7,11 @@
 //!               `lopdf` (no poppler), that the page size equals the edition's
 //!               expected trim+bleed (e.g. kdp-paperback picture book =
 //!               6.125×9.25in = 441×666pt; 6×9 text = 432×648pt). For the KDP
-//!               print PDF it also audits interior image DPI via `pdfimages
-//!               -list` (placed effective resolution at print size — poppler;
-//!               lopdf can't surface placed ppi), warning on any image below
-//!               ~300dpi.
+//!               print PDF it also audits interior image DPI natively
+//!               (`pdfmeta::placed_images` interprets the content stream's CTM to
+//!               get each image's placed effective resolution at print size — the
+//!               same number poppler's `pdfimages -list` reported), warning on any
+//!               image below ~300dpi.
 //!   3. Cover  — front PNG ≥ 1600×2560, wrap PDF page size sane (else low-res warn).
 //!
 //! Reuses already-built outputs under `output/` when present (safe: gitignored,
@@ -352,8 +353,9 @@ struct DpiRow {
 
 /// Audit interior image DPI on the (already-built) KDP print PDF.
 ///
-/// `pdfimages -list` reports, per embedded image, the placed `x-ppi`/`y-ppi` —
-/// i.e. the *effective* resolution at print size. Anything below
+/// [`crate::pdfmeta::placed_images`] reports, per embedded image, the placed
+/// effective resolution at print size (it interprets the content-stream CTM —
+/// the same number poppler's `pdfimages -list` used to print). Anything below
 /// [`MIN_PRINT_DPI`] is flagged as a `warn` (not an error): some decorative or
 /// full-bleed art may be intentionally lower, so a warning is the right level.
 /// Mirrors the cover check: if the artifact isn't built, note it and skip — we
@@ -366,14 +368,14 @@ fn image_dpi_check(repo: &Repo, job: &Job, rep: &mut Report) {
         rep.warn(format!("image DPI {label}: PDF not built (skipped)"));
         return;
     }
-    let list = match pdfimages_list(&path) {
-        Ok(t) => t,
-        Err(e) => {
-            rep.warn(format!("image DPI {label}: pdfimages failed: {e:#}"));
+    let images = match crate::pdfmeta::placed_images(&path) {
+        Some(imgs) => imgs,
+        None => {
+            rep.warn(format!("image DPI {label}: could not read PDF images"));
             return;
         }
     };
-    let (checked, min_seen, low) = audit_dpi_rows(&list, MIN_PRINT_DPI, MIN_IMG_PX);
+    let (checked, min_seen, low) = audit_dpi_rows(&images, MIN_PRINT_DPI, MIN_IMG_PX);
     match (checked, min_seen) {
         (0, _) | (_, None) => rep.ok(format!("image DPI {label}: no raster images to audit")),
         (_, Some(min)) if low.is_empty() => rep.ok(format!(
@@ -395,54 +397,38 @@ fn image_dpi_check(repo: &Repo, job: &Job, rep: &mut Report) {
     }
 }
 
-/// Run `pdfimages -list` (poppler — same toolset as `pdfinfo`) and return stdout.
-fn pdfimages_list(pdf: &Path) -> Result<String> {
-    let out = Command::new("pdfimages")
-        .arg("-list")
-        .arg(pdf)
-        .output()
-        .context("running pdfimages -list (is poppler on $PATH?)")?;
-    if !out.status.success() {
-        anyhow::bail!("pdfimages failed on {}", pdf.display());
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-}
-
-/// Parse `pdfimages -list` output into audited image rows.
+/// Audit a list of placed images for effective DPI.
 ///
-/// Columns are whitespace-separated: `page num type width height color comp bpc
-/// enc interp object ID x-ppi y-ppi size ratio`. We only audit placed raster
-/// images (`type == "image"`), skip the header/separator rows (non-numeric
-/// `page`), skip vector/inline entries whose ppi is `-` (non-numeric), and skip
-/// tiny images (< `min_px` on either side). The effective DPI is the smaller of
-/// x-ppi/y-ppi. Returns `(images_checked, min_dpi_seen, rows_below_min)`.
-fn audit_dpi_rows(list: &str, min_dpi: u32, min_px: u32) -> (usize, Option<u32>, Vec<DpiRow>) {
+/// We audit every placed raster image, skipping tiny ones (< `min_px` on either
+/// pixel side — icons, hairline rules). The effective DPI is the smaller of the
+/// two axes (matching what poppler's `pdfimages -list` reported as
+/// `min(x-ppi,y-ppi)`). Returns `(images_checked, min_dpi_seen, rows_below_min)`.
+fn audit_dpi_rows(
+    images: &[crate::pdfmeta::PlacedImage],
+    min_dpi: u32,
+    min_px: u32,
+) -> (usize, Option<u32>, Vec<DpiRow>) {
     let mut checked = 0usize;
     let mut min_seen: Option<u32> = None;
     let mut low = Vec::new();
-    for line in list.lines() {
-        let f: Vec<&str> = line.split_whitespace().collect();
-        if f.len() < 16 || f[2] != "image" {
+    for im in images {
+        if im.px_w < min_px || im.px_h < min_px {
             continue;
         }
-        let (page, w, h, xppi, yppi) = match (
-            f[0].parse::<u32>(),
-            f[3].parse::<u32>(),
-            f[4].parse::<u32>(),
-            f[12].parse::<u32>(),
-            f[13].parse::<u32>(),
-        ) {
-            (Ok(p), Ok(w), Ok(h), Ok(x), Ok(y)) => (p, w, h, x, y),
-            _ => continue, // header row or `-` ppi (vector/inline) → skip
-        };
-        if w < min_px || h < min_px {
+        // A degenerate placement (zero-area CTM) can't yield a meaningful ppi.
+        if im.placed_w_pt <= 0.0 || im.placed_h_pt <= 0.0 {
             continue;
         }
-        let ppi = xppi.min(yppi);
+        let ppi = im.dpi();
         checked += 1;
         min_seen = Some(min_seen.map_or(ppi, |m| m.min(ppi)));
         if ppi < min_dpi {
-            low.push(DpiRow { page, w, h, ppi });
+            low.push(DpiRow {
+                page: im.page,
+                w: im.px_w,
+                h: im.px_h,
+                ppi,
+            });
         }
     }
     (checked, min_seen, low)
@@ -504,10 +490,10 @@ struct BleedRow {
 
 /// Flag full-page plates that leave a white margin (insufficient bleed) on the
 /// KDP print PDF — the exact failure KDP rejects ("insufficient bleed, page N").
-/// `pdfimages -list` gives each image's pixel size and effective ppi, so the
-/// *placed* size in inches is `px / ppi`; compared to the page size (from the
-/// job's resolved geometry), a near-full-page image that stops short of the edge
-/// is reported as a `warn` (heuristic — decorative bordered art could trip it).
+/// [`crate::pdfmeta::placed_images`] gives each image's pixel size and *placed*
+/// size in inches (from the content-stream CTM); compared to the page size (from
+/// the job's resolved geometry), a near-full-page image that stops short of the
+/// edge is reported as a `warn` (heuristic — decorative bordered art could trip it).
 fn bleed_coverage_check(repo: &Repo, job: &Job, rep: &mut Report) {
     let Some(g) = job.geometry else { return };
     let path = build::job_output_path(repo, job);
@@ -516,11 +502,11 @@ fn bleed_coverage_check(repo: &Repo, job: &Job, rep: &mut Report) {
     if !path.exists() {
         return; // the DPI/geometry checks already note a missing artifact
     }
-    let list = match pdfimages_list(&path) {
-        Ok(t) => t,
-        Err(_) => return, // image_dpi_check surfaces the pdfimages failure
+    let images = match crate::pdfmeta::placed_images(&path) {
+        Some(imgs) => imgs,
+        None => return, // image_dpi_check surfaces the read failure
     };
-    let short = audit_bleed_rows(&list, g.pw, g.ph, MIN_IMG_PX);
+    let short = audit_bleed_rows(&images, g.pw, g.ph, MIN_IMG_PX);
     if short.is_empty() {
         rep.ok(format!("bleed {label}: full-page images reach the page edge"));
         return;
@@ -537,32 +523,26 @@ fn bleed_coverage_check(repo: &Repo, job: &Job, rep: &mut Report) {
     }
 }
 
-/// Parse `pdfimages -list` for full-page images whose placed size (px / ppi)
-/// falls short of the page size. Skips small insets (< [`FULLPAGE_AREA_FRAC`] of
-/// the page area — vignettes are meant to float, not bleed) and tiny images.
-fn audit_bleed_rows(list: &str, page_w: f64, page_h: f64, min_px: u32) -> Vec<BleedRow> {
+/// Scan placed images for full-page plates whose placed size (in inches) falls
+/// short of the page size. Skips small insets (< [`FULLPAGE_AREA_FRAC`] of the
+/// page area — vignettes are meant to float, not bleed) and tiny images.
+fn audit_bleed_rows(
+    images: &[crate::pdfmeta::PlacedImage],
+    page_w: f64,
+    page_h: f64,
+    min_px: u32,
+) -> Vec<BleedRow> {
     let page_area = page_w * page_h;
     let mut out = Vec::new();
-    for line in list.lines() {
-        let f: Vec<&str> = line.split_whitespace().collect();
-        if f.len() < 16 || f[2] != "image" {
+    for im in images {
+        if im.px_w < min_px || im.px_h < min_px {
             continue;
         }
-        let (page, w, h, xppi, yppi) = match (
-            f[0].parse::<u32>(),
-            f[3].parse::<u32>(),
-            f[4].parse::<u32>(),
-            f[12].parse::<f64>(),
-            f[13].parse::<f64>(),
-        ) {
-            (Ok(p), Ok(w), Ok(h), Ok(x), Ok(y)) if x > 0.0 && y > 0.0 => (p, w, h, x, y),
-            _ => continue,
-        };
-        if w < min_px || h < min_px {
+        let placed_w = im.placed_w_in();
+        let placed_h = im.placed_h_in();
+        if placed_w <= 0.0 || placed_h <= 0.0 {
             continue;
         }
-        let placed_w = w as f64 / xppi;
-        let placed_h = h as f64 / yppi;
         // Only consider images large enough to be "meant to be full-page".
         if placed_w * placed_h < FULLPAGE_AREA_FRAC * page_area {
             continue;
@@ -570,7 +550,13 @@ fn audit_bleed_rows(list: &str, page_w: f64, page_h: f64, min_px: u32) -> Vec<Bl
         let gap_w = (page_w - placed_w).max(0.0);
         let gap_h = (page_h - placed_h).max(0.0);
         if gap_w > BLEED_GAP_TOL_IN || gap_h > BLEED_GAP_TOL_IN {
-            out.push(BleedRow { page, placed_w, placed_h, gap_w, gap_h });
+            out.push(BleedRow {
+                page: im.page,
+                placed_w,
+                placed_h,
+                gap_w,
+                gap_h,
+            });
         }
     }
     out
@@ -579,22 +565,36 @@ fn audit_bleed_rows(list: &str, page_w: f64, page_h: f64, min_px: u32) -> Vec<Bl
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pdfmeta::PlacedImage;
 
-    const SAMPLE: &str = "\
-page   num  type   width height color comp bpc  enc interp  object ID x-ppi y-ppi size ratio
---------------------------------------------------------------------------------------------
-   6     0 image    2048  3072  rgb     3   8  image  no        47  0   349   349 8980K  49%
-   8     1 image     612   820  rgb     3   8  image  no        57  0   342   342  619K  42%
-   8     2 smask     612   820  gray    1   8  image  no        57  0   342   342 4469B 0.9%
-  10     3 image     800   600  rgb     3   8  image  no        66  0   150   150 4033K  22%
-  12     4 image      40    40  rgb     3   8  image  no        70  0    72    72  100B  10%
-  14     5 image     900   900  rgb     3   8  jpeg   no        80  0     -     - 1000B   1%";
+    /// Build a placed image of `w×h` px at a known effective `dpi` (square pixels),
+    /// i.e. placed size = `px / dpi` inches → `px / dpi * 72` pt.
+    fn placed(page: u32, w: u32, h: u32, dpi: f64) -> PlacedImage {
+        PlacedImage {
+            page,
+            px_w: w,
+            px_h: h,
+            placed_w_pt: w as f64 / dpi * 72.0,
+            placed_h_pt: h as f64 / dpi * 72.0,
+        }
+    }
+
+    // Mirrors the old `pdfimages -list` sample: two ≥300dpi plates, one 150dpi
+    // plate, a tiny 40px icon (skipped), and a sub-min-px placement.
+    fn sample() -> Vec<PlacedImage> {
+        vec![
+            placed(6, 2048, 3072, 349.0),
+            placed(8, 612, 820, 342.0),
+            placed(10, 800, 600, 150.0),
+            placed(12, 40, 40, 72.0), // tiny → skipped by MIN_IMG_PX
+        ]
+    }
 
     #[test]
     fn audits_placed_images_and_flags_low_dpi() {
-        let (checked, min_seen, low) = audit_dpi_rows(SAMPLE, MIN_PRINT_DPI, MIN_IMG_PX);
-        // 3 audited: the two 349/342 images and the 150-dpi one. The smask (not
-        // type "image"), the 40px tiny image, and the `-` ppi vector are skipped.
+        let (checked, min_seen, low) = audit_dpi_rows(&sample(), MIN_PRINT_DPI, MIN_IMG_PX);
+        // 3 audited: the two 349/342 images and the 150-dpi one. The 40px tiny
+        // image is skipped.
         assert_eq!(checked, 3);
         assert_eq!(min_seen, Some(150));
         assert_eq!(low.len(), 1);
@@ -604,9 +604,8 @@ page   num  type   width height color comp bpc  enc interp  object ID x-ppi y-pp
     }
 
     #[test]
-    fn empty_or_header_only_audits_nothing() {
-        let header = "page num type width height color comp bpc enc interp object ID x-ppi y-ppi size ratio";
-        let (checked, min_seen, low) = audit_dpi_rows(header, MIN_PRINT_DPI, MIN_IMG_PX);
+    fn empty_audits_nothing() {
+        let (checked, min_seen, low) = audit_dpi_rows(&[], MIN_PRINT_DPI, MIN_IMG_PX);
         assert_eq!(checked, 0);
         assert_eq!(min_seen, None);
         assert!(low.is_empty());
@@ -617,17 +616,18 @@ page   num  type   width height color comp bpc  enc interp  object ID x-ppi y-pp
     //   p30 full-bleed plate  2458x3712 @ 401dpi  -> placed 6.13x9.26in (reaches edge)  -> ok
     //   p8  vignette          612x820   @ 342dpi  -> placed 1.79x2.40in (small)          -> skip
     //   p12 tiny icon         40x40     @ 72dpi                                          -> skip
-    const BLEED_SAMPLE: &str = "\
-page   num  type   width height color comp bpc  enc interp  object ID x-ppi y-ppi size ratio
---------------------------------------------------------------------------------------------
-   6     0 image    2048  3072  rgb     3   8  image  no        47  0   349   349 8980K  49%
-   8     1 image     612   820  rgb     3   8  image  no        57  0   342   342  619K  42%
-  12     2 image      40    40  rgb     3   8  image  no        70  0    72    72  100B  10%
-  30     3 image    2458  3712  rgb     3   8  image  no        90  0   401   401 9000K  49%";
+    fn bleed_sample() -> Vec<PlacedImage> {
+        vec![
+            placed(6, 2048, 3072, 349.0),
+            placed(8, 612, 820, 342.0),
+            placed(12, 40, 40, 72.0),
+            placed(30, 2458, 3712, 401.0),
+        ]
+    }
 
     #[test]
     fn flags_only_fit_to_trim_fullpage_plate() {
-        let short = audit_bleed_rows(BLEED_SAMPLE, 6.125, 9.25, MIN_IMG_PX);
+        let short = audit_bleed_rows(&bleed_sample(), 6.125, 9.25, MIN_IMG_PX);
         // only the fit-to-trim plate on page 6 leaves a margin; the full-bleed
         // plate (p30), the vignette (p8, too small) and the tiny icon are not flagged.
         assert_eq!(short.len(), 1);
