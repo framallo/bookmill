@@ -45,7 +45,36 @@ async function init() {
   $('go').onclick = jumpToInput;
   $('jump').onkeydown = (e) => { if (e.key === 'Enter') jumpToInput(); };
   $('reload').onclick = loadWarnings;
+  wireShortcuts();
   load();
+}
+
+// Keyboard shortcuts: arrows page, Home/End jump to ends, `g` focuses the page
+// box, t/b/s toggle guides, `?` toggles help. Ignored while typing in a field.
+function wireShortcuts() {
+  const overlay = $('helpOverlay');
+  const toggleHelp = () => overlay.classList.toggle('open');
+  $('helpBtn').addEventListener('click', toggleHelp);
+  overlay.addEventListener('click', () => overlay.classList.remove('open'));
+  const toggle = (id) => { const el = $(id); el.checked = !el.checked; draw(); };
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { overlay.classList.remove('open'); return; }
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable;
+    if (typing) return;
+    switch (e.key) {
+      case 'ArrowLeft': e.preventDefault(); gotoSpread(spread - 1); break;
+      case 'ArrowRight': e.preventDefault(); gotoSpread(spread + 1); break;
+      case 'Home': e.preventDefault(); gotoSpread(0); break;
+      case 'End': e.preventDefault(); gotoSpread(lastSpread()); break;
+      case 'g': e.preventDefault(); $('jump').focus(); $('jump').select(); break;
+      case 't': e.preventDefault(); toggle('tTrim'); break;
+      case 'b': e.preventDefault(); toggle('tBleed'); break;
+      case 's': e.preventDefault(); toggle('tSafe'); break;
+      case '?': e.preventDefault(); toggleHelp(); break;
+    }
+  });
 }
 
 async function load() {

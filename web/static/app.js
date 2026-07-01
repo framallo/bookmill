@@ -38,7 +38,48 @@ async function init() {
   $('guidesOn').onchange = () => { guideLayer.visible($('guidesOn').checked); guideLayer.draw(); };
 
   bindStyleInputs();
+  wireShortcuts();
   loadCover();
+}
+
+// Keyboard shortcuts: Cmd/Ctrl+S saves; arrow keys nudge the selected element
+// (Shift = larger step); Esc deselects; `?` toggles the help overlay. Arrow
+// nudging and `?` are ignored while typing in a field (so text edits are safe).
+function wireShortcuts() {
+  const overlay = $('helpOverlay');
+  const toggleHelp = () => overlay.classList.toggle('open');
+  $('helpBtn').addEventListener('click', toggleHelp);
+  overlay.addEventListener('click', () => overlay.classList.remove('open'));
+
+  document.addEventListener('keydown', (e) => {
+    // Cmd/Ctrl+S saves from anywhere (even while typing).
+    if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S')) {
+      e.preventDefault();
+      if (!$('saveBtn').disabled) save();
+      return;
+    }
+    if (e.key === 'Escape') {
+      if (overlay.classList.contains('open')) { overlay.classList.remove('open'); return; }
+      if (current) select(null);
+      return;
+    }
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable;
+    if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === '?') { e.preventDefault(); toggleHelp(); return; }
+    // Arrow-key nudge of the selected element.
+    const arrows = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+    if (current && arrows[e.key]) {
+      e.preventDefault();
+      const step = e.shiftKey ? 40 : 8;   // canvas px
+      const [dx, dy] = arrows[e.key];
+      const n = nodes[current];
+      n.x(n.x() + dx * step);
+      n.y(n.y() + dy * step);
+      if (current === 'title') updateDecorations();
+      if (tr) tr.forceUpdate();
+      textLayer.batchDraw();
+    }
+  });
 }
 
 async function loadCover() {
