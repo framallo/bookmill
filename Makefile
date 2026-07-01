@@ -9,6 +9,7 @@
 #   make dmg      # build the installable .dmg
 #   make open     # open the already-built .app on REPO
 #   make install  # copy bookmill.app into /Applications
+#   make deploy   # install the bookmill CLI into ~/.cargo/bin (cargo install)
 #
 # Point it at a different book repo with:  make run REPO=~/path/to/repo
 
@@ -17,7 +18,7 @@ TAURI   := desktop/src-tauri
 APP     := $(TAURI)/target/release/bundle/macos/bookmill.app
 BIN      = $(abspath target/release/bookmill)
 
-.PHONY: run dev app dmg open install sidecar cli clean help
+.PHONY: run dev app dmg open install deploy sidecar cli clean help
 
 help:
 	@grep -E '^#   make ' Makefile | sed 's/^#   /  /'
@@ -53,6 +54,13 @@ install: app
 	rm -rf /Applications/bookmill.app
 	cp -R "$(APP)" /Applications/bookmill.app
 	@echo "installed → /Applications/bookmill.app (launch 'bookmill' from Spotlight)"
+
+## Install the bookmill CLI into ~/.cargo/bin (release build). Builds from the
+## current working tree, so uncommitted changes ship; --force overwrites the
+## prior copy. Distinct from `install`, which stages the desktop .app.
+deploy:
+	cargo install --path . --force
+	@echo "deployed → $$(command -v bookmill)"
 
 clean:
 	cd $(TAURI) && cargo clean
