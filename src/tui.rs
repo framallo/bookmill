@@ -184,7 +184,8 @@ pub fn run(repo: &Repo) -> Result<Option<Action>> {
                     v[0],
                 );
 
-                let cols = Layout::horizontal([Constraint::Percentage(48), Constraint::Percentage(52)]).split(v[1]);
+                // stacked top/bottom: books list above, build-target panel below
+                let rows = Layout::vertical([Constraint::Min(6), Constraint::Length(18)]).split(v[1]);
 
                 // books list
                 let items: Vec<ListItem> = books
@@ -196,7 +197,7 @@ pub fn run(repo: &Repo) -> Result<Option<Action>> {
                         .block(Block::default().borders(Borders::ALL).title(" Books  (↑/↓) "))
                         .highlight_symbol("▶ ")
                         .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD | Modifier::REVERSED)),
-                    cols[0],
+                    rows[0],
                     &mut bsel.clone(),
                 );
 
@@ -227,7 +228,7 @@ pub fn run(repo: &Repo) -> Result<Option<Action>> {
                     Paragraph::new(lines)
                         .wrap(Wrap { trim: true })
                         .block(Block::default().borders(Borders::ALL).title(" Build target ")),
-                    cols[1],
+                    rows[1],
                 );
 
                 // help box
@@ -450,8 +451,8 @@ pub fn run_queue_ui(repo: &Repo, jobs: &[Job]) -> Result<()> {
                         ListItem::new(line).style(style)
                     })
                     .collect();
-                // horizontal split: jobs list | live summary panel
-                let body = Layout::horizontal([Constraint::Percentage(64), Constraint::Percentage(36)])
+                // stacked top/bottom: jobs list above, live summary panel below
+                let body = Layout::vertical([Constraint::Min(4), Constraint::Length(11)])
                     .split(v[2]);
                 f.render_widget(
                     List::new(items)
