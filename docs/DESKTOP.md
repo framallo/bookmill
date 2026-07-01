@@ -10,7 +10,9 @@ The desktop app (`desktop/` — a separate Tauri crate, sibling to `web/`, so th
 main `bookmill` binary build is untouched) is a thin shell:
 
 1. On launch it resolves the `bookmill` CLI (env `BOOKMILL_BIN` → next to the
-   app executable → the app bundle's `Resources/` → `PATH`).
+   app executable → the app bundle's `Resources/` → `PATH`). The packaged app
+   **embeds the `bookmill` CLI as a sidecar** in `Contents/Resources/`, so it is
+   self-contained — no separate `bookmill` install required.
 2. It resolves the content repo (`--repo <dir>` / `BOOKMILL_REPO` → walk up from
    the working dir for a `bookmill.toml` → a native "choose folder" dialog).
 3. It spawns `bookmill web --port <ephemeral> --repo <root>` and waits for the
@@ -22,17 +24,22 @@ No web route is reimplemented — the app reuses the existing axum server 1:1.
 
 ## Running it
 
-### From a content repo (recommended)
+It's a normal macOS app — there is **no `bookmill` terminal command to launch
+it**. Install and open it like any other app:
 
 ```bash
-cd ~/work/argentina_animal_libertaria    # any repo with a bookmill.toml
-bookmill tauri                           # alias: bookmill desktop
+brew install --cask bookmill      # once published (see below)
 ```
 
-`bookmill tauri` discovers the repo, finds the built/installed
-`bookmill-desktop` binary, and launches it with `--repo <root>`. If the app is
-not built yet, it prints build instructions and falls back to `bookmill web`
-(open the printed URL in a browser).
+Then launch **bookmill** from Applications or Spotlight. On first open it asks
+you to choose your book repo (a folder with a `bookmill.toml`); it remembers the
+last one. You can also open the built bundle directly:
+
+```bash
+open desktop/src-tauri/target/release/bundle/macos/bookmill.app
+# or preselect a repo:
+open desktop/src-tauri/target/release/bundle/macos/bookmill.app --args --repo ~/work/argentina_animal_libertaria
+```
 
 ### Dev loop (editing the app)
 

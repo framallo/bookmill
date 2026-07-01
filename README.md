@@ -62,14 +62,16 @@ bookmill build cover [book] [--lang]      render front PNG + paperback wrap PDF 
 bookmill build shrink <epub> [--px]       shrink EPUB images in place (native)
 bookmill audiobook [book] [--lang] [--voice] [--speed] [--force]   render a chaptered .m4b (kab engine)
 bookmill web [--port] [--pages]      launch the cover-editor web UI (localhost)
-bookmill tauri | desktop             launch the native desktop app (Tauri window over the web UI)
 bookmill tui                         interactive terminal UI (build/cover/validate/audiobook)
 ```
 
-`bookmill tauri` opens the same UI (library grid, cover editor, previewer) in a
-native macOS window. The app (`desktop/`, a Tauri v2 crate) spawns `bookmill web`
-on an ephemeral port and points a `WKWebView` at it. Build/package/cask details:
-[`docs/DESKTOP.md`](docs/DESKTOP.md).
+**Desktop app.** The same UI (library grid, cover editor, previewer) also ships as
+a native macOS app you install and open like any other app — no terminal command.
+Install it with `brew install --cask bookmill`, then launch **bookmill** from
+Applications / Spotlight; it prompts for your book repo (or remembers the last
+one). The app (`desktop/`, a Tauri v2 crate) embeds the `bookmill` CLI as a
+sidecar, spawns `bookmill web` on an ephemeral port, and points a `WKWebView` at
+it. Build/package/cask details: [`docs/DESKTOP.md`](docs/DESKTOP.md).
 
 `build` is the umbrella for produced artifacts: bare `build` builds **interiors**
 (the default action), `build cover` renders covers, `build shrink` shrinks an
