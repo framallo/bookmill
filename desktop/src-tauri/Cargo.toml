@@ -1,0 +1,31 @@
+[package]
+name = "bookmill-desktop"
+version = "0.1.0"
+edition = "2021"
+description = "Native desktop shell for bookmill (Tauri v2 window over the bookmill web UI)"
+default-run = "bookmill-desktop"
+
+# The desktop app is a thin Tauri v2 shell: it spawns `bookmill web` on an
+# ephemeral localhost port and points a native WKWebView window at it, so the
+# entire existing web UI (library grid, cover editor, previewer, warnings) runs
+# natively with zero reimplementation. Kept a SEPARATE sibling crate (like
+# `web/`) so the main `bookmill` binary build is untouched.
+
+[[bin]]
+name = "bookmill-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+anyhow = "1"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

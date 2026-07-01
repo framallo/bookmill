@@ -65,6 +65,14 @@ bookmill web [--port] [--pages]      launch the cover-editor web UI (localhost)
 bookmill tui                         interactive terminal UI (build/cover/validate/audiobook)
 ```
 
+**Desktop app.** The same UI (library grid, cover editor, previewer) also ships as
+a native macOS app you install and open like any other app — no terminal command.
+Install it with `brew install --cask bookmill`, then launch **bookmill** from
+Applications / Spotlight; it prompts for your book repo (or remembers the last
+one). The app (`desktop/`, a Tauri v2 crate) embeds the `bookmill` CLI as a
+sidecar, spawns `bookmill web` on an ephemeral port, and points a `WKWebView` at
+it. Build/package/cask details: [`docs/DESKTOP.md`](docs/DESKTOP.md).
+
 `build` is the umbrella for produced artifacts: bare `build` builds **interiors**
 (the default action), `build cover` renders covers, `build shrink` shrinks an
 EPUB. `--format` is `epub | pdf | kdp | print | docx | all` (`docx` = an editor

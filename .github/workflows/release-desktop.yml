@@ -1,0 +1,76 @@
+name: Release desktop app
+
+# Tag-driven macOS release: builds a universal .app + .dmg for the bookmill
+# desktop shell and uploads them to a GitHub Release. The signed/notarized path
+# is gated on the APPLE_* secrets being present (see docs/DESKTOP.md); without
+# them the build still produces an UNSIGNED .dmg (users right-click → Open).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag (e.g. v0.1.0)"
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release-macos:
+    runs-on: macos-14
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: swatinem/rust-cache@v2
+
+      # Build the bookmill CLI as a universal binary and stage it as the
+      # sidecar the desktop app bundles (tauri.conf.json bundle.resources).
+      - name: Build universal bookmill CLI (sidecar)
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          mkdir -p desktop/src-tauri/resources
+          lipo -create \
+            target/aarch64-apple-darwin/release/bookmill \
+            target/x86_64-apple-darwin/release/bookmill \
+            -output desktop/src-tauri/resources/bookmill
+          lipo -info desktop/src-tauri/resources/bookmill
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+
+      # Signing/notarization is driven by these env vars *when the secrets
+      # exist*; otherwise Tauri produces an unsigned bundle.
+      - name: Build & release desktop bundle
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: desktop
+          tagName: ${{ github.ref_name || inputs.version }}
+          releaseName: "bookmill ${{ github.ref_name || inputs.version }}"
+          releaseDraft: true
+          prerelease: false
+          args: --target universal-apple-darwin --bundles app,dmg
+
+      - name: Print DMG sha256 (for the Homebrew cask)
+        run: |
+          dmg=$(find desktop/src-tauri/target -name '*.dmg' | head -1)
+          echo "DMG: $dmg"
+          shasum -a 256 "$dmg" || true
