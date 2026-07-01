@@ -160,8 +160,10 @@ function drawPage(art, guides, page, ox, pageWpx, H, side, slug, lang) {
     guides.add(new Konva.Rect({ x: ox, y: 0, width: pageWpx, height: H, stroke: '#222b36', strokeWidth: 1, dash: [4, 4] }));
     return;
   }
-  // page background + raster
-  guides.add(new Konva.Rect({ x: ox, y: 0, width: pageWpx, height: H, fill: '#15191f' }));
+  // page background + raster — both on `art` (the BOTTOM layer) so the opaque
+  // background sits under the page image, not over it. `guides` is the top layer
+  // (strokes/tints only); putting the fill there hid the raster and the error text.
+  art.add(new Konva.Rect({ x: ox, y: 0, width: pageWpx, height: H, fill: '#15191f' }));
   const pageUrl = `/api/preview/${slug}/${lang}/page/${page}?t=${Date.now()}`;
   Konva.Image.fromURL(pageUrl, (img) => {
     img.setAttrs({ x: ox, y: 0, width: pageWpx, height: H });
