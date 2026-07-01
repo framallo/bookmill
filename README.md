@@ -46,21 +46,30 @@ manuscript (Markdown)  ──bookmill──▶  EPUB · print PDF · wrap cover 
 
 ## Install
 
+### Users — Homebrew
+
 ```bash
-cargo install --path .    # builds release, installs to ~/.cargo/bin/bookmill
+brew install framallo/tap/bookmill        # the CLI (builds from source)
 ```
 
-Or, from a clone, install via the Makefile:
+The desktop app is packaged as a cask and goes live once a signed, notarized DMG
+is published: `brew install --cask framallo/tap/bookmill`.
+
+### Contributors — from source
 
 ```bash
-make deploy               # cargo install --path . --force
+git clone https://github.com/framallo/bookmill && cd bookmill
+cargo run -- tui              # run without installing
+make deploy                   # or: install to ~/.cargo/bin (cargo install --path . --force)
+make run                      # dev window for the desktop app on your book repo
 ```
 
 > [!NOTE]
 > **`bookmill build` (interiors + covers) needs no external tools** — verified by
 > building with an empty `PATH`. Only optional, non-build commands shell out to a
 > single tool each: `epubcheck` (Java) for `validate --deep`, `pdftoppm`
-> (poppler) for the interior previewer, and `kab` for `audiobook`.
+> (poppler) for the interior previewer, and `kab` for `audiobook`. Building the
+> CLI needs the Rust toolchain and `nasm` (both are pulled in by Homebrew).
 
 ## Quickstart
 
