@@ -6,6 +6,8 @@
 const $ = (id) => document.getElementById(id);
 
 let BOOKS = [];
+let TILES = [];        // current rendered <a.tile> nodes, in display order
+let sel = -1;          // index of the keyboard-selected tile (−1 = none)
 const state = { q: '', sort: 'title', dir: 'asc' };
 
 init();
@@ -73,11 +75,21 @@ function wireShortcuts() {
     if (e.key === 'Escape') {
       if (overlay.classList.contains('open')) { overlay.classList.remove('open'); return; }
       if (e.target === q) { q.value = ''; state.q = ''; render(); q.blur(); }
+      else if (sel >= 0) { sel = -1; applySel(false); }
       return;
     }
     if (typing) return;
     if (e.key === '/') { e.preventDefault(); q.focus(); q.select(); }
     else if (e.key === '?') { e.preventDefault(); toggleHelp(); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); moveSel(1); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); moveSel(-1); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); moveSel(colsPerRow()); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); moveSel(-colsPerRow()); }
+    else if (e.key === 'Home') { e.preventDefault(); setSel(0); }
+    else if (e.key === 'End') { e.preventDefault(); setSel(TILES.length - 1); }
+    else if (e.key === 'Enter') {
+      if (sel >= 0 && TILES[sel]) { e.preventDefault(); TILES[sel].click(); }
+    }
   });
 }
 
@@ -105,6 +117,47 @@ function render() {
   $('empty').style.display = list.length ? 'none' : '';
 
   list.forEach((b) => shelf.appendChild(tile(b)));
+
+  // Refresh the keyboard-selection state against the new tile set. Keep the
+  // current selection if it's still in range; otherwise drop it.
+  TILES = [...shelf.children];
+  if (sel >= TILES.length) sel = TILES.length - 1;
+  applySel(false);
+}
+
+// --- keyboard selection (arrow-key navigation over the cover grid) ---
+
+// Number of tiles per row, inferred from their vertical positions (the grid is
+// responsive, so columns depend on the window width).
+function colsPerRow() {
+  if (TILES.length < 2) return TILES.length || 1;
+  const top0 = TILES[0].offsetTop;
+  let n = 1;
+  while (n < TILES.length && TILES[n].offsetTop === top0) n++;
+  return n;
+}
+
+// Highlight the selected tile (and optionally scroll it into view).
+function applySel(scroll = true) {
+  TILES.forEach((t, i) => t.classList.toggle('sel', i === sel));
+  if (scroll && sel >= 0 && TILES[sel]) {
+    TILES[sel].scrollIntoView({ block: 'nearest' });
+  }
+}
+
+// Move the selection by `delta`, clamped to the grid. From no selection, the
+// first move lands on the first (or last) tile.
+function moveSel(delta) {
+  if (!TILES.length) return;
+  if (sel < 0) sel = delta > 0 ? 0 : TILES.length - 1;
+  else sel = Math.max(0, Math.min(TILES.length - 1, sel + delta));
+  applySel();
+}
+
+function setSel(i) {
+  if (!TILES.length) return;
+  sel = Math.max(0, Math.min(TILES.length - 1, i));
+  applySel();
 }
 
 function tile(b) {
