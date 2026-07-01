@@ -223,12 +223,16 @@ function drawGuides(guides, page, ox, pageWpx, H, side) {
   if (recto) { tx0 = 0; tx1 = g.trimW; }            // outer = right; inner flush left
   else       { tx0 = g.bleed; tx1 = g.pageW; }      // outer = left; inner flush right
 
-  // safe (text block): inset from trim by margins; spine side adds bindingoffset.
+  // safe (text block): Typst measures page margins from the PAGE edge, not the
+  // trim. The outer/top/bottom edges carry the 0.125" bleed, so insetting from
+  // the trim (which is already bleed-inset) double-counts the bleed and the text
+  // spills past the box. Measure from the page edge; the spine/inner side has no
+  // bleed, so there its page edge coincides with the trim.
   const innerInset = m.inner + (m.bindingoffset || 0);
   let sx0, sx1;
-  if (recto) { sx0 = tx0 + innerInset; sx1 = tx1 - m.outer; }   // inner=left, outer=right
-  else       { sx0 = tx0 + m.outer;    sx1 = tx1 - innerInset; } // inner=right, outer=left
-  const sy0 = ty0 + m.top, sy1 = ty1 - m.bottom;
+  if (recto) { sx0 = innerInset;  sx1 = g.pageW - m.outer; }      // inner=left(spine), outer=right
+  else       { sx0 = m.outer;     sx1 = g.pageW - innerInset; }   // outer=left, inner=right(spine)
+  const sy0 = m.top, sy1 = g.pageH - m.bottom;
 
   if ($('tBleed').checked) {
     // bleed = full page edge (everything outside trim gets cut)
