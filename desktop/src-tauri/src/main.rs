@@ -87,6 +87,11 @@ fn start_server(app: &tauri::AppHandle, repo: Option<PathBuf>) -> anyhow::Result
     let mut cmd = Command::new(&bin);
     cmd.arg("--repo").arg(&root).arg("web").arg("--port").arg(port.to_string());
     cmd.current_dir(&root);
+    // A GUI app launched from Finder inherits a minimal PATH
+    // (`/usr/bin:/bin:/usr/sbin:/sbin`) that excludes Homebrew, so child tools the
+    // server shells out to (notably `pdftoppm` for the interior previewer) can't
+    // be found. Prepend the common Homebrew/MacPorts bin dirs so they resolve.
+    cmd.env("PATH", augmented_path());
     let child = cmd.spawn().map_err(|e| anyhow::anyhow!("spawning {bin:?}: {e}"))?;
 
     wait_for_port(port, Duration::from_secs(20))?;
@@ -172,6 +177,20 @@ fn pick_repo(app: &tauri::AppHandle) -> Option<PathBuf> {
         }
         // Not a bookmill repo — let the picker reopen.
     }
+}
+
+/// Build a PATH for the spawned `bookmill web` that includes the common Homebrew
+/// / MacPorts bin dirs on top of the inherited PATH, so child tools like
+/// `pdftoppm` resolve even when the app was launched from Finder (minimal PATH).
+fn augmented_path() -> std::ffi::OsString {
+    let extra = ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"];
+    let current = std::env::var_os("PATH").unwrap_or_default();
+    let mut dirs: Vec<PathBuf> = extra.iter().map(PathBuf::from).collect();
+    dirs.extend(std::env::split_paths(&current));
+    // Dedup while preserving order (avoid an unboundedly growing PATH).
+    let mut seen = std::collections::HashSet::new();
+    dirs.retain(|d| seen.insert(d.clone()));
+    std::env::join_paths(dirs).unwrap_or(current)
 }
 
 /// Grab a free localhost port by binding to :0 and releasing it.
