@@ -55,6 +55,30 @@ function wireControls() {
   $('settingsBtn').addEventListener('click', () => {
     alert(`bookmill\nRepo: ${$('repo').textContent || '(unknown)'}\nBooks: ${BOOKS.length}`);
   });
+
+  wireShortcuts();
+}
+
+// Keyboard shortcuts: `/` focuses search, `Esc` clears/blurs it, `?` toggles the
+// help overlay. Typing in the search box is never hijacked (only Esc acts there).
+function wireShortcuts() {
+  const q = $('q');
+  const overlay = $('helpOverlay');
+  const toggleHelp = () => overlay.classList.toggle('open');
+  $('helpBtn').addEventListener('click', toggleHelp);
+  overlay.addEventListener('click', () => overlay.classList.remove('open'));
+
+  document.addEventListener('keydown', (e) => {
+    const typing = e.target === q || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable;
+    if (e.key === 'Escape') {
+      if (overlay.classList.contains('open')) { overlay.classList.remove('open'); return; }
+      if (e.target === q) { q.value = ''; state.q = ''; render(); q.blur(); }
+      return;
+    }
+    if (typing) return;
+    if (e.key === '/') { e.preventDefault(); q.focus(); q.select(); }
+    else if (e.key === '?') { e.preventDefault(); toggleHelp(); }
+  });
 }
 
 function syncSheet() {

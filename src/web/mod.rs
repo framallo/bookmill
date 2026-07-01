@@ -340,6 +340,42 @@ async fn api_preview_meta(
     })))
 }
 
+/// Locate the `pdftoppm` (poppler) binary. A macOS GUI app launched from Finder
+/// (or the packaged `.app`) gets a minimal PATH (`/usr/bin:/bin:/usr/sbin:/sbin`)
+/// that excludes Homebrew, so a bare `Command::new("pdftoppm")` fails there even
+/// though it works from a terminal. Search common absolute install locations
+/// first, then fall back to `$PATH`. Returns `None` if truly not installed.
+fn find_pdftoppm() -> Option<PathBuf> {
+    // Explicit override wins (parity with how the desktop resolves the CLI).
+    if let Some(p) = std::env::var_os("PDFTOPPM").map(PathBuf::from) {
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    const COMMON: &[&str] = &[
+        "/opt/homebrew/bin/pdftoppm", // Apple-Silicon Homebrew
+        "/usr/local/bin/pdftoppm",    // Intel Homebrew / manual installs
+        "/opt/local/bin/pdftoppm",    // MacPorts
+        "/usr/bin/pdftoppm",          // system / Linux distro packages
+    ];
+    for c in COMMON {
+        let p = Path::new(c);
+        if p.is_file() {
+            return Some(p.to_path_buf());
+        }
+    }
+    // Finally, honor whatever `$PATH` the process actually has.
+    if let Some(path) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let cand = dir.join("pdftoppm");
+            if cand.is_file() {
+                return Some(cand);
+            }
+        }
+    }
+    None
+}
+
 /// Rasterize page `n` of the KDP PDF to a cached PNG via `pdftoppm`, returning
 /// the PNG path. Cache key includes the DPI; the cache is invalidated when the
 /// PDF is newer than the cached image.
@@ -362,8 +398,14 @@ fn render_preview_page(root: &Path, slug: &str, lang: &str, pdf: &Path, n: u32) 
     if fresh {
         return Ok(png);
     }
+    let bin = find_pdftoppm().ok_or_else(|| {
+        anyhow::anyhow!(
+            "pdftoppm (poppler) not found. Install it with `brew install poppler` \
+             (searched /opt/homebrew/bin, /usr/local/bin, /opt/local/bin, /usr/bin, and $PATH)."
+        )
+    })?;
     // `-singlefile` makes pdftoppm write exactly `<prefix>.png` (no page suffix).
-    let out = Command::new("pdftoppm")
+    let out = Command::new(&bin)
         .arg("-png")
         .arg("-singlefile")
         .arg("-r")
@@ -375,7 +417,7 @@ fn render_preview_page(root: &Path, slug: &str, lang: &str, pdf: &Path, n: u32) 
         .arg(pdf)
         .arg(&prefix)
         .output()
-        .map_err(|e| anyhow::anyhow!("running pdftoppm (is poppler on $PATH?): {e}"))?;
+        .map_err(|e| anyhow::anyhow!("running pdftoppm ({}): {e}", bin.display()))?;
     if !out.status.success() {
         anyhow::bail!(
             "pdftoppm failed on page {n}: {}",

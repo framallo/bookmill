@@ -45,7 +45,36 @@ async function init() {
   $('go').onclick = jumpToInput;
   $('jump').onkeydown = (e) => { if (e.key === 'Enter') jumpToInput(); };
   $('reload').onclick = loadWarnings;
+  wireShortcuts();
   load();
+}
+
+// Keyboard shortcuts: arrows page, Home/End jump to ends, `g` focuses the page
+// box, t/b/s toggle guides, `?` toggles help. Ignored while typing in a field.
+function wireShortcuts() {
+  const overlay = $('helpOverlay');
+  const toggleHelp = () => overlay.classList.toggle('open');
+  $('helpBtn').addEventListener('click', toggleHelp);
+  overlay.addEventListener('click', () => overlay.classList.remove('open'));
+  const toggle = (id) => { const el = $(id); el.checked = !el.checked; draw(); };
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { overlay.classList.remove('open'); return; }
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable;
+    if (typing) return;
+    switch (e.key) {
+      case 'ArrowLeft': e.preventDefault(); gotoSpread(spread - 1); break;
+      case 'ArrowRight': e.preventDefault(); gotoSpread(spread + 1); break;
+      case 'Home': e.preventDefault(); gotoSpread(0); break;
+      case 'End': e.preventDefault(); gotoSpread(lastSpread()); break;
+      case 'g': e.preventDefault(); $('jump').focus(); $('jump').select(); break;
+      case 't': e.preventDefault(); toggle('tTrim'); break;
+      case 'b': e.preventDefault(); toggle('tBleed'); break;
+      case 's': e.preventDefault(); toggle('tSafe'); break;
+      case '?': e.preventDefault(); toggleHelp(); break;
+    }
+  });
 }
 
 async function load() {
@@ -133,11 +162,16 @@ function drawPage(art, guides, page, ox, pageWpx, H, side, slug, lang) {
   }
   // page background + raster
   guides.add(new Konva.Rect({ x: ox, y: 0, width: pageWpx, height: H, fill: '#15191f' }));
-  Konva.Image.fromURL(`/api/preview/${slug}/${lang}/page/${page}?t=${Date.now()}`, (img) => {
+  const pageUrl = `/api/preview/${slug}/${lang}/page/${page}?t=${Date.now()}`;
+  Konva.Image.fromURL(pageUrl, (img) => {
     img.setAttrs({ x: ox, y: 0, width: pageWpx, height: H });
     art.add(img);
     art.draw();
-  }, () => {});
+  }, () => {
+    // The raster failed (e.g. pdftoppm missing / render error). Surface the
+    // backend's error text in the page slot instead of leaving it blank.
+    showPageError(art, page, ox, pageWpx, H, pageUrl);
+  });
 
   // page warned by the audit? tint the slot.
   if (warnPages.has(page)) {
@@ -145,6 +179,28 @@ function drawPage(art, guides, page, ox, pageWpx, H, side, slug, lang) {
   }
 
   drawGuides(guides, page, ox, pageWpx, H, side);
+}
+
+// Fetch the failing page URL to recover the backend error text and paint it on
+// the page slot (Konva.Image.fromURL swallows the HTTP body on error), so a
+// missing pdftoppm / render failure is visible instead of a blank frame.
+async function showPageError(art, page, ox, pageWpx, H, url) {
+  let detail = 'could not render this page';
+  try {
+    const res = await fetch(url);
+    if (!res.ok) detail = (await res.text()) || `HTTP ${res.status}`;
+  } catch (e) {
+    detail = (e && e.message) || String(e);
+  }
+  const pad = 12;
+  art.add(new Konva.Text({
+    x: ox + pad, y: pad, width: pageWpx - 2 * pad, height: H - 2 * pad,
+    text: `⚠ page ${page}\n\n${detail}`,
+    fontSize: 13, lineHeight: 1.4, fill: '#e5605f',
+    fontFamily: 'ui-monospace, Menlo, monospace', align: 'left', verticalAlign: 'middle',
+  }));
+  art.draw();
+  $('status').innerHTML = `<span class="err-msg">Preview render failed for page ${page}: ${detail}</span>`;
 }
 
 // Overlay trim / bleed / safe-margin rectangles for one page. Geometry is in

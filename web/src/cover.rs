@@ -19,6 +19,11 @@ pub const CANVAS_H: f64 = 2560.0;
 // Built-in defaults mirroring bookmill's cover_tmpl.rs.
 const DEFAULT_AUTHOR: &str = "Federico Ramallo";
 const DEFAULT_TITLE_SIZE: f64 = 120.0;
+const BADGE_ES: &str = "Serie Isla de la Libertad";
+const BADGE_EN: &str = "Liberty Island Series";
+const DEFAULT_ACCENT: &str = "#000000";
+const DEFAULT_TITLE_MT: &str = "auto";
+const DEFAULT_AUTHOR_MT: &str = "84px";
 
 /// Repo + books_dir, discovered once at startup.
 pub struct Repo {
@@ -121,6 +126,20 @@ pub struct CoverResponse {
     pub rendered_url: Option<String>,
     pub protected: bool,
     pub elements: Elements,
+    /// True when `[cover.<lang>.layout]` was present (positions came from the
+    /// saved layout). When false, the editor should compute the default flex
+    /// positions itself (matching `cover_svg.rs`'s flex render).
+    pub layout_saved: bool,
+    /// Fixed series badge drawn at top-center by the renderer (not draggable).
+    pub badge: String,
+    pub badge_color: String,
+    /// Accent color for the rule under the title block.
+    pub accent: String,
+    /// Flex spacing inputs the editor needs to reproduce the default layout:
+    /// title block's top margin and the author's top margin. CSS-ish: `auto`,
+    /// `<n>%` (of the 1360px content width), or `<n>px`.
+    pub title_mt: String,
+    pub author_mt: String,
 }
 
 #[derive(Serialize)]
@@ -183,6 +202,18 @@ pub fn load_cover(repo: &Repo, book: &BookSummary, lang: &str) -> Result<CoverRe
     let bg_file = cover_str(&book_doc, r, "bg").unwrap_or_else(|| "bg.jpg".into());
     let _ = bg_file; // served via /api/asset .../bg (resolves on disk)
 
+    // Fixed-decoration + flex-spacing fields so the editor can reproduce the
+    // renderer's default flex layout (title top with title_mt, badge above,
+    // subtitle under, author at bottom). Mirrors cover_tmpl.rs::resolve.
+    let accent = cover_str(&book_doc, r, "accent").unwrap_or_else(|| DEFAULT_ACCENT.into());
+    let badge = match lang {
+        "es" => cover_str(&book_doc, r, "badge_es").unwrap_or_else(|| BADGE_ES.into()),
+        _ => cover_str(&book_doc, r, "badge_en").unwrap_or_else(|| BADGE_EN.into()),
+    };
+    let badge_color = cover_str(&book_doc, r, "badge_color").unwrap_or_else(|| accent.clone());
+    let title_mt = cover_str(&book_doc, r, "title_mt").unwrap_or_else(|| DEFAULT_TITLE_MT.into());
+    let author_mt = cover_str(&book_doc, r, "author_mt").unwrap_or_else(|| DEFAULT_AUTHOR_MT.into());
+
     // Existing saved layout, if any, wins over computed defaults.
     let saved = read_saved_layout(&book_doc, lang);
 
@@ -229,6 +260,12 @@ pub fn load_cover(repo: &Repo, book: &BookSummary, lang: &str) -> Result<CoverRe
         rendered_url: rendered.map(|_| format!("/api/asset/{}/{}/rendered", book.slug, lang)),
         protected,
         elements: Elements { title: title_el, subtitle: sub_el, author: author_el },
+        layout_saved: saved.is_some(),
+        badge,
+        badge_color,
+        accent,
+        title_mt,
+        author_mt,
     })
 }
 
@@ -407,9 +444,15 @@ fn pick_lang_text(doc: &DocumentMut, lang: &str, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// [cover.<lang>].<key> as float.
+/// A TOML number read as f64, accepting either a float (`240.0`) or an integer
+/// (`240`) — `toml_edit::Value::as_float` is strict and returns None for ints.
+fn as_num(item: &Item) -> Option<f64> {
+    item.as_float().or_else(|| item.as_integer().map(|i| i as f64))
+}
+
+/// [cover.<lang>].<key> as a number (int or float).
 fn cover_lang_f(doc: &DocumentMut, lang: &str, key: &str) -> Option<f64> {
-    doc.get("cover")?.get(lang)?.get(key)?.as_float()
+    as_num(doc.get("cover")?.get(lang)?.get(key)?)
 }
 
 /// book [cover].<key> over repo [cover].<key> as string.
@@ -421,12 +464,12 @@ fn cover_str(book: &DocumentMut, repo: &DocumentMut, key: &str) -> Option<String
         .map(str::to_string)
 }
 
-/// book [cover].<key> over repo [cover].<key> as float.
+/// book [cover].<key> over repo [cover].<key> as a number (int or float).
 fn cover_f(book: &DocumentMut, repo: &DocumentMut, key: &str) -> Option<f64> {
     book.get("cover")
         .and_then(|c| c.get(key))
-        .and_then(|i| i.as_float())
-        .or_else(|| repo.get("cover").and_then(|c| c.get(key)).and_then(|i| i.as_float()))
+        .and_then(as_num)
+        .or_else(|| repo.get("cover").and_then(|c| c.get(key)).and_then(as_num))
 }
 
 fn round4(x: f64) -> f64 {

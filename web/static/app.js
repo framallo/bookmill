@@ -3,9 +3,15 @@
 
 const $ = (id) => document.getElementById(id);
 const W = 1600, H = 2560;            // authoritative front-cover pixel space
+// Flex-layout constants — must match cover_svg.rs::front_svg exactly.
+const PAD_X = 120, TOP = 150, BOTTOM = H - 150, CONTENT_W = W - 2 * PAD_X; // 1360
+const BADGE_SIZE = 32, BADGE_LH = 1.2, BADGE_LS = 9;
+const RULE_W = 220, RULE_H = 3, RULE_GAP = 46;
 let scale = 1;                       // display scale (canvas px -> screen px)
-let stage, artLayer, textLayer, guideLayer, tr;
+let stage, artLayer, decoLayer, textLayer, guideLayer, tr;
 let nodes = {};                      // {title, subtitle, author} -> Konva.Text
+let badgeNode = null, ruleNode = null; // fixed decorations (not draggable/saved)
+let accentColor = '#d4a937';
 let current = null;                  // selected key
 let bgRect, bgImage;
 let SLUG = null, LANG = null;        // scope: ?book=<slug>&lang=<lang>
@@ -32,7 +38,48 @@ async function init() {
   $('guidesOn').onchange = () => { guideLayer.visible($('guidesOn').checked); guideLayer.draw(); };
 
   bindStyleInputs();
+  wireShortcuts();
   loadCover();
+}
+
+// Keyboard shortcuts: Cmd/Ctrl+S saves; arrow keys nudge the selected element
+// (Shift = larger step); Esc deselects; `?` toggles the help overlay. Arrow
+// nudging and `?` are ignored while typing in a field (so text edits are safe).
+function wireShortcuts() {
+  const overlay = $('helpOverlay');
+  const toggleHelp = () => overlay.classList.toggle('open');
+  $('helpBtn').addEventListener('click', toggleHelp);
+  overlay.addEventListener('click', () => overlay.classList.remove('open'));
+
+  document.addEventListener('keydown', (e) => {
+    // Cmd/Ctrl+S saves from anywhere (even while typing).
+    if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S')) {
+      e.preventDefault();
+      if (!$('saveBtn').disabled) save();
+      return;
+    }
+    if (e.key === 'Escape') {
+      if (overlay.classList.contains('open')) { overlay.classList.remove('open'); return; }
+      if (current) select(null);
+      return;
+    }
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable;
+    if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === '?') { e.preventDefault(); toggleHelp(); return; }
+    // Arrow-key nudge of the selected element.
+    const arrows = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+    if (current && arrows[e.key]) {
+      e.preventDefault();
+      const step = e.shiftKey ? 40 : 8;   // canvas px
+      const [dx, dy] = arrows[e.key];
+      const n = nodes[current];
+      n.x(n.x() + dx * step);
+      n.y(n.y() + dy * step);
+      if (current === 'title') updateDecorations();
+      if (tr) tr.forceUpdate();
+      textLayer.batchDraw();
+    }
+  });
 }
 
 async function loadCover() {
@@ -64,9 +111,17 @@ function buildStage(data) {
   stage.scale({ x: scale, y: scale });
 
   artLayer = new Konva.Layer();
+  decoLayer = new Konva.Layer({ listening: false });
   textLayer = new Konva.Layer();
   guideLayer = new Konva.Layer({ listening: false });
-  stage.add(artLayer, textLayer, guideLayer);
+  stage.add(artLayer, decoLayer, textLayer, guideLayer);
+
+  accentColor = data.accent || '#d4a937';
+
+  // No saved [cover.<lang>.layout] → seed title/subtitle/author at the SAME
+  // positions cover_svg.rs's flex render uses (title top with title_mt, subtitle
+  // under, author at bottom), so the editor is WYSIWYG with "What ships".
+  if (!data.layout_saved) applyFlexDefaults(data);
 
   // bg solid + image
   bgRect = new Konva.Rect({ x: 0, y: 0, width: W, height: H, fill: data.bgcolor });
@@ -86,6 +141,23 @@ function buildStage(data) {
   nodes = {};
   current = null;
   ['title', 'subtitle', 'author'].forEach(key => makeText(key, data.elements[key]));
+
+  // Fixed decorations the renderer always draws but the editor does not save:
+  // the series badge (top-center) and the accent rule under the title block.
+  badgeNode = new Konva.Text({
+    text: (data.badge || '').toUpperCase(),
+    x: PAD_X, y: TOP, width: CONTENT_W, align: 'center',
+    fontSize: BADGE_SIZE, fontFamily: 'Montserrat, sans-serif',
+    letterSpacing: BADGE_LS, fill: data.badge_color || accentColor,
+    opacity: 0.95, listening: false,
+  });
+  decoLayer.add(badgeNode);
+  ruleNode = new Konva.Rect({
+    x: W / 2 - RULE_W / 2, y: TOP, width: RULE_W, height: RULE_H,
+    fill: accentColor, opacity: 0.85, listening: false,
+  });
+  decoLayer.add(ruleNode);
+  updateDecorations();
 
   // transformer
   tr = new Konva.Transformer({
@@ -130,12 +202,14 @@ function makeText(key, el) {
 
   node.on('click tap', (e) => { e.cancelBubble = true; select(key); });
   node.on('dblclick dbltap', () => { select(key); $('selText').focus(); });
+  if (key === 'title') node.on('dragmove', updateDecorations);
   node.on('transformend', () => {
     const s = node.scaleX();
     node.fontSize(Math.max(6, node.fontSize() * s));
     node.width(node.width() * s);
     node.scaleX(1); node.scaleY(1);
     textLayer.batchDraw();
+    if (key === 'title') updateDecorations();
     if (current === key) selectPanel();
   });
   textLayer.add(node);
@@ -190,6 +264,99 @@ function drawGuides() {
   guideLayer.add(new Konva.Line({ points: [W / 2, 0, W / 2, H], stroke: '#d4a937', strokeWidth: 1, dash: [6, 10], opacity: 0.4 }));
   guideLayer.visible($('guidesOn').checked);
   guideLayer.draw();
+}
+
+// Keep the accent rule glued under the title block (renderer draws it 46px below
+// the title, centered); badge stays fixed at the top.
+function updateDecorations() {
+  if (ruleNode && nodes.title) {
+    const t = nodes.title;
+    ruleNode.y(t.y() + t.height() + RULE_GAP);
+    ruleNode.x(t.x() + t.width() / 2 - RULE_W / 2);
+  }
+  if (decoLayer) decoLayer.batchDraw();
+}
+
+// Reproduce cover_svg.rs::front_svg's flex stack to seed default element centers
+// when no [cover.<lang>.layout] is saved. Mutates data.elements.{title,subtitle,
+// author}.{x_pct,y_pct} in place. Coordinates are canvas px (1600x2560).
+function applyFlexDefaults(data) {
+  const els = data.elements;
+  const titleSize = els.title.font_pct * H;
+  const subSize = els.subtitle.font_pct * H;
+
+  const badgeH = BADGE_SIZE * BADGE_LH;                      // 38.4
+  const titleLines = twoLineParts(els.title.text).length;   // 1 or 2
+  const titleH = titleLines * (titleSize * 1.05);
+  const ruleBlock = RULE_GAP + RULE_H;                       // 49
+  const subLines = wrapCount(els.subtitle.text, subSize, els.subtitle.font_style, CONTENT_W);
+  const subBlockH = subLines * (subSize * 1.3);
+  const subH = 40 + subBlockH;
+  const titleBlockH = titleH + ruleBlock + subH;
+  const authorH = 42 * 1.2;                                 // 50.4
+
+  const g1m = parseMargin(data.title_mt, CONTENT_W);         // title block top
+  const g2m = parseMargin(data.author_mt, CONTENT_W);        // author top
+  const fixed = badgeH + titleBlockH + authorH + (g1m.auto ? 0 : g1m.px) + (g2m.auto ? 0 : g2m.px);
+  const autos = (g1m.auto ? 1 : 0) + (g2m.auto ? 1 : 0);
+  const leftover = Math.max(0, BOTTOM - TOP - fixed);
+  const share = autos > 0 ? leftover / autos : 0;
+  const g1 = g1m.auto ? share : g1m.px;
+  const g2 = g2m.auto ? share : g2m.px;
+
+  let y = TOP;
+  y += badgeH + g1;                       // title top
+  const titleCenter = y + titleH / 2;
+  y += titleH + ruleBlock;                // past title + rule
+  const subTop = y + 40;
+  const subCenter = subTop + subBlockH / 2;
+  y = subTop + subBlockH + g2;            // author top
+  const authorCenter = y + authorH / 2;
+
+  els.title.y_pct = titleCenter / H;
+  els.subtitle.y_pct = subCenter / H;
+  els.author.y_pct = authorCenter / H;
+  els.title.x_pct = els.subtitle.x_pct = els.author.x_pct = 0.5;
+}
+
+// Balanced two-line split, mirroring cover_tmpl.rs::two_line_parts.
+function twoLineParts(s) {
+  const words = (s || '').split(/\s+/).filter(Boolean);
+  if (words.length < 2) return [s || ''];
+  const half = [...(s || '')].length / 2;
+  let bestI = 1, bestD = Infinity, cur = 0;
+  for (let i = 1; i < words.length; i++) {
+    cur += [...words[i - 1]].length + 1;
+    const d = Math.abs(cur - half);
+    if (d < bestD) { bestD = d; bestI = i; }
+  }
+  return [words.slice(0, bestI).join(' '), words.slice(bestI).join(' ')];
+}
+
+// Count greedy word-wrap lines for `text` at `size` px within `maxW`, using
+// canvas metrics (approximates cover_svg.rs::wrap; exact wrap needs bundled font
+// metrics, but line-count is what drives the vertical stack).
+const _measureCtx = document.createElement('canvas').getContext('2d');
+function wrapCount(text, size, style, maxW) {
+  const words = (text || '').split(/\s+/).filter(Boolean);
+  if (!words.length) return 1;
+  const italic = (style || '').includes('italic') ? 'italic ' : '';
+  _measureCtx.font = `${italic}500 ${size}px Montserrat, sans-serif`;
+  let lines = 1, cur = '';
+  for (const w of words) {
+    const trial = cur ? cur + ' ' + w : w;
+    if (_measureCtx.measureText(trial).width <= maxW || !cur) cur = trial;
+    else { lines++; cur = w; }
+  }
+  return lines;
+}
+
+// Parse a flex margin: `auto`, `<n>%` (of ref width), or `<n>px`/`<n>`.
+function parseMargin(s, refW) {
+  s = (s || '').trim();
+  if (s === 'auto') return { auto: true, px: 0 };
+  if (s.endsWith('%')) return { auto: false, px: (parseFloat(s) || 0) / 100 * refW };
+  return { auto: false, px: parseFloat(s) || 0 };
 }
 
 function elJSON(key) {
