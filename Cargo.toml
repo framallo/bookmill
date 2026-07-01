@@ -8,6 +8,13 @@ description = "Convention-over-configuration book publishing pipeline (EPUB/PDF/
 name = "bookmill"
 path = "src/main.rs"
 
+# Thin library surface: exposes the shared cover-config resolver so the web cover
+# editor and `build cover` agree by construction (M8). The bin references it as
+# `bookmill::…`; the standalone `web/` crate depends on it by path.
+[lib]
+name = "bookmill"
+path = "src/lib.rs"
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
