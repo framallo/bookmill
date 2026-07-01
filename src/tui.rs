@@ -41,8 +41,36 @@ pub enum Action {
     Audiobook { book: String, lang: String },
 }
 
-/// Actions the TUI can run (display name, one-line description).
+/// The focusable column-lists on the selector screen, left → right in tab order.
+/// ←/→ move focus between them; ↑/↓ move the selection within the focused one.
+#[derive(Clone, Copy, PartialEq)]
+enum Pane {
+    Books,
+    Action,
+    Format,
+    Language,
+    Edition,
+}
+
+impl Pane {
+    /// Focus order for ←/→ (wraps around).
+    const ORDER: [Pane; 5] = [Pane::Books, Pane::Action, Pane::Format, Pane::Language, Pane::Edition];
+    fn idx(self) -> usize {
+        Self::ORDER.iter().position(|&p| p == self).unwrap_or(0)
+    }
+    fn next(self) -> Pane {
+        Self::ORDER[(self.idx() + 1) % Self::ORDER.len()]
+    }
+    fn prev(self) -> Pane {
+        Self::ORDER[(self.idx() + Self::ORDER.len() - 1) % Self::ORDER.len()]
+    }
+}
+
+/// Actions the TUI can run (display name, one-line description). "all" is first
+/// (the default) so the action list, like the others, starts with the
+/// build-everything choice; it runs the same pipeline as Release.
 const ACTIONS: &[(&str, &str)] = &[
+    ("all", "run everything: all editions + covers + deep validate"),
     ("Build", "quick build of the selected format/edition — no checks"),
     ("Release", "complete: all editions + covers + deep validate"),
     ("Validate", "deep checks: epubcheck + PDF geometry + cover"),
@@ -50,8 +78,52 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Audiobook", "render audiobook (kab engine)"),
 ];
 
-/// Format selector options; "edition" means use the edition selector instead.
-const FORMATS: &[&str] = &["edition", "all", "epub", "pdf", "kdp", "print"];
+/// Format selector options; "all" first (the default) so the cursor starts on the
+/// build-everything choice. "edition" means use the edition selector instead.
+const FORMATS: &[&str] = &["all", "edition", "epub", "pdf", "kdp", "print"];
+
+/// Single source of truth for the copy-pasteable command a selection maps to.
+/// Shared by the live TUI preview (draw loop) and `Action::command()` (printed by
+/// main just before the action runs), so what you see is what runs.
+fn cmd_string(action: &str, slug: &str, lang: &str, edition: &str, format: &str) -> String {
+    let langflag = if lang != "all" {
+        format!(" --lang {lang}")
+    } else {
+        String::new()
+    };
+    match action {
+        "Validate" => format!("bookmill validate {slug} --deep"),
+        "Covers" => format!("bookmill build cover {slug}{langflag}"),
+        "Audiobook" => format!("bookmill audiobook {slug}{langflag}"),
+        "Release" | "all" => format!("bookmill build {slug}{langflag} ; build cover ; validate --deep"),
+        _ => {
+            let mut c = format!("bookmill build {slug}");
+            if format == "edition" {
+                if edition != "all" {
+                    c.push_str(&format!(" --edition {edition}"));
+                }
+            } else {
+                c.push_str(&format!(" --format {format}"));
+            }
+            c.push_str(&langflag);
+            c
+        }
+    }
+}
+
+impl Action {
+    /// A clear, copy-pasteable representation of the command this action runs —
+    /// printed by main just before execution so the user sees exactly what runs.
+    pub fn command(&self) -> String {
+        match self {
+            Action::Build(r) => cmd_string("Build", &r.book, &r.lang, &r.edition, &r.format),
+            Action::Release(r) => cmd_string("Release", &r.book, &r.lang, &r.edition, &r.format),
+            Action::Validate { book } => cmd_string("Validate", book, "all", "all", "edition"),
+            Action::Covers { book, lang } => cmd_string("Covers", book, lang, "all", "edition"),
+            Action::Audiobook { book, lang } => cmd_string("Audiobook", book, lang, "all", "edition"),
+        }
+    }
+}
 
 fn format_outputs(fmt: &str) -> &'static str {
     match fmt {
@@ -114,8 +186,12 @@ pub fn run(repo: &Repo) -> Result<Option<Action>> {
     bsel.select(Some(0));
     let mut lang_i = 0usize; // 0 = all
     let mut ed_i = 0usize; // 0 = all
-    let mut fmt_i = 0usize; // 0 = "edition" (use edition selector)
+    let mut fmt_i = 0usize; // 0 = "all" (build every format — the default)
     let mut act_i = 0usize; // index into ACTIONS
+    // Which column-list has keyboard focus. ↑/↓ move the selection inside it,
+    // ←/→ jump focus between lists. Each list keeps its own cursor (the *_i vars),
+    // so focus changes never reset a list's position.
+    let mut focus = Pane::Books;
     let mut result: Option<Action> = None;
 
     let opts = |first: &str, rest: &[String]| {
@@ -135,28 +211,10 @@ pub fn run(repo: &Repo) -> Result<Option<Action>> {
             let format = FORMATS[fmt_i % FORMATS.len()].to_string();
             let by_edition = format == "edition";
             let action = ACTIONS[act_i % ACTIONS.len()];
-            let is_build = matches!(action.0, "Build" | "Release");
+            let is_build = matches!(action.0, "all" | "Build" | "Release");
 
-            // command preview (action-aware)
-            let langflag = if lang != "all" { format!(" --lang {lang}") } else { String::new() };
-            let cmd = match action.0 {
-                "Validate" => format!("bookmill validate {} --deep", book.slug),
-                "Covers" => format!("bookmill build cover {}{langflag}", book.slug),
-                "Audiobook" => format!("bookmill audiobook {}{langflag}", book.slug),
-                "Release" => format!("bookmill build {0}{langflag} ; build cover ; validate --deep", book.slug),
-                _ => {
-                    let mut c = format!("bookmill build {}", book.slug);
-                    if by_edition {
-                        if edition != "all" {
-                            c.push_str(&format!(" --edition {edition}"));
-                        }
-                    } else {
-                        c.push_str(&format!(" --format {format}"));
-                    }
-                    c.push_str(&langflag);
-                    c
-                }
-            };
+            // command preview (action-aware) — same string main prints before running
+            let cmd = cmd_string(action.0, &book.slug, &lang, &edition, &format);
             // outputs description
             let outputs = if !by_edition {
                 format_outputs(&format).to_string()
@@ -184,42 +242,105 @@ pub fn run(repo: &Repo) -> Result<Option<Action>> {
                     v[0],
                 );
 
-                // stacked top/bottom: books list above, build-target panel below
-                let rows = Layout::vertical([Constraint::Min(6), Constraint::Length(18)]).split(v[1]);
+                // stacked: books list, then a row of full option lists, then the preview
+                let rows = Layout::vertical([
+                    Constraint::Min(5),    // books list
+                    Constraint::Length(9), // option lists (action/format/language/edition)
+                    Constraint::Length(8), // preview panel
+                ])
+                .split(v[1]);
 
-                // books list
+                // A focused list gets a bright yellow border; unfocused stays gray.
+                let border = |focused: bool| {
+                    if focused {
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    }
+                };
+                let books_focused = focus == Pane::Books;
+
+                // books list — full list of every book
                 let items: Vec<ListItem> = books
                     .iter()
                     .map(|b| ListItem::new(format!("{}  ·  {}", b.slug, b.title)))
                     .collect();
                 f.render_stateful_widget(
                     List::new(items)
-                        .block(Block::default().borders(Borders::ALL).title(" Books  (↑/↓) "))
+                        .block(
+                            Block::default()
+                                .borders(Borders::ALL)
+                                .border_style(border(books_focused))
+                                .title(" Books "),
+                        )
                         .highlight_symbol("▶ ")
                         .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD | Modifier::REVERSED)),
                     rows[0],
                     &mut bsel.clone(),
                 );
 
-                // build-target panel
-                let chip = |s: &str| Span::styled(format!(" {s} "), Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD));
-                let key = |s: &'static str| Span::styled(s, Style::default().fg(Color::DarkGray));
+                // Row of option lists: every action / format / language / edition, all
+                // visible at once with the current pick highlighted.
+                let cols = Layout::horizontal([
+                    Constraint::Percentage(28), // Action
+                    Constraint::Percentage(18), // Format
+                    Constraint::Percentage(22), // Language
+                    Constraint::Percentage(32), // Edition
+                ])
+                .split(rows[1]);
+
+                // Reusable option-list renderer: draws all `items`, highlighting `sel`.
+                // `focused` = has keyboard focus (bright border). `active` = relevant to
+                // the current action; when false the list is dimmed (n/a, e.g. Format
+                // when the action isn't a build).
+                let mut opt_list =
+                    |area: Rect, title: &str, items: &[String], sel: usize, active: bool, focused: bool| {
+                        let hl = if active { Color::Cyan } else { Color::DarkGray };
+                        let title_style = if focused {
+                            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                        } else if active {
+                            Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default().fg(Color::DarkGray)
+                        };
+                        let li: Vec<ListItem> =
+                            items.iter().map(|s| ListItem::new(s.clone())).collect();
+                        let mut st = ListState::default();
+                        if !items.is_empty() {
+                            st.select(Some(sel.min(items.len() - 1)));
+                        }
+                        f.render_stateful_widget(
+                            List::new(li)
+                                .block(
+                                    Block::default()
+                                        .borders(Borders::ALL)
+                                        .border_style(border(focused))
+                                        .title(Span::styled(title.to_string(), title_style)),
+                                )
+                                .highlight_symbol("▶ ")
+                                .highlight_style(
+                                    Style::default().fg(hl).add_modifier(Modifier::BOLD | Modifier::REVERSED),
+                                ),
+                            area,
+                            &mut st,
+                        );
+                    };
+
+                let act_items: Vec<String> = ACTIONS.iter().map(|(n, _)| n.to_string()).collect();
+                let fmt_items: Vec<String> = FORMATS.iter().map(|s| s.to_string()).collect();
+                let lang_active = action.0 != "Validate";
+                opt_list(cols[0], " Action ", &act_items, act_i % ACTIONS.len(), true, focus == Pane::Action);
+                opt_list(cols[1], " Format ", &fmt_items, fmt_i % FORMATS.len(), is_build, focus == Pane::Format);
+                opt_list(cols[2], " Language ", &lopts, lang_i.min(lopts.len() - 1), lang_active, focus == Pane::Language);
+                opt_list(cols[3], " Edition ", &eopts, ed_i.min(eopts.len() - 1), is_build && by_edition, focus == Pane::Edition);
+
+                // preview panel — resolved selection + the exact command that will run
                 let lbl = |s: &'static str| Span::styled(s, Style::default().fg(Color::Gray));
-                let ed_hint = if by_edition { "e / E change" } else { "(format mode — n/a)" };
-                let act_chip = Span::styled(format!(" {} ", action.0), Style::default().fg(Color::Black).bg(Color::Magenta).add_modifier(Modifier::BOLD));
-                let dim = |s: &str| Span::styled(format!(" {s} "), Style::default().fg(Color::DarkGray));
                 let lines = vec![
-                    Line::from(vec![lbl("Action    "), act_chip, Span::raw("  "), key("a / A change")]),
-                    Line::from(vec![lbl("          "), Span::styled(action.1, Style::default().fg(Color::DarkGray))]),
-                    Line::raw(""),
+                    Line::from(vec![lbl("Action    "), Span::styled(format!("{} — {}", action.0, action.1), Style::default().fg(Color::Magenta))]),
                     Line::from(vec![lbl("Book      "), Span::styled(&book.slug, Style::default().fg(Color::White).add_modifier(Modifier::BOLD))]),
-                    Line::from(vec![lbl("Language  "), chip(&lang), Span::raw("  "), key("l / L change")]),
-                    Line::from(vec![lbl("Format    "), if is_build { chip(&format) } else { dim(&format) }, Span::raw("  "), key(if is_build { "f / F change" } else { "(n/a)" })]),
-                    Line::from(vec![lbl("Edition   "), if is_build && by_edition { chip(&edition) } else { dim(&edition) }, Span::raw("  "), key(if is_build { ed_hint } else { "(n/a)" })]),
-                    Line::raw(""),
                     Line::from(vec![lbl(if is_build { "Builds    " } else { "Does      " }), Span::styled(if is_build { outputs } else { action.1.to_string() }, Style::default().fg(Color::Green))]),
                     Line::from(vec![lbl("Language  "), Span::styled(langs_desc, Style::default().fg(Color::Green))]),
-                    Line::raw(""),
                     Line::from(vec![lbl("Runs      "), Span::styled(cmd, Style::default().fg(Color::Yellow))]),
                     Line::raw(""),
                     Line::from(Span::styled(format!("  press ⏎ Enter to run: {}  ", action.0), Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD))),
@@ -227,23 +348,19 @@ pub fn run(repo: &Repo) -> Result<Option<Action>> {
                 f.render_widget(
                     Paragraph::new(lines)
                         .wrap(Wrap { trim: true })
-                        .block(Block::default().borders(Borders::ALL).title(" Build target ")),
-                    rows[1],
+                        .block(Block::default().borders(Borders::ALL).title(" Selection ")),
+                    rows[2],
                 );
 
                 // help box
                 f.render_widget(
                     Paragraph::new(Line::from(vec![
+                        Span::styled(" ←/→ ", Style::default().fg(Color::Black).bg(Color::Yellow)),
+                        Span::raw(" focus list   "),
                         Span::styled(" ↑/↓ ", Style::default().fg(Color::Black).bg(Color::Gray)),
-                        Span::raw(" book   "),
-                        Span::styled(" f/F ", Style::default().fg(Color::Black).bg(Color::Gray)),
-                        Span::raw(" format   "),
-                        Span::styled(" l/L ", Style::default().fg(Color::Black).bg(Color::Gray)),
-                        Span::raw(" language   "),
-                        Span::styled(" e/E ", Style::default().fg(Color::Black).bg(Color::Gray)),
-                        Span::raw(" edition   "),
-                        Span::styled(" a/A ", Style::default().fg(Color::Black).bg(Color::Magenta)),
-                        Span::raw(" action   "),
+                        Span::raw(" move in list   "),
+                        Span::styled(" a f l e ", Style::default().fg(Color::Black).bg(Color::Gray)),
+                        Span::raw(" jump to action/format/lang/edition   "),
                         Span::styled(" Enter ", Style::default().fg(Color::Black).bg(Color::Green)),
                         Span::raw(" run   "),
                         Span::styled(" q ", Style::default().fg(Color::Black).bg(Color::Red)),
@@ -256,30 +373,39 @@ pub fn run(repo: &Repo) -> Result<Option<Action>> {
 
             if let Event::Key(k) = event::read()? {
                 let nb = books.len();
+                // ↑/↓ helpers: clamp within a list of length `len`.
+                let dec = |i: usize| i.saturating_sub(1);
+                let inc = |i: usize, len: usize| (i + 1).min(len.saturating_sub(1));
                 match k.code {
                     KeyCode::Char('q') | KeyCode::Esc => break,
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        bsel.select(Some((bi + 1).min(nb - 1)));
-                        lang_i = 0;
-                        ed_i = 0;
-                    }
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        bsel.select(Some(bi.saturating_sub(1)));
-                        lang_i = 0;
-                        ed_i = 0;
-                    }
-                    KeyCode::Char('f') | KeyCode::Right => fmt_i = (fmt_i + 1) % FORMATS.len(),
-                    KeyCode::Char('F') | KeyCode::Left => fmt_i = (fmt_i + FORMATS.len() - 1) % FORMATS.len(),
-                    KeyCode::Char('l') => lang_i = (lang_i + 1) % lopts.len(),
-                    KeyCode::Char('L') => lang_i = (lang_i + lopts.len() - 1) % lopts.len(),
-                    KeyCode::Char('e') => ed_i = (ed_i + 1) % eopts.len(),
-                    KeyCode::Char('E') => ed_i = (ed_i + eopts.len() - 1) % eopts.len(),
-                    KeyCode::Char('a') => act_i = (act_i + 1) % ACTIONS.len(),
-                    KeyCode::Char('A') => act_i = (act_i + ACTIONS.len() - 1) % ACTIONS.len(),
+                    // ←/→ : move focus between lists — each keeps its own cursor.
+                    KeyCode::Left => focus = focus.prev(),
+                    KeyCode::Right => focus = focus.next(),
+                    // ↑/↓ (or k/j): move the selection inside the focused list.
+                    KeyCode::Up | KeyCode::Char('k') => match focus {
+                        Pane::Books => bsel.select(Some(dec(bi))),
+                        Pane::Action => act_i = dec(act_i),
+                        Pane::Format => fmt_i = dec(fmt_i),
+                        Pane::Language => lang_i = dec(lang_i),
+                        Pane::Edition => ed_i = dec(ed_i),
+                    },
+                    KeyCode::Down | KeyCode::Char('j') => match focus {
+                        Pane::Books => bsel.select(Some(inc(bi, nb))),
+                        Pane::Action => act_i = inc(act_i, ACTIONS.len()),
+                        Pane::Format => fmt_i = inc(fmt_i, FORMATS.len()),
+                        Pane::Language => lang_i = inc(lang_i, lopts.len()),
+                        Pane::Edition => ed_i = inc(ed_i, eopts.len()),
+                    },
+                    // Single-key jumps straight to a list (then ↑/↓ to change it).
+                    KeyCode::Char('b') => focus = Pane::Books,
+                    KeyCode::Char('a') => focus = Pane::Action,
+                    KeyCode::Char('f') => focus = Pane::Format,
+                    KeyCode::Char('l') => focus = Pane::Language,
+                    KeyCode::Char('e') => focus = Pane::Edition,
                     KeyCode::Enter => {
                         let b = book.slug.clone();
                         result = Some(match action.0 {
-                            "Release" => Action::Release(BuildReq { book: b, lang, edition, format }),
+                            "Release" | "all" => Action::Release(BuildReq { book: b, lang, edition, format }),
                             "Validate" => Action::Validate { book: b },
                             "Covers" => Action::Covers { book: b, lang },
                             "Audiobook" => Action::Audiobook { book: b, lang },
@@ -311,7 +437,9 @@ enum JobStatus {
 
 /// Live queue progress screen: runs the build in a scoped thread and renders the
 /// job list (✓ / ▶ / ·) with an ETA line + gauge. Returns Err if any job failed.
-pub fn run_queue_ui(repo: &Repo, jobs: &[Job]) -> Result<()> {
+/// `cmd` is the command this queue represents, shown in the header so the user
+/// sees what is running (the alt-screen hides anything printed to stdout before).
+pub fn run_queue_ui(repo: &Repo, jobs: &[Job], cmd: &str) -> Result<()> {
     if jobs.is_empty() {
         println!("(no jobs to build)");
         return Ok(());
@@ -401,7 +529,8 @@ pub fn run_queue_ui(repo: &Repo, jobs: &[Job]) -> Result<()> {
                                 .bg(Color::Yellow)
                                 .add_modifier(Modifier::BOLD),
                         ),
-                        Span::styled("  building queue", Style::default().fg(Color::Gray)),
+                        Span::styled("  running: ", Style::default().fg(Color::Gray)),
+                        Span::styled(cmd, Style::default().fg(Color::Yellow)),
                     ])),
                     v[0],
                 );

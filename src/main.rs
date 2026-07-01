@@ -250,32 +250,39 @@ fn main() -> Result<()> {
         }
         Cmd::Content { book, lang } => cmd_content(&repo, &book, &lang)?,
         Cmd::Tui => match tui::run(&repo)? {
-            Some(tui::Action::Build(req)) => {
-                let jobs = tui::jobs_for_req(&repo, &req)?;
-                tui::run_queue_ui(&repo, &jobs)?;
-            }
-            Some(tui::Action::Release(req)) => {
-                // complete build: all editions -> covers -> deep validate
-                let lang = (req.lang != "all").then_some(req.lang.clone());
-                let all = tui::BuildReq {
-                    book: req.book.clone(),
-                    lang: req.lang.clone(),
-                    edition: "all".into(),
-                    format: "edition".into(),
-                };
-                let jobs = tui::jobs_for_req(&repo, &all)?;
-                tui::run_queue_ui(&repo, &jobs)?;
-                covers::run(&repo, Some(req.book.clone()), lang, false, None, covers::Engine::Resvg)?;
-                deep::run(&repo, Some(req.book), false)?;
-            }
-            Some(tui::Action::Validate { book }) => deep::run(&repo, Some(book), false)?,
-            Some(tui::Action::Covers { book, lang }) => {
-                let lang = (lang != "all").then_some(lang);
-                covers::run(&repo, Some(book), lang, false, None, covers::Engine::Resvg)?;
-            }
-            Some(tui::Action::Audiobook { book, lang }) => {
-                let lang = (lang != "all").then_some(lang);
-                audiobook::run(&repo, Some(book), lang, None, None, false)?;
+            Some(action) => {
+                // Show the exact command about to run, before running it.
+                let cmd = action.command();
+                println!("\n\u{25b6} running: {cmd}\n");
+                match action {
+                    tui::Action::Build(req) => {
+                        let jobs = tui::jobs_for_req(&repo, &req)?;
+                        tui::run_queue_ui(&repo, &jobs, &cmd)?;
+                    }
+                    tui::Action::Release(req) => {
+                        // complete build: all editions -> covers -> deep validate
+                        let lang = (req.lang != "all").then_some(req.lang.clone());
+                        let all = tui::BuildReq {
+                            book: req.book.clone(),
+                            lang: req.lang.clone(),
+                            edition: "all".into(),
+                            format: "edition".into(),
+                        };
+                        let jobs = tui::jobs_for_req(&repo, &all)?;
+                        tui::run_queue_ui(&repo, &jobs, &cmd)?;
+                        covers::run(&repo, Some(req.book.clone()), lang, false, None, covers::Engine::Resvg)?;
+                        deep::run(&repo, Some(req.book), false)?;
+                    }
+                    tui::Action::Validate { book } => deep::run(&repo, Some(book), false)?,
+                    tui::Action::Covers { book, lang } => {
+                        let lang = (lang != "all").then_some(lang);
+                        covers::run(&repo, Some(book), lang, false, None, covers::Engine::Resvg)?;
+                    }
+                    tui::Action::Audiobook { book, lang } => {
+                        let lang = (lang != "all").then_some(lang);
+                        audiobook::run(&repo, Some(book), lang, None, None, false)?;
+                    }
+                }
             }
             None => println!("(nothing selected)"),
         },
