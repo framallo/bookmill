@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>bookmill</title>
+<style>
+  html, body { height:100%; margin:0; }
+  body { background:#11151c; color:#e7edf3; font:14px/1.5 system-ui,Segoe UI,Roboto,sans-serif;
+         display:flex; align-items:center; justify-content:center; }
+  .box { text-align:center; }
+  .logo { width:44px; height:44px; color:#d4a937; margin-bottom:14px; }
+  h1 { font-size:20px; margin:0 0 6px; font-weight:600; }
+  p { color:#8a98a8; margin:0; }
+  .spin { margin-top:20px; width:22px; height:22px; border:3px solid #2c3543;
+          border-top-color:#d4a937; border-radius:50%; display:inline-block;
+          animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+  <div class="box">
+    <svg class="logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+    </svg>
+    <h1>bookmill</h1>
+    <p>Starting the library…</p>
+    <div class="spin"></div>
+  </div>
+</body>
+</html>

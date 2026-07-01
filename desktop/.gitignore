@@ -1,0 +1,6 @@
+# Rust / Tauri build artifacts
+src-tauri/target/
+src-tauri/gen/
+# Bundled bookmill CLI (copied in at build time from the main crate)
+src-tauri/resources/
+# Cargo lock for the app crate is kept (see below); binaries are not.

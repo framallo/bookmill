@@ -14,6 +14,7 @@ mod pdfmeta;
 mod cover_tmpl;
 mod covers;
 mod deep;
+mod desktop;
 mod discover;
 mod tui;
 mod typst_pdf;
@@ -131,6 +132,16 @@ enum Cmd {
     /// Launch the cover-editor web UI (localhost)
     Web {
         /// listen port (localhost only)
+        #[arg(long, default_value_t = 7777)]
+        port: u16,
+        /// spine page count used only when a book's print interior PDF is missing
+        #[arg(long, default_value_t = 120)]
+        pages: u32,
+    },
+    /// Launch the native desktop app (Tauri window over the web UI)
+    #[command(alias = "desktop")]
+    Tauri {
+        /// fallback web port if the desktop app isn't built (localhost only)
         #[arg(long, default_value_t = 7777)]
         port: u16,
         /// spine page count used only when a book's print interior PDF is missing
@@ -314,6 +325,7 @@ fn main() -> Result<()> {
             audiobook::run(&repo, book, lang, voice, speed, force)?;
         }
         Cmd::Web { port, pages } => web::run(&repo.root, port, pages)?,
+        Cmd::Tauri { port, pages } => desktop::run(&repo.root, port, pages)?,
     }
     Ok(())
 }
