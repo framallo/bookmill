@@ -18,9 +18,10 @@ mod render;
 
 use anyhow::Result;
 use axum::{
-    extract::{Path as AxPath, State},
+    extract::{Path as AxPath, Request, State},
     http::{header, StatusCode},
-    response::{Html, IntoResponse, Json},
+    middleware::{self, Next},
+    response::{Html, IntoResponse, Json, Response},
     routing::get,
     Router,
 };
@@ -30,7 +31,6 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
-use tower_http::cors::CorsLayer;
 
 /// Preview rasterization DPI for `pdftoppm` (legible spread, modest file size).
 const PREVIEW_DPI: u32 = 110;
@@ -88,7 +88,13 @@ async fn serve(repo_root: PathBuf, port: u16, pages: u32) -> Result<()> {
         .route("/api/preview/{book}/{lang}", get(api_preview_meta))
         .route("/api/preview/{book}/{lang}/page/{n}", get(api_preview_page))
         .route("/api/warnings/{book}/{lang}", get(api_warnings))
-        .layer(CorsLayer::permissive())
+        // DNS-rebinding guard: the server binds to 127.0.0.1 and its routes write
+        // `bookmill.toml` and spawn processes, so reject any request whose Host
+        // header isn't a loopback name (H2). The desktop WKWebView and a local
+        // browser both send `127.0.0.1`/`localhost`; a rebinding attacker page
+        // would carry its own hostname and is rejected. No CORS layer: the SPA is
+        // same-origin and needs none (dropping the former permissive `*`).
+        .layer(middleware::from_fn(guard_host))
         .with_state(state);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
@@ -98,6 +104,30 @@ async fn serve(repo_root: PathBuf, port: u16, pages: u32) -> Result<()> {
     println!("  Previewer:     http://{addr}/preview.html?book=<slug>&lang=<lang>\n");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// Loopback-only Host guard (anti-DNS-rebinding). Accepts requests whose Host
+/// header names a loopback host (`localhost`, `127.0.0.1`, `::1`) on any port,
+/// and requests with no Host header (HTTP/1.0 / same-process probes). Rejects
+/// everything else with 403 so a rebinding page pointing a public hostname at
+/// 127.0.0.1 cannot drive the config-writing / process-spawning API.
+async fn guard_host(req: Request, next: Next) -> Response {
+    match req.headers().get(header::HOST) {
+        None => next.run(req).await,
+        Some(h) => {
+            let host = h.to_str().unwrap_or("").trim();
+            let hostname = if let Some(rest) = host.strip_prefix('[') {
+                rest.split(']').next().unwrap_or("") // [::1]:port
+            } else {
+                host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host)
+            };
+            if matches!(hostname, "localhost" | "127.0.0.1" | "::1") {
+                next.run(req).await
+            } else {
+                (StatusCode::FORBIDDEN, "forbidden host").into_response()
+            }
+        }
+    }
 }
 
 // --------------------------------------------------------------------------
@@ -139,6 +169,38 @@ async fn preview_js() -> impl IntoResponse {
 
 fn err(e: anyhow::Error) -> (StatusCode, String) {
     (StatusCode::BAD_REQUEST, format!("{e:#}"))
+}
+
+/// Reject URL path segments that could escape the books tree before they are used
+/// in a filesystem join (M3). `book` is already validated via `find_book` (must be
+/// a known slug); `lang`/`kind` were passed straight through. Confine them to
+/// `[A-Za-z0-9._-]` with no `..` and no path separators.
+fn safe_segment(kind: &str, s: &str) -> Result<(), (StatusCode, String)> {
+    let ok = !s.is_empty()
+        && s != ".."
+        && !s.contains("..")
+        && !s.contains('/')
+        && !s.contains('\\')
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    if ok {
+        Ok(())
+    } else {
+        Err((StatusCode::BAD_REQUEST, format!("invalid {kind} segment: {s:?}")))
+    }
+}
+
+/// Validate `lang` against a book's declared languages (a stronger check than the
+/// character allowlist: it must be a language the book actually declares).
+fn check_lang(declared: &[String], lang: &str) -> Result<(), (StatusCode, String)> {
+    safe_segment("lang", lang)?;
+    if declared.iter().any(|l| l == lang) {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::BAD_REQUEST,
+            format!("unknown lang {lang:?} (declared: {})", declared.join(", ")),
+        ))
+    }
 }
 
 async fn api_books(State(st): State<Shared>) -> Result<impl IntoResponse, (StatusCode, String)> {
@@ -211,6 +273,7 @@ async fn api_cover(
     AxPath((book, lang)): AxPath<(String, String)>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let b = st.repo.find_book(&book).map_err(err)?;
+    check_lang(&b.languages, &lang)?;
     let resp = cover::load_cover(&st.repo, &b, &lang).map_err(err)?;
     Ok(Json(resp))
 }
@@ -230,6 +293,7 @@ async fn api_save(
     Json(body): Json<SaveBody>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let b = st.repo.find_book(&book).map_err(err)?;
+    check_lang(&b.languages, &lang)?;
     let els = Elements { title: body.title, subtitle: body.subtitle, author: body.author };
     let bgcolor = if body.bgcolor.trim().is_empty() { "#000000".to_string() } else { body.bgcolor };
 
@@ -266,6 +330,8 @@ async fn api_asset(
     AxPath((book, lang, kind)): AxPath<(String, String, String)>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let b = st.repo.find_book(&book).map_err(err)?;
+    check_lang(&b.languages, &lang)?;
+    safe_segment("kind", &kind)?;
     let path = match kind.as_str() {
         "bg" => cover::bg_path(&st.repo, &b, &lang),
         "rendered" => cover::best_rendered_path(&st.repo, &b, &lang),
@@ -310,6 +376,7 @@ async fn api_preview_meta(
     AxPath((book, lang)): AxPath<(String, String)>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let (cfg, _dir) = st.disco.find_book(&book).map_err(err)?;
+    check_lang(&cfg.languages, &lang)?;
     let pdf = kdp_pdf_path(&st.disco.root, &book, &lang);
     let exists = pdf.exists();
     let pages = if exists { pdf_pages(&pdf) } else { None };
