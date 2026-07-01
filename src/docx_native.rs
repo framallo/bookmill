@@ -297,7 +297,6 @@ mod tests {
             title: "T".into(),
             subtitle: None,
             author: "A".into(),
-            year: "2026".into(),
             rights: "r".into(),
         };
         // Minimal repo stub via the real loader is overkill; call the converter

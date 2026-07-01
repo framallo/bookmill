@@ -121,7 +121,7 @@ pub fn run(repo: &Repo, book: Option<String>, json: bool) -> Result<()> {
         rep.say(&format!("\n=== {} [{}] ===", b.slug, b.languages.join(",")));
 
         // 1) config / KDP / house rules (same as the fast path).
-        config_checks(&b, &mut rep);
+        config_checks(&b, repo, &mut rep);
 
         // 2) deep artifact checks per edition output (EPUB → epubcheck;
         //    PDF → page-geometry). plan_editions yields exactly the publishable
@@ -183,8 +183,9 @@ pub fn run(repo: &Repo, book: Option<String>, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn config_checks(b: &BookConfig, rep: &mut Report) {
-    let issues = config::validate_book(b);
+fn config_checks(b: &BookConfig, repo: &Repo, rep: &mut Report) {
+    let mut issues = config::validate_book(b);
+    issues.extend(config::validate_book_editions(b, &repo.config));
     if issues.is_empty() {
         rep.ok(format!("config/KDP rules ({} lang)", b.languages.len()));
         return;
