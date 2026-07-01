@@ -3,38 +3,145 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>bookmill — books</title>
+<title>bookmill — library</title>
 <style>
-  :root { --bg:#11151c; --panel:#1b212b; --line:#2c3543; --ink:#e7edf3; --muted:#8a98a8; --accent:#d4a937; }
+  :root {
+    --bg:#11151c; --panel:#1b212b; --panel2:#252d3a; --line:#2c3543;
+    --ink:#e7edf3; --muted:#8a98a8; --accent:#d4a937;
+    --book-w:150px; --book-h:225px; --radius:8px;
+  }
   * { box-sizing:border-box; }
-  body { margin:0; font:14px/1.45 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink); }
-  header { display:flex; align-items:center; gap:12px; padding:12px 20px; background:var(--panel); border-bottom:1px solid var(--line); }
-  header h1 { font-size:16px; margin:0; font-weight:600; }
-  header .repo { color:var(--muted); font-size:12px; }
-  .spacer { flex:1; }
-  main { max-width:920px; margin:0 auto; padding:24px 20px 60px; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:14px; }
-  .card { display:block; text-decoration:none; color:inherit; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; transition:border-color .12s, transform .12s; }
-  .card:hover { border-color:var(--accent); transform:translateY(-2px); }
-  .card h2 { font-size:15px; margin:0 0 8px; line-height:1.3; }
-  .card .slug { color:var(--muted); font-size:11px; font-family:ui-monospace,Menlo,monospace; word-break:break-all; }
-  .tags { display:flex; gap:6px; flex-wrap:wrap; margin-top:12px; }
-  .tag { font-size:11px; padding:2px 8px; border-radius:10px; background:#222b36; color:var(--ink); border:1px solid var(--line); }
-  .tag.prot { background:#3a2a12; color:var(--accent); border-color:#5a431c; }
-  .muted { color:var(--muted); }
+  html, body { height:100%; }
+  body { margin:0; font:14px/1.45 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink);
+         display:flex; flex-direction:column; }
+
+  /* ---- top bar: title left, search center, icons right ---- */
+  header { height:56px; flex:0 0 auto; display:flex; align-items:center; gap:18px;
+           padding:0 18px; background:var(--panel); border-bottom:1px solid var(--line); }
+  .brand { display:flex; align-items:center; gap:9px; min-width:150px; }
+  .brand .logo { width:22px; height:22px; color:var(--accent); }
+  .brand h1 { font-size:17px; margin:0; font-weight:600; letter-spacing:.2px; }
+  .brand .repo { color:var(--muted); font-size:11px; font-family:ui-monospace,Menlo,monospace;
+                 max-width:230px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  .searchbar { position:relative; flex:1 1 auto; max-width:420px; }
+  .searchbar svg { position:absolute; left:11px; top:50%; transform:translateY(-50%);
+                   width:15px; height:15px; color:var(--muted); pointer-events:none; }
+  .searchbar input { width:100%; height:38px; border-radius:10px; border:1px solid var(--line);
+                     background:var(--panel2); color:var(--ink); padding:0 12px 0 34px; font-size:13.5px; }
+  .searchbar input::placeholder { color:var(--muted); }
+  .searchbar input:focus { outline:none; border-color:var(--accent); }
+
+  .right { display:flex; align-items:center; gap:4px; margin-left:auto; }
+  .iconbtn { width:36px; height:36px; display:inline-flex; align-items:center; justify-content:center;
+             border-radius:8px; border:1px solid transparent; background:transparent; color:var(--muted);
+             cursor:pointer; transition:.12s; }
+  .iconbtn svg { width:18px; height:18px; }
+  .iconbtn:hover { color:var(--ink); background:var(--panel2); }
+  .iconbtn.active { color:var(--accent); border-color:var(--line); }
+  .count { color:var(--muted); font-size:12px; margin-left:6px; white-space:nowrap; }
+
+  /* ---- sort/filter drop sheet ---- */
+  .sheet { position:absolute; right:14px; top:52px; z-index:10; background:var(--panel);
+           border:1px solid var(--line); border-radius:10px; padding:6px; min-width:190px;
+           box-shadow:0 12px 30px rgba(0,0,0,.5); display:none; }
+  .sheet.open { display:block; }
+  .sheet .lbl { font-size:10.5px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted);
+                padding:6px 8px 3px; }
+  .sheet button { display:flex; width:100%; align-items:center; gap:8px; background:transparent; border:none;
+                  color:var(--ink); font-size:13px; text-align:left; padding:7px 8px; border-radius:7px; cursor:pointer; }
+  .sheet button:hover { background:var(--panel2); }
+  .sheet button.sel { color:var(--accent); }
+  .sheet button .chk { margin-left:auto; opacity:0; }
+  .sheet button.sel .chk { opacity:1; }
+
+  /* ---- library grid ---- */
+  main { flex:1 1 auto; overflow:auto; padding:22px 20px 60px; }
+  .shelf { display:grid; gap:22px 18px; justify-content:center;
+           grid-template-columns:repeat(auto-fill, var(--book-w)); }
+  @media (min-width:1600px){ :root { --book-w:170px; --book-h:255px; } }
+  @media (max-width:640px){ :root { --book-w:120px; --book-h:180px; } }
+
+  .tile { width:var(--book-w); text-decoration:none; color:inherit; cursor:pointer;
+          display:flex; flex-direction:column; gap:8px; }
+  .cover { position:relative; width:var(--book-w); height:var(--book-h); border-radius:var(--radius);
+           overflow:hidden; background:var(--panel2); border:1px solid var(--line);
+           box-shadow:0 6px 16px rgba(0,0,0,.4); transition:transform .12s, box-shadow .12s, border-color .12s; }
+  .tile:hover .cover { transform:translateY(-3px); border-color:var(--accent);
+                       box-shadow:0 12px 26px rgba(0,0,0,.55); }
+  .cover img { width:100%; height:100%; object-fit:cover; display:block; }
+  /* fallback cover: gradient + centered title */
+  .cover .fake { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+                 padding:14px; text-align:center; font-weight:600; font-size:13px; line-height:1.3;
+                 background:linear-gradient(155deg,#2a3342,#1a212b); color:var(--ink); }
+  /* bottom scrim so a corner badge stays legible on any cover */
+  .cover::after { content:""; position:absolute; inset:auto 0 0 0; height:44px;
+                  background:linear-gradient(transparent,rgba(0,0,0,.55)); pointer-events:none; }
+
+  .badges { position:absolute; top:7px; left:7px; right:7px; display:flex; gap:5px; z-index:2; }
+  .badge { font-size:10px; font-weight:700; letter-spacing:.4px; text-transform:uppercase;
+           padding:2px 7px; border-radius:9px; background:rgba(17,21,28,.82);
+           color:var(--ink); border:1px solid rgba(255,255,255,.14); backdrop-filter:blur(2px); }
+  .badge.prot { background:rgba(58,42,18,.9); color:var(--accent); border-color:#5a431c; }
+  .badge.spacer { margin-left:auto; }
+
+  .ttl { font-size:13px; font-weight:600; line-height:1.3; text-align:center;
+         display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .slug { font-size:10.5px; color:var(--muted); font-family:ui-monospace,Menlo,monospace; text-align:center;
+          overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  .empty { color:var(--muted); text-align:center; margin-top:60px; }
 </style>
 </head>
 <body>
 <header>
-  <h1>bookmill</h1>
-  <span class="repo" id="repo"></span>
-  <span class="spacer"></span>
-  <span class="muted" id="count"></span>
+  <div class="brand">
+    <svg class="logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+    </svg>
+    <div>
+      <h1>bookmill</h1>
+      <div class="repo" id="repo"></div>
+    </div>
+  </div>
+
+  <div class="searchbar">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+    </svg>
+    <input id="q" type="search" placeholder="Search Book Titles" autocomplete="off" />
+  </div>
+
+  <div class="right">
+    <span class="count" id="count"></span>
+    <button class="iconbtn" id="filterBtn" title="Sort &amp; filter" aria-label="Sort and filter">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>
+      </svg>
+    </button>
+    <button class="iconbtn" id="settingsBtn" title="Settings" aria-label="Settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+    </button>
+  </div>
+
+  <div class="sheet" id="sheet">
+    <div class="lbl">Sort by</div>
+    <button data-sort="title"><span>Title</span><span class="chk">✓</span></button>
+    <button data-sort="lang"><span>Language</span><span class="chk">✓</span></button>
+    <div class="lbl">Order</div>
+    <button data-dir="asc"><span>Ascending</span><span class="chk">✓</span></button>
+    <button data-dir="desc"><span>Descending</span><span class="chk">✓</span></button>
+  </div>
 </header>
+
 <main>
-  <div class="grid" id="grid"></div>
-  <p class="muted" id="empty" style="display:none">No books found.</p>
+  <div class="shelf" id="shelf"></div>
+  <p class="empty" id="empty" style="display:none">No books found.</p>
 </main>
+
 <script src="/home.js"></script>
 </body>
 </html>
