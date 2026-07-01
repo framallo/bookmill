@@ -6,6 +6,13 @@
 # access. This produces a functional (if unstyled) DMG without AppleScript.
 #
 # Usage: packaging/make-dmg.sh [path/to/bookmill.app] [out.dmg]
+#
+# Naming: this LOCAL/dev DMG is arch-suffixed (`bookmill_<version>_<arch>.dmg`)
+# because it wraps whatever single-arch .app you built. The RELEASE DMG the
+# Homebrew cask points at is the *universal* one produced by CI and normalized to
+# `bookmill_<version>_universal.dmg` (see .github/workflows/release-desktop.yml).
+# Pass an explicit second arg to force a specific output name (e.g. the universal
+# one when wrapping a universal .app).
 set -euo pipefail
 
 APP="${1:-desktop/src-tauri/target/release/bundle/macos/bookmill.app}"
