@@ -362,7 +362,8 @@ fn cmd_validate(repo: &Repo, book: Option<String>) -> Result<()> {
     let mut total = 0usize;
     for dir in dirs {
         let (b, _) = repo.load_book_at(&dir)?;
-        let issues = config::validate_book(&b);
+        let mut issues = config::validate_book(&b);
+        issues.extend(config::validate_book_editions(&b, &repo.config));
         if issues.is_empty() {
             println!("\u{2713} {} — ok", b.slug);
         } else {

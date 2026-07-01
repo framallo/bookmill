@@ -14,7 +14,6 @@ const WRAP_TMPL: &str = include_str!("../templates/cover/wrap.html.tmpl");
 const DEFAULT_AUTHOR: &str = "Federico Ramallo";
 const BADGE_ES: &str = "Serie Isla de la Libertad";
 const BADGE_EN: &str = "Liberty Island Series";
-const PAPER_MULT: f64 = 0.002252;
 const TRIM_W: f64 = 6.0;
 const TRIM_H: f64 = 9.0;
 const BLEED: f64 = 0.125;
@@ -146,6 +145,14 @@ fn pick_f(
         .unwrap_or(default)
 }
 
+fn pick_opt_f(
+    book: Option<&CoverConfig>,
+    repo: Option<&CoverConfig>,
+    get: impl Fn(&CoverConfig) -> Option<f64>,
+) -> Option<f64> {
+    book.and_then(&get).or_else(|| repo.and_then(&get))
+}
+
 /// Split a title onto balanced lines exactly like `two_line`, but return the raw
 /// (unescaped) line strings — used by the SVG renderer, which escapes for XML
 /// itself and needs the lines separately (SVG has no `<br>`).
@@ -243,7 +250,17 @@ pub(crate) fn resolve(repo: &RepoConfig, book: &BookConfig, lang: &str) -> Resol
         wrap_lh: pick_f(bc, rc, |c| c.wrap_lh, 1.05),
         wrap_stroke: pick(bc, rc, |c| c.wrap_stroke.clone(), "0px transparent"),
         wrap_shadow: pick_opt(bc, rc, |c| c.wrap_shadow.clone()),
-        paper_mult: pick_f(bc, rc, |c| c.paper_mult, PAPER_MULT),
+        // Spine width per page: an explicit `[cover].paper_mult` (book over repo)
+        // wins for byte-identical fidelity with shipped covers; otherwise it is
+        // derived from the resolved paper+ink stock (KDP's spine calculator) so a
+        // cream-paper book gets 0.0025 instead of the white-stock 0.002252. Covers
+        // are not edition-specific, so resolve paper/ink at the book level.
+        paper_mult: pick_opt_f(bc, rc, |c| c.paper_mult).unwrap_or_else(|| {
+            crate::config::spine_mult(
+                &crate::config::resolve_paper(None, book, repo),
+                &crate::config::resolve_ink(None, book, repo),
+            )
+        }),
         trim_w: pick_f(bc, rc, |c| c.trim_w, TRIM_W),
         trim_h: pick_f(bc, rc, |c| c.trim_h, TRIM_H),
         bleed: pick_f(bc, rc, |c| c.bleed, BLEED),

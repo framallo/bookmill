@@ -16,9 +16,9 @@ use toml_edit::{value, DocumentMut, Item, Table, Value};
 pub const CANVAS_W: f64 = 1600.0;
 pub const CANVAS_H: f64 = 2560.0;
 
-// Built-in defaults mirroring bookmill's cover_tmpl.rs.
+// Fallback author for the book-list summary when a repo sets none; the cover
+// editor's resolved defaults come from `bookmill::resolve_editor_cover` (M8).
 const DEFAULT_AUTHOR: &str = "Federico Ramallo";
-const DEFAULT_TITLE_SIZE: f64 = 120.0;
 const BADGE_ES: &str = "Serie Isla de la Libertad";
 const BADGE_EN: &str = "Liberty Island Series";
 const DEFAULT_ACCENT: &str = "#000000";
@@ -175,36 +175,17 @@ pub struct Element {
 /// Build the editor payload for (book, lang).
 pub fn load_cover(repo: &Repo, book: &BookSummary, lang: &str) -> Result<CoverResponse> {
     let book_doc = read_book_doc(book)?;
-    let r = &repo.repo_doc;
 
-    // text
-    let title = pick_lang_text(&book_doc, lang, "title")
-        .or_else(|| book_doc.get("title").and_then(|t| t.get(lang)).and_then(|i| i.as_str()).map(str::to_string))
-        .unwrap_or_default();
-    let subtitle = pick_lang_text(&book_doc, lang, "sub")
-        .or_else(|| book_doc.get("subtitle").and_then(|t| t.get(lang)).and_then(|i| i.as_str()).map(str::to_string))
-        .unwrap_or_default();
-    let author = repo.author.clone();
-
-    // styles (book [cover] over repo [cover] over default)
-    let title_color = cover_str(&book_doc, r, "title_color").unwrap_or_else(|| "#FFFFFF".into());
-    let sub_color = cover_str(&book_doc, r, "sub_color").unwrap_or_else(|| "#FFFFFF".into());
-    let author_color = cover_str(&book_doc, r, "author_color").unwrap_or_else(|| "#FFFFFF".into());
-    let bgcolor = cover_str(&book_doc, r, "bgcolor").unwrap_or_else(|| "#000000".into());
-    let serif = cover_str(&book_doc, r, "serif").unwrap_or_else(|| "Playfair Display".into());
-
-    // title size: [cover.<lang>].title_size, else [cover].title_size, else default
-    let title_size = cover_lang_f(&book_doc, lang, "title_size")
-        .or_else(|| cover_f(&book_doc, r, "title_size"))
-        .unwrap_or(DEFAULT_TITLE_SIZE);
-
-    // background filename (book/repo [cover].bg, default bg.jpg)
-    let bg_file = cover_str(&book_doc, r, "bg").unwrap_or_else(|| "bg.jpg".into());
-    let _ = bg_file; // served via /api/asset .../bg (resolves on disk)
+    // Resolve text/colors/fonts/size via the build's OWN layered resolver so the
+    // editor's initial canvas matches exactly what `build cover` renders (M8).
+    // Replaces the former hand-rolled partial `toml_edit` merge (hardcoded author +
+    // title size, book-over-repo only) that could drift from the build.
+    let d = bookmill::resolve_editor_cover(&repo.root, &book.dir, lang)?;
 
     // Fixed-decoration + flex-spacing fields so the editor can reproduce the
     // renderer's default flex layout (title top with title_mt, badge above,
     // subtitle under, author at bottom). Mirrors cover_tmpl.rs::resolve.
+    let r = &repo.repo_doc;
     let accent = cover_str(&book_doc, r, "accent").unwrap_or_else(|| DEFAULT_ACCENT.into());
     let badge = match lang {
         "es" => cover_str(&book_doc, r, "badge_es").unwrap_or_else(|| BADGE_ES.into()),
@@ -218,35 +199,36 @@ pub fn load_cover(repo: &Repo, book: &BookSummary, lang: &str) -> Result<CoverRe
     let saved = read_saved_layout(&book_doc, lang);
 
     let title_el = saved.as_ref().map(|e| e.title.clone()).unwrap_or(Element {
-        text: title,
+        text: d.title,
         x_pct: 0.5,
         y_pct: 0.62,
         w_pct: 0.80,
-        font_pct: title_size / CANVAS_H,
-        fill: title_color,
-        font_family: serif.clone(),
+        font_pct: d.title_size / CANVAS_H,
+        fill: d.title_color,
+        font_family: d.serif,
         font_style: "bold".into(),
     });
     let sub_el = saved.as_ref().map(|e| e.subtitle.clone()).unwrap_or(Element {
-        text: subtitle,
+        text: d.sub,
         x_pct: 0.5,
         y_pct: 0.76,
         w_pct: 0.85,
         font_pct: 48.0 / CANVAS_H,
-        fill: sub_color,
-        font_family: "Montserrat".into(),
-        font_style: "italic".into(),
+        fill: d.sub_color,
+        font_family: d.sub_font,
+        font_style: d.sub_style,
     });
     let author_el = saved.as_ref().map(|e| e.author.clone()).unwrap_or(Element {
-        text: author,
+        text: d.author,
         x_pct: 0.5,
         y_pct: 0.93,
         w_pct: 0.80,
         font_pct: 42.0 / CANVAS_H,
-        fill: author_color,
+        fill: d.author_color,
         font_family: "Montserrat".into(),
         font_style: "normal".into(),
     });
+    let bgcolor = d.bgcolor;
 
     let protected = is_protected(&book.slug);
     let rendered = best_rendered_path(repo, book, lang);
@@ -435,41 +417,15 @@ fn str_array(item: Option<&Item>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// [cover.<lang>].<key> as text.
-fn pick_lang_text(doc: &DocumentMut, lang: &str, key: &str) -> Option<String> {
-    doc.get("cover")?
-        .get(lang)?
-        .get(key)?
-        .as_str()
-        .map(str::to_string)
-}
-
-/// A TOML number read as f64, accepting either a float (`240.0`) or an integer
-/// (`240`) — `toml_edit::Value::as_float` is strict and returns None for ints.
-fn as_num(item: &Item) -> Option<f64> {
-    item.as_float().or_else(|| item.as_integer().map(|i| i as f64))
-}
-
-/// [cover.<lang>].<key> as a number (int or float).
-fn cover_lang_f(doc: &DocumentMut, lang: &str, key: &str) -> Option<f64> {
-    as_num(doc.get("cover")?.get(lang)?.get(key)?)
-}
-
-/// book [cover].<key> over repo [cover].<key> as string.
+/// book [cover].<key> over repo [cover].<key> as string. Used for the `bg`
+/// filename lookup and the badge/accent/margin style strings the editor seeds;
+/// numeric style resolution (title_size, …) goes through the shared resolver (M8).
 fn cover_str(book: &DocumentMut, repo: &DocumentMut, key: &str) -> Option<String> {
     book.get("cover")
         .and_then(|c| c.get(key))
         .and_then(|i| i.as_str())
         .or_else(|| repo.get("cover").and_then(|c| c.get(key)).and_then(|i| i.as_str()))
         .map(str::to_string)
-}
-
-/// book [cover].<key> over repo [cover].<key> as a number (int or float).
-fn cover_f(book: &DocumentMut, repo: &DocumentMut, key: &str) -> Option<f64> {
-    book.get("cover")
-        .and_then(|c| c.get(key))
-        .and_then(as_num)
-        .or_else(|| repo.get("cover").and_then(|c| c.get(key)).and_then(as_num))
 }
 
 fn round4(x: f64) -> f64 {

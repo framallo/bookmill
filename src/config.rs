@@ -15,6 +15,8 @@ pub const FORBIDDEN_PUBLIC: &[&str] = &["Animal Farm", "Rebelión en la granja"]
 #[derive(Debug, Deserialize)]
 pub struct RepoConfig {
     pub author: Option<String>,
+    /// repo-wide series name; parsed for forward use (books carry their own series).
+    #[allow(dead_code)]
     pub series: Option<String>,
     /// repo-wide default publication date (e.g. 2026); books override via [meta].date
     pub date: Option<toml::Value>,
@@ -27,7 +29,9 @@ pub struct RepoConfig {
     pub defaults: Defaults,
     #[serde(default)]
     pub editions: BTreeMap<String, Edition>,
+    /// repo-wide build options ([build]); reserved config, not yet consumed.
     #[serde(default)]
+    #[allow(dead_code)]
     pub build: BuildOpts,
     /// repo-wide cover design defaults; books override via their own [cover]
     pub cover: Option<CoverConfig>,
@@ -49,6 +53,8 @@ pub struct Defaults {
     pub ink: Option<String>,
     /// cover finish: "matte" | "glossy" (default "matte"; listing/cover only).
     pub finish: Option<String>,
+    /// repo-wide default fonts ([defaults.fonts]); reserved config, not yet consumed.
+    #[allow(dead_code)]
     pub fonts: Option<Fonts>,
     /// repo-wide default print margins (inches); books override via [pdf.margins]
     pub margins: Option<Margins>,
@@ -65,14 +71,18 @@ pub struct Margins {
     pub bindingoffset: Option<f64>,
 }
 
+/// Font family overrides ([defaults.fonts]); reserved config, not yet consumed.
 #[derive(Debug, Deserialize, Default, Clone)]
+#[allow(dead_code)]
 pub struct Fonts {
     pub serif: Option<String>,
     pub sans: Option<String>,
     pub sub: Option<String>,
 }
 
+/// Repo-wide build options ([build]); reserved config, not yet consumed.
 #[derive(Debug, Deserialize, Default, Clone)]
+#[allow(dead_code)]
 pub struct BuildOpts {
     pub output_dir: Option<String>,
     #[serde(default)]
@@ -81,6 +91,8 @@ pub struct BuildOpts {
 
 #[derive(Debug, Deserialize, Default, Clone)]
 pub struct Edition {
+    /// distribution market/region label; reserved config, not yet consumed.
+    #[allow(dead_code)]
     pub market: Option<String>,
     pub trim: Option<String>,
     /// bleed per edition (e.g. "0.125in", "0"); falls back to book/repo defaults
@@ -168,6 +180,7 @@ pub struct CoverConfig {
     pub filt: Option<String>,
     pub paper_mult: Option<f64>,
     /// inert in make-covers.py (kept for fidelity with the old CFG)
+    #[allow(dead_code)]
     pub bottom: Option<String>,
     // text (usually sourced from [title]/[subtitle]/[listing]; overridable here)
     pub blurb: Option<String>,
@@ -321,7 +334,9 @@ pub struct PdfOpts {
     /// per-book ink/color override ("black"|"standard-color"|"premium-color");
     /// e.g. a picture book opting into premium color. Falls back to edition / defaults.
     pub ink: Option<String>,
-    /// per-book cover finish override ("matte"|"glossy"). Falls back to edition / defaults.
+    /// per-book cover finish override ("matte"|"glossy"). Falls back to edition /
+    /// defaults. Cover/listing only (no interior geometry); reserved, not yet consumed.
+    #[allow(dead_code)]
     pub finish: Option<String>,
     /// per-book print margins (inches); falls back to repo [defaults.margins]
     pub margins: Option<Margins>,
@@ -378,7 +393,10 @@ impl Content {
         let mut out: Vec<PathBuf> = self.prepend.iter().map(|p| base.join(p)).collect();
         if let Some(g) = &self.glob {
             let pat = base.join(g);
-            let mut hits: Vec<PathBuf> = glob::glob(pat.to_str().unwrap())
+            let pat_str = pat
+                .to_str()
+                .with_context(|| format!("non-UTF-8 content glob path: {}", pat.display()))?;
+            let mut hits: Vec<PathBuf> = glob::glob(pat_str)
                 .with_context(|| format!("bad glob {g}"))?
                 .filter_map(|r| r.ok())
                 .collect();
@@ -495,16 +513,6 @@ pub fn resolve_ink(edition: Option<&Edition>, book: &BookConfig, repo: &RepoConf
         .unwrap_or_else(|| "black".into())
 }
 
-/// Resolve the cover finish for one (edition, book): edition → book `[pdf]` →
-/// repo `[defaults]` → "matte".
-pub fn resolve_finish(edition: Option<&Edition>, book: &BookConfig, repo: &RepoConfig) -> String {
-    edition
-        .and_then(|e| e.finish.clone())
-        .or_else(|| book.pdf.finish.clone())
-        .or_else(|| repo.defaults.finish.clone())
-        .unwrap_or_else(|| "matte".into())
-}
-
 /// Validate an ISBN-13 (checksum + 13 digits). Hyphens/spaces are ignored.
 pub fn isbn13_valid(s: &str) -> bool {
     let digits: Vec<u32> = s.chars().filter_map(|c| c.to_digit(10)).collect();
@@ -529,6 +537,27 @@ pub fn page_range(target: &str, ink: &str) -> (u32, u32) {
         (_, "standard-color") => (72, 600),
         _ => (24, 828),
     }
+}
+
+/// Check that every edition a book declares in `book.editions` is defined in the
+/// repo `[editions]` table. A typo'd or removed edition would otherwise silently
+/// build a "retail" fallback interior instead of the intended KDP one (M1).
+pub fn validate_book_editions(book: &BookConfig, repo: &RepoConfig) -> Vec<Issue> {
+    let mut issues = Vec::new();
+    for ed in &book.editions {
+        if !repo.editions.contains_key(ed) {
+            let known: Vec<&str> = repo.editions.keys().map(String::as_str).collect();
+            issues.push(Issue {
+                level: "error",
+                msg: format!(
+                    "{}: unknown edition {ed:?} (not in [editions]; known: {})",
+                    book.slug,
+                    if known.is_empty() { "none".into() } else { known.join(", ") }
+                ),
+            });
+        }
+    }
+    issues
 }
 
 /// Validate the static, edition-level paper/ink/finish/ISBN choices. Self-contained
@@ -622,5 +651,62 @@ mod tests {
         assert!(isbn13_valid("978-3-16-148410-0"));
         assert!(!isbn13_valid("978-3-16-148410-1"));
         assert!(!isbn13_valid("123"));
+    }
+
+    // ---- layered config resolution (edition → book [pdf] → repo [defaults] → built-in) ----
+
+    fn repo_cfg(s: &str) -> RepoConfig {
+        toml::from_str(s).unwrap()
+    }
+    fn book_cfg(s: &str) -> BookConfig {
+        toml::from_str(s).unwrap()
+    }
+
+    #[test]
+    fn resolve_paper_precedence() {
+        let repo = repo_cfg("[defaults]\npaper = 'cream'\n");
+        let book = book_cfg("slug = 's'\n[pdf]\npaper = 'groundwood'\n");
+        let ed = Edition { paper: Some("white".into()), ..Default::default() };
+        // edition wins over book [pdf] and repo [defaults]
+        assert_eq!(resolve_paper(Some(&ed), &book, &repo), "white");
+        // book [pdf] wins over repo [defaults] when no edition sets it
+        assert_eq!(resolve_paper(None, &book, &repo), "groundwood");
+        // repo [defaults] when the book sets nothing
+        let bare = book_cfg("slug = 's'\n");
+        assert_eq!(resolve_paper(None, &bare, &repo), "cream");
+        // built-in default when nothing is set anywhere
+        let empty = repo_cfg("");
+        assert_eq!(resolve_paper(None, &bare, &empty), "white");
+        // an edition present but WITHOUT paper falls through to book/repo
+        let ed_noink = Edition::default();
+        assert_eq!(resolve_paper(Some(&ed_noink), &book, &repo), "groundwood");
+    }
+
+    #[test]
+    fn resolve_ink_precedence() {
+        let repo = repo_cfg("[defaults]\nink = 'standard-color'\n");
+        let book = book_cfg("slug = 's'\n[pdf]\nink = 'premium-color'\n");
+        let ed = Edition { ink: Some("black".into()), ..Default::default() };
+        assert_eq!(resolve_ink(Some(&ed), &book, &repo), "black");
+        assert_eq!(resolve_ink(None, &book, &repo), "premium-color");
+        let bare = book_cfg("slug = 's'\n");
+        assert_eq!(resolve_ink(None, &bare, &repo), "standard-color");
+        assert_eq!(resolve_ink(None, &bare, &repo_cfg("")), "black");
+    }
+
+    #[test]
+    fn unknown_edition_is_flagged() {
+        let repo = repo_cfg("[editions.kdp-paperback]\ntarget = 'kdp-paperback'\n");
+        let book = book_cfg("slug = 's'\neditions = ['kdp-paperback', 'typo']\n");
+        let issues = validate_book_editions(&book, &repo);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].level, "error");
+        assert!(issues[0].msg.contains("typo"));
+        // all-known editions → no issues
+        let ok = book_cfg("slug = 's'\neditions = ['kdp-paperback']\n");
+        assert!(validate_book_editions(&ok, &repo).is_empty());
+        // a book declaring no editions → no issues
+        let none = book_cfg("slug = 's'\n");
+        assert!(validate_book_editions(&none, &repo).is_empty());
     }
 }

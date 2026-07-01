@@ -189,13 +189,16 @@ impl CoverRenderer {
         if s.letter_spacing != 0.0 {
             attrs.push_str(&format!(" letter-spacing=\"{}\"", fmt(s.letter_spacing)));
         }
-        attrs.push_str(&format!(" fill=\"{}\"", s.fill));
+        // Colors/families are author- and web-editor-controlled; escape them so a
+        // crafted value can't break out of the SVG attribute (L4).
+        attrs.push_str(&format!(" fill=\"{}\"", xml_attr(s.fill)));
         if s.opacity < 1.0 {
             attrs.push_str(&format!(" opacity=\"{}\"", fmt(s.opacity)));
         }
         if let Some((w, c)) = parse_stroke(s.stroke) {
             attrs.push_str(&format!(
-                " stroke=\"{c}\" stroke-width=\"{}\" paint-order=\"stroke\" stroke-linejoin=\"round\"",
+                " stroke=\"{}\" stroke-width=\"{}\" paint-order=\"stroke\" stroke-linejoin=\"round\"",
+                xml_attr(&c),
                 fmt(w)
             ));
         }
@@ -206,9 +209,13 @@ impl CoverRenderer {
     }
 
     /// Normalized (ascender, descender-as-positive) for a face, fraction of em.
+    /// The bundled fonts are `include_bytes!`'d and always parse; if a future font
+    /// swap fails, degrade to typical metrics rather than panicking (L3).
     fn vmetrics(&self, family: &str, weight: u16, italic: bool) -> (f64, f64) {
         let data = self.pick_face(family, weight, italic);
-        let face = ttf_parser::Face::parse(data, 0).expect("parse face");
+        let Ok(face) = ttf_parser::Face::parse(data, 0) else {
+            return (0.8, 0.2);
+        };
         let upm = face.units_per_em() as f64;
         let asc = face.ascender() as f64 / upm;
         let desc = -(face.descender() as f64) / upm;
@@ -216,9 +223,12 @@ impl CoverRenderer {
     }
 
     /// Width of `text` at `size` px (sum of advances; no letter-spacing).
+    /// Falls back to a 0.5-em-per-char estimate if the face can't be parsed (L3).
     fn text_width(&self, text: &str, family: &str, weight: u16, italic: bool, size: f64) -> f64 {
         let data = self.pick_face(family, weight, italic);
-        let face = ttf_parser::Face::parse(data, 0).expect("parse face");
+        let Ok(face) = ttf_parser::Face::parse(data, 0) else {
+            return text.chars().count() as f64 * 0.5 * size;
+        };
         let upm = face.units_per_em() as f64;
         let mut w = 0.0;
         for ch in text.chars() {
@@ -305,8 +315,8 @@ impl CoverRenderer {
             self.front_absolute(&mut text, &mut defs, r, W, H, top, cx);
             return Ok(FRONT_SVG_TMPL
                 .replace("{{DEFS}}", &defs)
-                .replace("{{BGCOLOR}}", &r.bgcolor)
-                .replace("{{ACCENT}}", &r.accent)
+                .replace("{{BGCOLOR}}", &xml_attr(&r.bgcolor))
+                .replace("{{ACCENT}}", &xml_attr(&r.accent))
                 .replace("{{IMAGE}}", &image)
                 .replace("{{TEXT}}", &text));
         }
@@ -435,8 +445,8 @@ impl CoverRenderer {
 
         Ok(FRONT_SVG_TMPL
             .replace("{{DEFS}}", &defs)
-            .replace("{{BGCOLOR}}", &r.bgcolor)
-            .replace("{{ACCENT}}", &r.accent)
+            .replace("{{BGCOLOR}}", &xml_attr(&r.bgcolor))
+            .replace("{{ACCENT}}", &xml_attr(&r.accent))
             .replace("{{IMAGE}}", &image)
             .replace("{{TEXT}}", &text))
     }
@@ -639,7 +649,7 @@ impl CoverRenderer {
             // solid back panel
             body.push_str(&format!(
                 "<rect x=\"0\" y=\"0\" width=\"{back_w}\" height=\"{fh}\" fill=\"{}\"/>",
-                r.bgcolor
+                xml_attr(&r.bgcolor)
             ));
         }
 
@@ -717,7 +727,7 @@ impl CoverRenderer {
         // ---- SPINE ------------------------------------------------------
         body.push_str(&format!(
             "<rect x=\"{spine_x}\" y=\"0\" width=\"{spine_w}\" height=\"{fh}\" fill=\"{}\"/>",
-            if r.wrap_bg.is_some() { "none".to_string() } else { r.bgcolor.clone() }
+            if r.wrap_bg.is_some() { "none".to_string() } else { xml_attr(&r.bgcolor) }
         ));
         // inset accent borders (box-shadow inset 3px both sides)
         body.push_str(&format!(
@@ -739,7 +749,7 @@ impl CoverRenderer {
                 "<text transform=\"translate({scx},{scy}) rotate(-90)\" text-anchor=\"middle\" \
                  font-family=\"'{}'\" font-size=\"14\" letter-spacing=\"2\" fill=\"{}\">{}</text>",
                 xml_attr(&r.serif),
-                r.title_color,
+                xml_attr(&r.title_color),
                 esc(&spine_text)
             ));
         }
@@ -881,7 +891,7 @@ impl CoverRenderer {
         Ok(WRAP_SVG_TMPL
             .replace("{{FULL_W_PX}}", &fmt(fw))
             .replace("{{FULL_H_PX}}", &fmt(fh))
-            .replace("{{BGCOLOR}}", &r.bgcolor)
+            .replace("{{BGCOLOR}}", &xml_attr(&r.bgcolor))
             .replace("{{DEFS}}", &defs)
             .replace("{{WRAPBG}}", &wrapbg)
             .replace("{{BODY}}", &body))

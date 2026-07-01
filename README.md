@@ -32,8 +32,13 @@ non-build commands:
 |---|---|
 | `build` (PDF / EPUB / `docx`) | **nothing — fully native Rust** |
 | `build cover` | **nothing — native `resvg`** (all books, incl. the formerly Chrome-only protected covers); `--engine chrome` is an opt-in fallback only |
-| `validate --deep` | `epubcheck` (Java reference EPUB validator) — the only external tool left, and only here |
+| `validate --deep` | `epubcheck` (Java reference EPUB validator) |
+| `web` / desktop **interior previewer** | `pdftoppm` (poppler) to rasterize interior PDF pages into the spread view — must be on the app's `$PATH` |
 | `audiobook` | [`kab`](https://github.com/framallo) (Kokoro TTS on the Apple Neural Engine) |
+
+"No external tools" is scoped to **`build`** (interiors + covers). The optional
+`validate --deep`, the `web`/desktop previewer, and `audiobook` each shell out to
+one external tool as listed above.
 
 ## Quickstart
 
@@ -67,11 +72,15 @@ bookmill tui                         interactive terminal UI (build/cover/valida
 
 **Desktop app.** The same UI (library grid, cover editor, previewer) also ships as
 a native macOS app you install and open like any other app — no terminal command.
-Install it with `brew install --cask bookmill`, then launch **bookmill** from
-Applications / Spotlight; it prompts for your book repo (or remembers the last
-one). The app (`desktop/`, a Tauri v2 crate) embeds the `bookmill` CLI as a
-sidecar, spawns `bookmill web` on an ephemeral port, and points a `WKWebView` at
-it. Build/package/cask details: [`docs/DESKTOP.md`](docs/DESKTOP.md).
+**Once published** it will install with `brew install --cask bookmill` — that is
+**not available yet** (it needs a signed + notarized release and a Homebrew tap;
+see [`docs/DESKTOP.md`](docs/DESKTOP.md) → "Human-only remaining steps"). Until
+then, build it locally and open the bundle directly (see DESKTOP.md). Once
+installed you launch **bookmill** from Applications / Spotlight; it prompts for
+your book repo (or remembers the last one). The app (`desktop/`, a Tauri v2 crate)
+embeds the `bookmill` CLI as a sidecar, spawns `bookmill web` on an ephemeral
+port, and points a `WKWebView` at it. The previewer needs `pdftoppm` (poppler) on
+`$PATH`. Build/package/cask details: [`docs/DESKTOP.md`](docs/DESKTOP.md).
 
 `build` is the umbrella for produced artifacts: bare `build` builds **interiors**
 (the default action), `build cover` renders covers, `build shrink` shrinks an
@@ -192,9 +201,9 @@ Rust: PDFs through the in-process **Typst crate** (no LaTeX, no `typst` binary),
 EPUB through epub-builder + comrak, the `docx` review doc through docx-rs, and PDF
 page metadata + image-DPI/bleed audits through `lopdf` (no poppler) — and covers
 render via native `resvg`. **The whole build + cover pipeline runs with no
-external tools at all.** The only external left is **`epubcheck`** (the Java
-reference EPUB validator), used solely by `validate --deep`, plus `kab` for the
-optional `audiobook` command. See `HANDOFF.md`.
+external tools at all.** External tools remain only for optional, non-build
+commands: **`epubcheck`** for `validate --deep`, **`pdftoppm`** (poppler) for the
+`web`/desktop interior previewer, and **`kab`** for `audiobook`. See `HANDOFF.md`.
 
 ## License
 

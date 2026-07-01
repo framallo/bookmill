@@ -89,7 +89,6 @@ pub enum QueueEvent {
     },
     Done {
         idx: usize,
-        total: usize,
         label: String,
         dur: Duration,
         err: Option<String>,
@@ -305,7 +304,23 @@ pub fn plan_editions(
             _ => book.editions.clone(),
         };
         for ed_name in &eds {
-            let ed = repo.config.editions.get(ed_name);
+            // A book (or --edition) may only name an edition defined in the repo
+            // `[editions]` table. Without this guard an unknown/typo'd edition
+            // silently fell through to a "retail" build instead of the intended
+            // KDP interior (M1). Error clearly instead.
+            let ed = match repo.config.editions.get(ed_name) {
+                Some(e) => Some(e),
+                None => {
+                    let known: Vec<&str> =
+                        repo.config.editions.keys().map(String::as_str).collect();
+                    errors.push(format!(
+                        "{}: unknown edition {ed_name:?} (not in [editions]; known: {})",
+                        book.slug,
+                        if known.is_empty() { "none".into() } else { known.join(", ") }
+                    ));
+                    continue;
+                }
+            };
             let target = ed
                 .and_then(|e| e.target.clone())
                 .unwrap_or_else(|| "retail".into());
@@ -446,7 +461,6 @@ pub fn run_queue(repo: &Repo, jobs: &[Job], cb: &mut dyn FnMut(QueueEvent)) -> R
         };
         cb(QueueEvent::Done {
             idx,
-            total: n,
             label: job.label(),
             dur,
             err,
@@ -611,17 +625,17 @@ fn build_one(
         Out::RetailEpub => {
             let o = odir.join(format!("{base}.epub"));
             crate::epub_native::run(repo, &m, cepub.as_deref(), &chaps, cover.as_deref(), lang, true, &o)?;
-            shrink_epub(repo, &o, epub_px);
+            shrink_epub(repo, &o, epub_px)?;
             if let Some(c) = &cover {
-                emit_cover_jpg(c, &odir.join(format!("{base}-cover.jpg")));
+                emit_cover_jpg(c, &odir.join(format!("{base}-cover.jpg")))?;
             }
         }
         Out::KdpEpub => {
             let o = odir.join(format!("{base}-kdp.epub"));
             crate::epub_native::run(repo, &m, cepub.as_deref(), &chaps, cover.as_deref(), lang, false, &o)?;
-            shrink_epub(repo, &o, epub_px);
+            shrink_epub(repo, &o, epub_px)?;
             if let Some(c) = &cover {
-                emit_cover_jpg(c, &odir.join(format!("{base}-cover.jpg")));
+                emit_cover_jpg(c, &odir.join(format!("{base}-cover.jpg")))?;
             }
         }
         Out::RetailPdf => {
@@ -672,11 +686,10 @@ pub struct BookMeta {
     pub title: String,
     pub subtitle: Option<String>,
     pub author: String,
-    pub year: String,
     pub rights: String,
 }
 
-/// Resolve title/subtitle/author/year/rights for a (book, lang) from config.
+/// Resolve title/subtitle/author/rights for a (book, lang) from config.
 pub fn resolve_book_meta(repo: &Repo, book: &BookConfig, lang: &str) -> Result<BookMeta> {
     let title = book
         .title
@@ -697,7 +710,7 @@ pub fn resolve_book_meta(repo: &Repo, book: &BookConfig, lang: &str) -> Result<B
         .rights
         .clone()
         .unwrap_or_else(|| localized_rights(lang, &author, &year));
-    Ok(BookMeta { title, subtitle, author, year, rights })
+    Ok(BookMeta { title, subtitle, author, rights })
 }
 
 /// Localized "all rights reserved" line, matching the old meta.md wording.
@@ -719,41 +732,151 @@ fn date_year(d: &toml::Value) -> String {
 }
 
 /// Emit the KDP eBook cover JPG (RGB, sRGB) from the front PNG — pure Rust.
-pub fn emit_cover_jpg(cover_png: &Path, out: &Path) {
+/// Errors propagate so a failed emit fails the job instead of silently passing (M4).
+pub fn emit_cover_jpg(cover_png: &Path, out: &Path) -> Result<()> {
     if !cover_png.exists() {
-        return;
+        return Ok(());
     }
-    match image::open(cover_png) {
-        Ok(img) => {
-            let rgb = img.to_rgb8(); // drop alpha (front cover is full-bleed/opaque)
-            match std::fs::File::create(out) {
-                Ok(f) => {
-                    let mut w = std::io::BufWriter::new(f);
-                    let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut w, 90);
-                    if let Err(e) = enc.encode_image(&rgb) {
-                        eprintln!("  (cover jpg encode failed: {e})");
-                    }
-                }
-                Err(e) => eprintln!("  (cover jpg create failed: {e})"),
-            }
-        }
-        Err(e) => eprintln!("  (cover jpg skipped, can't read {}: {e})", cover_png.display()),
-    }
+    let img = image::open(cover_png)
+        .with_context(|| format!("cover jpg: reading {}", cover_png.display()))?;
+    let rgb = img.to_rgb8(); // drop alpha (front cover is full-bleed/opaque)
+    let f = std::fs::File::create(out)
+        .with_context(|| format!("cover jpg: creating {}", out.display()))?;
+    let mut w = std::io::BufWriter::new(f);
+    let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut w, 90);
+    enc.encode_image(&rgb)
+        .with_context(|| format!("cover jpg: encoding {}", out.display()))?;
+    Ok(())
 }
 
-fn shrink_epub(_repo: &Repo, epub: &Path, px: u32) {
-    // Native (Python-free) image shrink; mirrors scripts/shrink-epub-images.py.
-    match crate::epub_shrink::shrink_epub(epub, px) {
-        Ok((before, after)) => println!(
-            "  {}: {:.1}MB -> {:.1}MB",
-            epub.file_name().and_then(|n| n.to_str()).unwrap_or(""),
-            before as f64 / 1e6,
-            after as f64 / 1e6
-        ),
-        Err(e) => eprintln!("  (epub shrink failed for {}: {e:#})", epub.display()),
-    }
+/// Shrink EPUB images in place (native, Python-free). Errors propagate so a failed
+/// shrink (which would ship oversized Kindle-delivery images) fails the job (M4).
+fn shrink_epub(_repo: &Repo, epub: &Path, px: u32) -> Result<()> {
+    let (before, after) = crate::epub_shrink::shrink_epub(epub, px)
+        .with_context(|| format!("shrinking {}", epub.display()))?;
+    println!(
+        "  {}: {:.1}MB -> {:.1}MB",
+        epub.file_name().and_then(|n| n.to_str()).unwrap_or(""),
+        before as f64 / 1e6,
+        after as f64 / 1e6
+    );
+    Ok(())
 }
 
 fn some_if_exists(p: PathBuf) -> Option<PathBuf> {
     p.exists().then_some(p)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Edition;
+
+    fn repo(s: &str) -> Repo {
+        Repo {
+            root: PathBuf::from("/tmp/bookmill-test"),
+            config: toml::from_str(s).unwrap(),
+        }
+    }
+    fn book(s: &str) -> BookConfig {
+        toml::from_str(s).unwrap()
+    }
+
+    #[test]
+    fn parse_trim_forms() {
+        assert_eq!(parse_trim("6x9"), Some((6.0, 9.0)));
+        assert_eq!(parse_trim("6x9in"), Some((6.0, 9.0)));
+        assert_eq!(parse_trim("5.83x8.27in"), Some((5.83, 8.27)));
+        assert_eq!(parse_trim("garbage"), None);
+    }
+
+    #[test]
+    fn parse_len_forms() {
+        assert_eq!(parse_len("0.125in"), Some(0.125));
+        assert_eq!(parse_len("0"), Some(0.0));
+        assert_eq!(parse_len("x"), None);
+    }
+
+    #[test]
+    fn kdp_pdf_adds_asymmetric_bleed() {
+        // KDP print: width gets ONE bleed (outer edge only), height gets TWO
+        // (top + bottom). This asymmetry is the risky rule the audit flagged.
+        let r = repo("[defaults]\ntrim = '6x9'\nbleed = '0.125in'\n");
+        let b = book("slug = 's'\n");
+        let ed = Edition {
+            trim: Some("6x9".into()),
+            bleed: Some("0.125in".into()),
+            ..Default::default()
+        };
+        let (w, h) = resolve_paper_dims(&r, &b, Some(&ed), Out::KdpPdf).unwrap();
+        assert!((w - 6.125).abs() < 1e-9, "w = {w}");
+        assert!((h - 9.25).abs() < 1e-9, "h = {h}");
+    }
+
+    #[test]
+    fn kdp_pdf_bleed_defaults_to_eighth_inch() {
+        // No bleed set anywhere → KDP default 0.125in.
+        let r = repo("[defaults]\ntrim = '6x9'\n");
+        let b = book("slug = 's'\n");
+        let (w, h) = resolve_paper_dims(&r, &b, None, Out::KdpPdf).unwrap();
+        assert!((w - 6.125).abs() < 1e-9, "w = {w}");
+        assert!((h - 9.25).abs() < 1e-9, "h = {h}");
+    }
+
+    #[test]
+    fn zero_bleed_yields_trim_size() {
+        let r = repo("[defaults]\ntrim = '6x9'\nbleed = '0'\n");
+        let b = book("slug = 's'\n");
+        let (w, h) = resolve_paper_dims(&r, &b, None, Out::KdpPdf).unwrap();
+        assert!((w - 6.0).abs() < 1e-9);
+        assert!((h - 9.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn retail_pdf_has_no_bleed_and_epub_none() {
+        let r = repo("[defaults]\ntrim = '5x8'\nbleed = '0.125in'\n");
+        let b = book("slug = 's'\n");
+        // digital PDF: exactly the trim, no bleed added
+        assert_eq!(resolve_paper_dims(&r, &b, None, Out::RetailPdf), Some((5.0, 8.0)));
+        // EPUB outputs have no page geometry
+        assert_eq!(resolve_paper_dims(&r, &b, None, Out::RetailEpub), None);
+        assert_eq!(resolve_paper_dims(&r, &b, None, Out::KdpEpub), None);
+    }
+
+    #[test]
+    fn trim_falls_back_edition_then_book_then_repo() {
+        let r = repo("[defaults]\ntrim = '6x9'\n");
+        // book [pdf].trim overrides repo defaults when no edition trim
+        let b = book("slug = 's'\n[pdf]\ntrim = '5x8'\n");
+        assert_eq!(resolve_paper_dims(&r, &b, None, Out::RetailPdf), Some((5.0, 8.0)));
+        // edition trim wins over book
+        let ed = Edition { trim: Some("8.5x11".into()), ..Default::default() };
+        assert_eq!(
+            resolve_paper_dims(&r, &b, Some(&ed), Out::RetailPdf),
+            Some((8.5, 11.0))
+        );
+        // nothing set → built-in 6x9
+        let bare_repo = repo("");
+        let bare_book = book("slug = 's'\n");
+        assert_eq!(
+            resolve_paper_dims(&bare_repo, &bare_book, None, Out::RetailPdf),
+            Some((6.0, 9.0))
+        );
+    }
+
+    #[test]
+    fn geometry_margins_precedence() {
+        // book [pdf.margins] wins per field; else repo [defaults.margins]; else the
+        // built-in 6x9 fallback (top/bottom/inner 0.75, outer 0.6, binding 0.375).
+        let r = repo(
+            "[defaults]\ntrim = '6x9'\nbleed = '0'\n[defaults.margins]\ntop = 1.0\nouter = 0.5\n",
+        );
+        let b = book("slug = 's'\n[pdf.margins]\ntop = 0.9\n");
+        let g = resolve_geometry(&r, &b, None, Out::KdpPdf).unwrap();
+        assert!((g.top - 0.9).abs() < 1e-9, "book margin wins: {}", g.top);
+        assert!((g.outer - 0.5).abs() < 1e-9, "repo margin used: {}", g.outer);
+        assert!((g.inner - 0.75).abs() < 1e-9, "built-in fallback: {}", g.inner);
+        assert!((g.bindingoffset - 0.375).abs() < 1e-9);
+        assert!((g.pw - 6.0).abs() < 1e-9 && (g.ph - 9.0).abs() < 1e-9);
+    }
 }

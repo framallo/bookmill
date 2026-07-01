@@ -69,8 +69,23 @@ jobs:
           prerelease: false
           args: --target universal-apple-darwin --bundles app,dmg
 
-      - name: Print DMG sha256 (for the Homebrew cask)
+      # Ensure the release asset is named exactly `bookmill_<version>_universal.dmg`
+      # — the name packaging/homebrew/bookmill.rb references — regardless of what
+      # tauri-action produces for the universal target (L5: cask/DMG name mismatch).
+      - name: Normalize DMG asset name + print sha256 (for the Homebrew cask)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          tag="${{ github.ref_name || inputs.version }}"
+          ver="${tag#v}"
           dmg=$(find desktop/src-tauri/target -name '*.dmg' | head -1)
-          echo "DMG: $dmg"
+          [ -n "$dmg" ] || { echo "no DMG found"; exit 1; }
+          canon="bookmill_${ver}_universal.dmg"
+          if [ "$(basename "$dmg")" != "$canon" ]; then
+            cp "$dmg" "$(dirname "$dmg")/$canon"
+            dmg="$(dirname "$dmg")/$canon"
+          fi
+          echo "Canonical DMG: $dmg"
           shasum -a 256 "$dmg" || true
+          # Upload/overwrite the canonical-named asset so the cask url resolves.
+          gh release upload "$tag" "$dmg" --clobber || true

@@ -161,7 +161,7 @@ fn cover_one_resvg(
         .with_context(|| format!("copy {} -> {}", front_png.display(), bundle_png.display()))?;
     std::fs::copy(&wrap_pdf, &bundle_wrap)
         .with_context(|| format!("copy {} -> {}", wrap_pdf.display(), bundle_wrap.display()))?;
-    emit_cover_jpg(&front_png, &odir.join(format!("{slug}-{lang}-cover.jpg")));
+    emit_cover_jpg(&front_png, &odir.join(format!("{slug}-{lang}-cover.jpg")))?;
 
     println!("  \u{2713} {slug} {lang}: {pages}pp  (resvg: front PNG + wrap PDF + JPG)");
     Ok(())
@@ -243,7 +243,7 @@ fn cover_one_chrome(
         .with_context(|| format!("copy {} -> {}", front_png.display(), bundle_png.display()))?;
     std::fs::copy(&wrap_pdf, &bundle_wrap)
         .with_context(|| format!("copy {} -> {}", wrap_pdf.display(), bundle_wrap.display()))?;
-    emit_cover_jpg(&front_png, &odir.join(format!("{slug}-{lang}-cover.jpg")));
+    emit_cover_jpg(&front_png, &odir.join(format!("{slug}-{lang}-cover.jpg")))?;
 
     println!("  \u{2713} {slug} {lang}: {pages}pp  (chrome: front PNG + wrap PDF + JPG)");
     Ok(())
