@@ -156,6 +156,7 @@ fn comrak_opts() -> Options<'static> {
 /// (used as the nav/TOC title). `.unlisted` is irrelevant here because the title
 /// and copyright pages are added without a nav entry regardless.
 fn clean_chapter(md: &str) -> (String, Option<String>) {
+    let md = strip_html_comments(md);
     let mut out = String::with_capacity(md.len());
     let mut nav_title: Option<String> = None;
     for line in md.lines() {
@@ -198,6 +199,23 @@ fn clean_chapter(md: &str) -> (String, Option<String>) {
 /// True if a standalone image line carries a `{… .spot …}` attribute block.
 fn is_spot_image(line: &str) -> bool {
     attr_block(line).map(|a| a.contains(".spot")).unwrap_or(false)
+}
+
+/// Remove HTML comments `<!-- ... -->` (including multi-line ones) from Markdown
+/// before cleaning, so pipeline notes carried in frontmatter/chapters (e.g. the
+/// copyright page's editing note) never leak into the rendered XHTML.
+fn strip_html_comments(md: &str) -> String {
+    let mut out = String::with_capacity(md.len());
+    let mut rest = md;
+    while let Some(start) = rest.find("<!--") {
+        out.push_str(&rest[..start]);
+        match rest[start + 4..].find("-->") {
+            Some(end) => rest = &rest[start + 4 + end + 3..],
+            None => return out,
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Return the inner text of a trailing `{ … }` attribute block, if the line ends

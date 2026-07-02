@@ -462,11 +462,34 @@ enum Block {
     Table { header: Vec<String>, rows: Vec<Vec<String>> },
 }
 
+/// Remove HTML comments `<!-- ... -->` (including multi-line ones) from Markdown
+/// before parsing, so pipeline notes carried in frontmatter/chapters (e.g. the
+/// copyright page's editing note) never render as body text. Pandoc dropped
+/// these; bookmill's block parser would otherwise treat them as paragraphs.
+fn strip_html_comments(md: &str) -> String {
+    let mut out = String::with_capacity(md.len());
+    let mut rest = md;
+    while let Some(start) = rest.find("<!--") {
+        out.push_str(&rest[..start]);
+        match rest[start + 4..].find("-->") {
+            Some(end) => rest = &rest[start + 4 + end + 3..],
+            None => {
+                // unterminated comment: drop the remainder
+                return out;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Split markdown into blocks. Drops fenced code blocks (```; used by the
 /// copyright pages to carry raw LaTeX, which Typst must not see). Recognizes
 /// ATX headings, `---`/`***` scene-break rules, standalone images, and
 /// blank-line-delimited paragraphs.
 fn parse_blocks(md: &str) -> Vec<Block> {
+    let md = strip_html_comments(md);
+    let md = md.as_str();
     let mut out = Vec::new();
     let mut para: Vec<String> = Vec::new();
     let mut in_fence = false;
