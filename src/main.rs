@@ -283,6 +283,9 @@ fn main() -> Result<()> {
                         audiobook::run(&repo, Some(book), lang, None, None, false)?;
                     }
                 }
+                // Bare, copy-pasteable command on its own line (no prefix, no
+                // emoji) so a terminal selection re-runs this exact task verbatim.
+                println!("\nre-run this task:\n{cmd}");
             }
             None => println!("(nothing selected)"),
         },
