@@ -2,37 +2,30 @@
 //!
 //! Words are counted over the same content files the build/audiobook engines
 //! resolve (`[content.<lang>]`: prepend + glob + files + append), matching the
-//! Makefile's `cat <chapters> | wc -w`. Pages come from the already-built print
-//! interior PDF via [`crate::pdfmeta::page_count`] (`-kdp.pdf`, falling back to
-//! the retail `-<lang>.pdf`); if neither exists we print "—" and hint to build.
+//! Makefile's `cat <chapters> | wc -w`. Pages are **source-derived**: each print
+//! build drops a `(words, pages)` sidecar next to its PDF, and the count here
+//! rescales that book's own layout density to the *current* word count (see
+//! [`crate::pages`]) — so an edited chapter shows a live `~estimate` instead of
+//! the last build's stale page count. It falls back to the raw PDF page count
+//! when no sidecar exists yet, and prints "—" when nothing is built.
 
 use crate::config::BookConfig;
 use crate::discover::Repo;
-use crate::pdfmeta;
+use crate::pages::{self, PageCount};
 use anyhow::Result;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-/// Count whitespace-separated tokens across the resolved content files, the same
-/// unit `wc -w` uses (so the totals match the Makefile's `words_book_%`).
-fn count_words(files: &[PathBuf]) -> usize {
-    files
-        .iter()
-        .map(|f| {
-            std::fs::read_to_string(f)
-                .map(|s| s.split_whitespace().count())
-                .unwrap_or(0)
-        })
-        .sum()
-}
-
-/// Resolve the interior PDF page count for a book/lang. Prefer the KDP print
-/// interior (`-kdp.pdf`); fall back to the retail PDF. `None` if neither built.
-fn pages_for(repo: &Repo, slug: &str, lang: &str) -> Option<u32> {
+/// Resolve the display page count for a book/lang from the current source word
+/// count. Prefer the KDP print interior (`-kdp.pdf`); fall back to the retail
+/// PDF. Uses the build sidecar to rescale to edited source when present.
+fn pages_for(repo: &Repo, slug: &str, lang: &str, words: usize) -> PageCount {
     let odir = repo.root.join("output").join(slug).join(lang);
     let base = format!("{slug}-{lang}");
     let kdp = odir.join(format!("{base}-kdp.pdf"));
-    let retail = odir.join(format!("{base}.pdf"));
-    pdfmeta::page_count(&kdp).or_else(|| pdfmeta::page_count(&retail))
+    match pages::resolve(&kdp, words) {
+        PageCount::Unknown => pages::resolve(&odir.join(format!("{base}.pdf")), words),
+        found => found,
+    }
 }
 
 /// Languages to report for a book, honoring the `--lang` filter (else all).
@@ -50,15 +43,17 @@ fn report_book(repo: &Repo, book: &BookConfig, dir: &Path, lang_filter: &Option<
             continue;
         };
         let words = match content.resolve(dir) {
-            Ok(files) => count_words(&files),
+            Ok(files) => pages::count_words(&files),
             Err(e) => {
                 println!("  {:<45} {:<3}  (content error: {})", book.slug, lang, e);
                 continue;
             }
         };
-        let pages = pages_for(repo, &book.slug, &lang)
-            .map(|p| format!("{p:>4} pages"))
-            .unwrap_or_else(|| "   — pages (build the PDF)".into());
+        let pages = match pages_for(repo, &book.slug, &lang, words) {
+            PageCount::Exact(p) => format!("{p:>4} pages"),
+            PageCount::Estimate(p) => format!("{p:>4} pages ~"),
+            PageCount::Unknown => "   — pages (build the PDF)".into(),
+        };
         println!("  {:<45} {:<3}  {:>6} words   {}", book.slug, lang, words, pages);
     }
 }

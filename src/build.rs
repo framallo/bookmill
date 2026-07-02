@@ -639,6 +639,7 @@ fn build_one(
             }
         }
         Out::RetailPdf => {
+            let pdf = odir.join(format!("{base}.pdf"));
             crate::typst_pdf::run(
                 repo,
                 &m,
@@ -649,8 +650,9 @@ fn build_one(
                 cover.as_deref(),
                 geometry,
                 lang,
-                &odir.join(format!("{base}.pdf")),
+                &pdf,
             )?;
+            crate::pages::write_sidecar(&pdf, &chaps);
         }
         Out::KdpPdf => {
             // Default KDP print interior is "{base}-kdp.pdf". Regional POD print
@@ -659,6 +661,7 @@ fn build_one(
                 ("bubok", Some(ed)) => format!("{base}-{ed}.pdf"),
                 _ => format!("{base}-kdp.pdf"),
             };
+            let pdf = odir.join(fname);
             crate::typst_pdf::run(
                 repo,
                 &m,
@@ -669,8 +672,9 @@ fn build_one(
                 None,
                 geometry,
                 lang,
-                &odir.join(fname),
+                &pdf,
             )?;
+            crate::pages::write_sidecar(&pdf, &chaps);
         }
         Out::Docx => {
             // Editor review doc — clean Word document via the native docx-rs engine.

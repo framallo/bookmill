@@ -10,11 +10,13 @@ mod cover_svg;
 mod docx_native;
 mod epub_native;
 mod epub_shrink;
+mod pages;
 mod pdfmeta;
 mod cover_tmpl;
 mod covers;
 mod deep;
 mod discover;
+mod lint;
 mod scripts;
 mod tui;
 mod words;
@@ -108,13 +110,16 @@ enum Cmd {
         #[arg(long)]
         lang: Option<String>,
     },
-    /// Prose lint (LanguageTool: grammar + Spanish tildes) via scripts/lint-prose.py
+    /// Prose lint — native (missing tildes, spelling, canon/AI-isms); no Python.
     Lint {
         /// book slug (omit or "all" = every book)
         book: Option<String>,
         /// limit to a language (es|en|all)
         #[arg(long)]
         lang: Option<String>,
+        /// deep mode: also run full grammar via scripts/lint-prose.py (LanguageTool)
+        #[arg(long, visible_alias = "languagetool")]
+        deep: bool,
     },
     /// Scaffold/check KDP listing metadata via scripts/kdp-metadata.py
     Kdp {
@@ -273,7 +278,13 @@ fn main() -> Result<()> {
         }
         Cmd::Content { book, lang } => cmd_content(&repo, &book, &lang)?,
         Cmd::Words { book, lang } => words::run(&repo, book, lang)?,
-        Cmd::Lint { book, lang } => scripts::lint(&repo, book, lang)?,
+        Cmd::Lint { book, lang, deep } => {
+            if deep {
+                scripts::lint(&repo, book, lang)?
+            } else {
+                lint::run(&repo, book, lang)?
+            }
+        }
         Cmd::Kdp { book } => scripts::kdp(&repo, book)?,
         Cmd::Tui => match tui::run(&repo)? {
             Some(action) => {
@@ -314,7 +325,11 @@ fn main() -> Result<()> {
                     }
                     tui::Action::Lint { book, lang } => {
                         let lang = (lang != "all").then_some(lang);
-                        scripts::lint(&repo, Some(book), lang)?;
+                        // native lint by default (Python-free); `--deep` on the CLI
+                        // still routes to scripts/lint-prose.py for full grammar.
+                        // Issues make `run` return Err (non-zero exit on the CLI);
+                        // in the TUI we only want the report, so don't abort.
+                        let _ = lint::run(&repo, Some(book), lang);
                     }
                     tui::Action::Kdp { book } => scripts::kdp(&repo, Some(book))?,
                 }

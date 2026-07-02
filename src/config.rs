@@ -37,6 +37,23 @@ pub struct RepoConfig {
     pub cover: Option<CoverConfig>,
     /// repo-wide audiobook defaults (engine/voice/speed); books override via [audiobook]
     pub audiobook: Option<Audiobook>,
+    /// prose-lint allow-list + forbidden terms ([lint]); merged repo→book by `lint`.
+    #[serde(default)]
+    pub lint: LintConfig,
+}
+
+// ---------- prose lint ([lint]) ----------
+/// Native prose-lint config. `ignore` holds proper names / technical terms that
+/// must never be flagged as spelling errors (it still never hides a genuine
+/// tilde/accent issue — see `lint.rs`). `forbid` holds terms that MUST NOT appear
+/// in the prose (reported wherever found). Read at both the repo root and the
+/// per-book `bookmill.toml`; the two `ignore`/`forbid` lists are merged.
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct LintConfig {
+    #[serde(default)]
+    pub ignore: Vec<String>,
+    #[serde(default)]
+    pub forbid: Vec<String>,
 }
 
 fn default_books_dir() -> String {
@@ -135,6 +152,9 @@ pub struct BookConfig {
     pub cover: Option<CoverConfig>,
     /// per-book audiobook overrides (voice/speed per language); merges over repo [audiobook]
     pub audiobook: Option<Audiobook>,
+    /// per-book prose-lint additions ([lint]); merged over the repo-root [lint].
+    #[serde(default)]
+    pub lint: LintConfig,
 }
 
 // ---------- cover design ([cover]) ----------
