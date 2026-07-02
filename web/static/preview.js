@@ -142,11 +142,15 @@ async function draw() {
   const art = new Konva.Layer(), guides = new Konva.Layer();
   stage.add(art, guides);
 
-  // page slots: left at x=0, right at x=pageWpx+GAP
-  drawPage(art, guides, lp, 0, pageWpx, H, 'verso', slug, lang);
+  // page slots: left at x=0, right at x=pageWpx+GAP. The first spread's empty
+  // left slot shows the front COVER (page 0), so the preview opens on the cover
+  // beside interior page 1 — matching how the physical book presents.
+  if (spread === 0 && !lp) drawCover(art, guides, 0, pageWpx, H, slug, lang);
+  else drawPage(art, guides, lp, 0, pageWpx, H, 'verso', slug, lang);
   drawPage(art, guides, rp, pageWpx + GAP, pageWpx, H, 'recto', slug, lang);
 
-  $('pglabel').textContent = `${lp ? 'p' + lp : '—'} · ${rp ? 'p' + rp : '—'}  (of ${P})`;
+  const leftLabel = spread === 0 ? 'cover' : (lp ? 'p' + lp : '—');
+  $('pglabel').textContent = `${leftLabel} · ${rp ? 'p' + rp : '—'}  (of ${P})`;
   $('prev').disabled = spread <= 0;
   $('first').disabled = spread <= 0;
   $('next').disabled = spread >= lastSpread();
@@ -181,6 +185,31 @@ function drawPage(art, guides, page, ox, pageWpx, H, side, slug, lang) {
   }
 
   drawGuides(guides, page, ox, pageWpx, H, side);
+}
+
+// Draw the rendered front cover in a page slot (page 0 of the preview). The cover
+// PNG (1600×2560) is fit into the slot via 'contain' so its whole face is visible;
+// if no cover has been rendered yet the slot shows a subtle placeholder.
+function drawCover(art, guides, ox, pageWpx, H, slug, lang) {
+  art.add(new Konva.Rect({ x: ox, y: 0, width: pageWpx, height: H, fill: '#15191f' }));
+  const url = `/api/asset/${slug}/${lang}/rendered?t=${Date.now()}`;
+  Konva.Image.fromURL(url, (img) => {
+    const iw = img.width(), ih = img.height();
+    const s = Math.min(pageWpx / iw, H / ih);       // contain
+    const w = iw * s, h = ih * s;
+    img.setAttrs({ x: ox + (pageWpx - w) / 2, y: (H - h) / 2, width: w, height: h });
+    art.add(img);
+    art.draw();
+  }, () => {
+    art.add(new Konva.Text({
+      x: ox + 12, y: 0, width: pageWpx - 24, height: H,
+      text: 'front cover\n(not rendered yet)', fontSize: 13, fill: '#8a98a8',
+      align: 'center', verticalAlign: 'middle', fontFamily: 'system-ui, sans-serif',
+    }));
+    art.draw();
+  });
+  // outline the cover slot
+  guides.add(new Konva.Rect({ x: ox, y: 0, width: pageWpx, height: H, stroke: '#2c3543', strokeWidth: 1 }));
 }
 
 // Fetch the failing page URL to recover the backend error text and paint it on

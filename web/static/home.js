@@ -10,10 +10,20 @@ let TILES = [];        // current rendered <a.tile> nodes, in display order
 let sel = -1;          // index of the keyboard-selected tile (−1 = none)
 const state = { q: '', sort: 'title', dir: 'asc' };
 
+let ACTIVE_REPO = '';   // absolute path of the active project (for recent highlight)
+
 init();
 
 async function init() {
   wireControls();
+  wireProjects();
+  await loadBooks();
+  loadProjects();
+}
+
+// Load (or reload) the book grid for the currently-active project. Called on
+// startup and again after switching projects via Open Folder / Open Recent.
+async function loadBooks() {
   let res;
   try {
     res = await fetch('/api/books').then((r) => r.json());
@@ -21,7 +31,8 @@ async function init() {
     $('shelf').innerHTML = `<p class="empty">Failed to load books: ${esc(String(e))}</p>`;
     return;
   }
-  $('repo').textContent = res.repoRoot || '';
+  ACTIVE_REPO = res.repoRoot || '';
+  $('repo').textContent = ACTIVE_REPO;
   BOOKS = (res.books || []).map((b) => ({
     slug: b.slug,
     languages: b.languages || [],
@@ -29,6 +40,7 @@ async function init() {
     title: (b.titles && (b.titles.es || b.titles.en || Object.values(b.titles)[0])) || b.slug,
     protected: !!b.protected,
   }));
+  sel = -1;
   render();
 }
 
@@ -60,6 +72,83 @@ function wireControls() {
   });
 
   wireShortcuts();
+}
+
+// --- Projects: Open Folder / Open Recent (VS Code-style) --------------------
+// A drop sheet under the folder icon holds a path field + Open button and the
+// recent-folders list. Opening a folder swaps the server's active repo, then we
+// reload the book grid. The browser can't show a native folder dialog, so this
+// uses a plain absolute-path text field (kept simple, per the spec).
+function wireProjects() {
+  const sheet = $('projSheet');
+  const btn = $('projBtn');
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = sheet.classList.toggle('open');
+    btn.classList.toggle('active', open);
+    if (open) { loadProjects(); setTimeout(() => $('projPath').focus(), 0); }
+  });
+  document.addEventListener('click', (e) => {
+    if (!sheet.contains(e.target) && e.target !== btn && !btn.contains(e.target)) {
+      sheet.classList.remove('open');
+      btn.classList.remove('active');
+    }
+  });
+  $('projOpen').addEventListener('click', () => openProject($('projPath').value));
+  $('projPath').addEventListener('keydown', (e) => { if (e.key === 'Enter') openProject($('projPath').value); });
+}
+
+async function loadProjects() {
+  let data;
+  try { data = await fetch('/api/projects').then((r) => r.json()); }
+  catch (e) { return; }
+  ACTIVE_REPO = data.active || ACTIVE_REPO;
+  const host = $('projRecent');
+  const recent = data.recent || [];
+  if (!recent.length) { host.innerHTML = '<div class="projempty">No recent folders.</div>'; return; }
+  host.innerHTML = '';
+  recent.forEach((p) => {
+    const el = document.createElement('button');
+    el.className = 'projrecent-item' + (p === data.active ? ' active' : '');
+    el.title = p;
+    el.innerHTML = `<span class="pdot"></span><span class="ptxt">${esc(p)}</span>`;
+    el.addEventListener('click', () => openProject(p));
+    host.appendChild(el);
+  });
+}
+
+// Switch the active project to `path`, then reload books + the recent list.
+async function openProject(path) {
+  path = (path || '').trim();
+  const errEl = $('projErr');
+  errEl.style.display = 'none';
+  if (!path) { showProjErr('Enter an absolute folder path.'); return; }
+  const btn = $('projOpen');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/open', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    ACTIVE_REPO = data.active || path;
+    $('projPath').value = '';
+    $('projSheet').classList.remove('open');
+    $('projBtn').classList.remove('active');
+    await loadBooks();
+    loadProjects();
+  } catch (e) {
+    showProjErr((e && e.message) || String(e));
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function showProjErr(msg) {
+  const el = $('projErr');
+  el.textContent = msg;
+  el.style.display = '';
 }
 
 // Keyboard shortcuts: `/` focuses search, `Esc` clears/blurs it, `?` toggles the

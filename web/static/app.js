@@ -36,10 +36,43 @@ async function init() {
 
   $('saveBtn').onclick = save;
   $('guidesOn').onchange = () => { guideLayer.visible($('guidesOn').checked); guideLayer.draw(); };
+  $('coverType').onchange = applyCoverType;
+  $('genAudiobook').onclick = genAudiobookCover;
+  $('openWrap').href = `/api/output/${encodeURIComponent(SLUG)}/${encodeURIComponent(LANG)}/wrap-cover`;
 
   bindStyleInputs();
   wireShortcuts();
   loadCover();
+}
+
+// Cover-type selector: Front (default eBook front editing), Paperback wrap (front
+// title block + back-cover blurb), Audiobook (square, inferred from the front).
+// The canvas always edits the shared FRONT title block; wrap/audiobook add their
+// own panels. (TODO: full drag layout of all three wrap panels.)
+function applyCoverType() {
+  const t = $('coverType').value;
+  $('wrapSection').style.display = t === 'wrap' ? '' : 'none';
+  $('audiobookSection').style.display = t === 'audiobook' ? '' : 'none';
+  // In audiobook mode the canvas title edits don't apply; keep Save enabled only
+  // for front/wrap (audiobook is generated via its own button).
+  $('saveBtn').style.display = t === 'audiobook' ? 'none' : '';
+}
+
+// Generate the square audiobook cover by cropping the rendered front (backend).
+async function genAudiobookCover() {
+  const btn = $('genAudiobook');
+  btn.disabled = true; status('generating audiobook cover…');
+  try {
+    const r = await fetch(`/api/cover/${SLUG}/${LANG}/audiobook`, { method: 'POST' })
+      .then((res) => res.ok ? res.json() : res.text().then((t) => { throw new Error(t); }));
+    const img = $('audiobookImg');
+    img.src = r.url; img.style.display = '';
+    status('audiobook cover saved');
+  } catch (e) {
+    status('audiobook cover failed: ' + ((e && e.message) || e));
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 // Keyboard shortcuts: Cmd/Ctrl+S saves; arrow keys nudge the selected element
@@ -97,6 +130,9 @@ async function loadCover() {
 
   $('bgcolor').value = toHex6(data.bgcolor);
   $('bgcolorHex').value = data.bgcolor;
+  // Back-cover blurb (paperback wrap mode).
+  $('blurbText').value = data.blurb || '';
+  applyCoverType();
   status('loaded ' + slug + ' / ' + lang);
 }
 
@@ -383,6 +419,8 @@ async function save() {
     author: elJSON('author'),
     bgcolor: $('bgcolorHex').value || '#000000',
   };
+  // In paperback-wrap mode, also persist the back-cover blurb before re-render.
+  if ($('coverType').value === 'wrap') body.blurb = $('blurbText').value;
   $('saveBtn').disabled = true; status('saving + rendering…');
   try {
     const r = await fetch(`/api/cover/${slug}/${lang}`, {

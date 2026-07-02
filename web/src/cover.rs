@@ -140,6 +140,9 @@ pub struct CoverResponse {
     /// `<n>%` (of the 1360px content width), or `<n>px`.
     pub title_mt: String,
     pub author_mt: String,
+    /// Back-cover blurb for the paperback wrap (`[cover.<lang>].blurb`, falling
+    /// back to `[listing.<lang>].blurb`). Editable in the editor's wrap mode.
+    pub blurb: String,
 }
 
 #[derive(Serialize)]
@@ -195,6 +198,11 @@ pub fn load_cover(repo: &Repo, book: &BookSummary, lang: &str) -> Result<CoverRe
     let title_mt = cover_str(&book_doc, r, "title_mt").unwrap_or_else(|| DEFAULT_TITLE_MT.into());
     let author_mt = cover_str(&book_doc, r, "author_mt").unwrap_or_else(|| DEFAULT_AUTHOR_MT.into());
 
+    // Back-cover blurb for the wrap: `[cover.<lang>].blurb`, else `[listing.<lang>].blurb`.
+    let blurb = lang_str(&book_doc, "cover", lang, "blurb")
+        .or_else(|| lang_str(&book_doc, "listing", lang, "blurb"))
+        .unwrap_or_default();
+
     // Existing saved layout, if any, wins over computed defaults.
     let saved = read_saved_layout(&book_doc, lang);
 
@@ -248,6 +256,7 @@ pub fn load_cover(repo: &Repo, book: &BookSummary, lang: &str) -> Result<CoverRe
         accent,
         title_mt,
         author_mt,
+        blurb,
     })
 }
 
@@ -313,6 +322,41 @@ pub fn save_cover(book: &BookSummary, lang: &str, els: &Elements, bgcolor: &str)
 
     std::fs::write(&path, doc.to_string()).with_context(|| format!("writing {}", path.display()))?;
     Ok(path)
+}
+
+/// Persist the paperback-wrap back-cover blurb into `[cover.<lang>].blurb` in the
+/// book's `bookmill.toml`, preserving comments/formatting. Written by the cover
+/// editor's "Paperback wrap" mode; the wrap renderer (`cover_tmpl::wrap_html`)
+/// reads it for the back panel. Returns the path that was written.
+pub fn save_blurb(book: &BookSummary, lang: &str, blurb: &str) -> Result<PathBuf> {
+    let path = book.dir.join("bookmill.toml");
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("reading {}", path.display()))?;
+    let mut doc: DocumentMut = text.parse().context("parsing book bookmill.toml")?;
+
+    // ensure [cover] then [cover.<lang>] exist
+    if doc.get("cover").and_then(|i| i.as_table()).is_none() {
+        doc["cover"] = Item::Table(Table::new());
+    }
+    {
+        let cover = doc["cover"].as_table_mut().unwrap();
+        if cover.get(lang).and_then(|i| i.as_table()).is_none() {
+            let mut t = Table::new();
+            t.set_implicit(false);
+            cover.insert(lang, Item::Table(t));
+        }
+    }
+    doc["cover"][lang]["blurb"] = value(blurb);
+
+    std::fs::write(&path, doc.to_string()).with_context(|| format!("writing {}", path.display()))?;
+    Ok(path)
+}
+
+/// Absolute path of the square audiobook cover for a book/lang. Lives alongside
+/// the other cover assets (`libros/<slug>/cover/audiobook-<lang>.png`), derived by
+/// the web editor from the front/wrap via a center-square crop.
+pub fn audiobook_cover_path(book: &BookSummary, lang: &str) -> PathBuf {
+    book.dir.join("cover").join(format!("audiobook-{lang}.png"))
 }
 
 fn element_inline(e: &Element) -> Value {
@@ -425,6 +469,16 @@ fn cover_str(book: &DocumentMut, repo: &DocumentMut, key: &str) -> Option<String
         .and_then(|c| c.get(key))
         .and_then(|i| i.as_str())
         .or_else(|| repo.get("cover").and_then(|c| c.get(key)).and_then(|i| i.as_str()))
+        .map(str::to_string)
+}
+
+/// Read a string from a per-language subtable: `[<section>.<lang>].<key>`
+/// (e.g. `[cover.es].blurb` or `[listing.en].blurb`). None if absent.
+fn lang_str(book: &DocumentMut, section: &str, lang: &str, key: &str) -> Option<String> {
+    book.get(section)
+        .and_then(|s| s.get(lang))
+        .and_then(|l| l.get(key))
+        .and_then(|v| v.as_str())
         .map(str::to_string)
 }
 

@@ -211,9 +211,7 @@ function matrixHtml() {
       ${col('editions', 'Editions')}
       ${col('langs', 'Languages')}
       ${col('formats', 'Formats')}
-    </div>
-    <div class="cmdprev" id="cmdprev">${esc(matrixCommand())}</div>
-    <p class="mhint">One keyboard path over every control: ←/→ (or Tab) move focus ‹ prev-book → Editions → Languages → Formats → each language's Edit cover / Preview / Check readiness (+details) → Check all books → next-book › · ↑/↓ change the focused list · Enter/Space activates the focused button. Focus is remembered across refresh.</p>`;
+    </div>`;
 }
 
 // Wire pointer interactions to the same focus model: clicking any ring control
@@ -300,22 +298,33 @@ function render(d) {
   html += `<h2>Languages</h2>`;
   (d.languages || []).forEach((lang) => {
     const L = d.langs[lang] || {};
-    const li = L.listing;
     const rid = `rd-${lang}`;
     const q = `book=${encodeURIComponent(d.slug)}&lang=${encodeURIComponent(lang)}`;
+    const coverUrl = `/api/asset/${encodeURIComponent(d.slug)}/${encodeURIComponent(lang)}/rendered`;
+    const wrapUrl = `/api/output/${encodeURIComponent(d.slug)}/${encodeURIComponent(lang)}/wrap-cover`;
+
     html += `<div class="langcard">`;
+    // header: cover thumbnail + title/subtitle + KDP readiness block
+    html += `<div class="lgrid">`;
+    html += `<div class="lcover">`;
+    html += `<img src="${coverUrl}" alt="cover" `;
+    html += `onerror="this.outerHTML='<div class=&quot;fakecover&quot;>${escAttr(L.title || d.slug)}</div>'" />`;
+    html += `<a class="wraplink navbtn-none" href="${wrapUrl}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">wrap PDF ↗</a>`;
+    html += `</div>`;
+    html += `<div class="lmain">`;
     html += `<div class="lh"><span class="code">${lang.toUpperCase()}</span>`;
     html += `<span class="title">${esc(L.title || '(untitled)')}</span></div>`;
     if (L.subtitle) html += `<div class="sub">${esc(L.subtitle)}</div>`;
-    html += `<div class="facts">`;
-    html += `<span><b>${L.pages != null ? L.pages : '—'}</b> pages</span>`;
-    html += `<span>KDP PDF: <b>${L.kdpPdfExists ? 'built' : 'not built'}</b></span>`;
-    if (li) {
-      html += `<span><b>${(li.keywords || []).length}</b> keywords</span>`;
-      html += `<span>BISAC: <b>${(li.bisac || []).join(', ') || '—'}</b></span>`;
-      if (li.readingAge) html += `<span>age: <b>${esc(li.readingAge)}</b></span>`;
-      if (li.blurbChars != null) html += `<span>blurb: <b>${li.blurbChars}</b> chars</span>`;
-    }
+    html += kdpBlock(L);
+    html += `</div>`; // .lmain
+    html += `</div>`; // .lgrid
+
+    // Outputs section (built artifacts): filled by loadOutputs() after render.
+    html += `<div class="outsec">`;
+    html += `<div class="oshead"><h3>Outputs</h3>`;
+    html += `<button class="obtn" data-genall="${lang}">Generate all</button></div>`;
+    html += `<div id="out-${lang}"><p class="muted"><span class="spin"></span> loading outputs…</p></div>`;
+    html += `<div class="outlog" id="outlog-${lang}"></div>`;
     html += `</div>`;
 
     // One aligned action bar: cover / preview / readiness trigger.
@@ -344,9 +353,142 @@ function render(d) {
   (d.languages || []).forEach((lang) => {
     const btn = $(`rd-${lang}-btn`);
     if (btn) btn.onclick = () => checkReadiness(d.slug, lang);
+    const ga = document.querySelector(`[data-genall="${lang}"]`);
+    if (ga) ga.onclick = () => generateAll(d.slug, lang);
+    loadOutputs(d.slug, lang);
   });
   wireRing();
   restoreFocus();
+}
+
+// --- KDP readiness block ----------------------------------------------------
+// Surface the KDP listing facts with a flag per field: 7-keyword check, BISAC
+// count, reading age, blurb char count vs the 4000 limit, and the page count.
+function kdpBlock(L) {
+  const li = L.listing || null;
+  const fact = (label, value, flag) => {
+    const f = flag ? `<span class="flag ${flag.cls}">${esc(flag.text)}</span>` : '';
+    return `<div class="kfact">${esc(label)}: <b>${value}</b>${f}</div>`;
+  };
+  let h = `<div class="kdp">`;
+  h += fact('Title', esc(L.title || '—'), L.title ? null : { cls: 'err', text: 'missing' });
+  h += fact('Subtitle', esc(L.subtitle || '—'), null);
+  h += fact('Pages', L.pages != null ? L.pages : '—', L.pages != null ? null : { cls: 'warn', text: 'not built' });
+  h += fact('KDP PDF', L.kdpPdfExists ? 'built' : 'not built',
+    L.kdpPdfExists ? { cls: 'ok', text: 'ok' } : { cls: 'warn', text: 'build' });
+  if (li) {
+    const kc = (li.keywords || []).length;
+    h += fact('Keywords', kc,
+      kc === 7 ? { cls: 'ok', text: '7/7' } : { cls: kc > 7 ? 'err' : 'warn', text: `${kc}/7` });
+    const bc = (li.bisac || []).length;
+    h += fact('BISAC', (li.bisac || []).join(', ') || '—',
+      bc >= 2 && bc <= 3 ? { cls: 'ok', text: `${bc}` } : { cls: 'warn', text: `${bc} (want 2–3)` });
+    h += fact('Reading age', esc(li.readingAge || '—'), li.readingAge ? null : { cls: 'warn', text: 'unset' });
+    if (li.blurbChars != null) {
+      h += fact('Blurb', `${li.blurbChars} chars`,
+        li.blurbChars > 4000 ? { cls: 'err', text: 'over 4000' } : { cls: 'ok', text: '≤4000' });
+    } else {
+      h += fact('Blurb', '—', { cls: 'err', text: 'missing' });
+    }
+  } else {
+    h += `<div class="kfact">Listing: <b>—</b><span class="flag err">no [listing]</span></div>`;
+  }
+  h += `</div>`;
+  return h;
+}
+
+// --- Outputs (built artifacts: open / generate) -----------------------------
+
+// Load the output rows for one language and render Open/Generate per flavor.
+async function loadOutputs(bslug, lang) {
+  const host = $(`out-${lang}`);
+  if (!host) return;
+  let data;
+  try {
+    const res = await fetch(`/api/outputs/${encodeURIComponent(bslug)}/${encodeURIComponent(lang)}`);
+    if (!res.ok) throw new Error(await res.text());
+    data = await res.json();
+  } catch (e) {
+    host.innerHTML = `<p class="err-msg">${esc((e && e.message) || e)}</p>`;
+    return;
+  }
+  host.innerHTML = '';
+  (data.outputs || []).forEach((o) => {
+    const row = document.createElement('div');
+    row.className = 'outrow';
+    row.id = `outrow-${lang}-${o.kind}`;
+    const when = o.exists && o.mtime ? new Date(o.mtime).toLocaleString() : '';
+    const openUrl = `/api/output/${encodeURIComponent(bslug)}/${encodeURIComponent(lang)}/${encodeURIComponent(o.kind)}`;
+    row.innerHTML =
+      `<span class="olabel">${esc(o.label)}</span>` +
+      `<span class="ostatus ${o.exists ? 'built' : ''}">${o.exists ? 'built · ' + esc(when) : 'not built'}</span>` +
+      `<a class="obtn" ${o.exists ? `href="${openUrl}" target="_blank" rel="noopener"` : 'aria-disabled="true"'} data-open>${'Open'}</a>` +
+      `<button class="obtn" data-gen="${esc(o.kind)}">Generate</button>`;
+    if (!o.exists) row.querySelector('[data-open]').classList.add('disabled-open');
+    host.appendChild(row);
+    const genBtn = row.querySelector('[data-gen]');
+    genBtn.onclick = () => generateOutput(bslug, lang, o.kind, o.label);
+    if (!o.exists) {
+      const open = row.querySelector('[data-open]');
+      open.style.pointerEvents = 'none';
+      open.style.opacity = '.4';
+    }
+  });
+}
+
+// Trigger one build via POST /api/build; stream the log into the per-lang log box.
+async function generateOutput(bslug, lang, kind, label) {
+  const row = $(`outrow-${lang}-${kind}`);
+  const log = $(`outlog-${lang}`);
+  const genBtn = row ? row.querySelector('[data-gen]') : null;
+  if (genBtn) { genBtn.disabled = true; genBtn.innerHTML = '<span class="spin"></span>'; }
+  const status = row ? row.querySelector('.ostatus') : null;
+  if (status) { status.textContent = 'building…'; status.classList.remove('built'); }
+  log.style.display = '';
+  log.textContent = `Building ${label} (${kind})…\n`;
+  try {
+    const res = await fetch(`/api/build/${encodeURIComponent(bslug)}/${encodeURIComponent(lang)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    log.textContent = (data.ok ? '✓ ' : '✗ ') + `${label}\n\n` + (data.log || '');
+  } catch (e) {
+    log.textContent = `✗ ${label}\n\n` + ((e && e.message) || e);
+  } finally {
+    if (genBtn) { genBtn.disabled = false; genBtn.textContent = 'Generate'; }
+    await loadOutputs(bslug, lang); // refresh built/not-built + timestamps
+  }
+}
+
+// Generate everything for a book/language (interiors + covers).
+async function generateAll(bslug, lang) {
+  const btn = document.querySelector(`[data-genall="${lang}"]`);
+  const log = $(`outlog-${lang}`);
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin"></span> building all'; }
+  log.style.display = '';
+  log.textContent = `Building everything for ${bslug} · ${lang.toUpperCase()}…\n`;
+  try {
+    const res = await fetch(`/api/build/${encodeURIComponent(bslug)}/${encodeURIComponent(lang)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'all' }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    log.textContent = (data.ok ? '✓ ' : '✗ ') + `all outputs\n\n` + (data.log || '');
+  } catch (e) {
+    log.textContent = '✗ generate all\n\n' + ((e && e.message) || e);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Generate all'; }
+    await loadOutputs(bslug, lang);
+  }
+}
+
+// escAttr — safe for double-quoted HTML attributes (onerror handler).
+function escAttr(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
 // --- Publish readiness ------------------------------------------------------

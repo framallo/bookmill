@@ -59,6 +59,11 @@
   <a class="navlink" href="/">← all books</a>
   <a class="navlink" id="backBook" href="#">← book</a>
   <h1>Edit cover</h1>
+  <select id="coverType" title="Which cover to edit">
+    <option value="front">Front (eBook)</option>
+    <option value="wrap">Paperback wrap</option>
+    <option value="audiobook">Audiobook (square)</option>
+  </select>
   <span id="bookLabel" class="hint"></span>
   <span id="protBadge" class="pill" style="display:none">protected · comparison render</span>
   <span class="spacer"></span>
@@ -99,6 +104,31 @@
     <h3>Guides</h3>
     <div class="field">
       <label><input type="checkbox" id="guidesOn" checked style="width:auto" /> Show trim / bleed / safe guides</label>
+    </div>
+
+    <!-- Paperback wrap: edit the front title block on the canvas + the back-cover
+         blurb here. Saving writes [cover.<lang>].blurb and re-renders the wrap PDF.
+         TODO: full drag layout of all three wrap panels (back/spine/front). -->
+    <div id="wrapSection" style="display:none">
+      <h3>Paperback wrap · back-cover blurb</h3>
+      <div class="field">
+        <label>Back-cover blurb</label>
+        <textarea id="blurbText" style="min-height:120px"></textarea>
+      </div>
+      <div class="hint">The canvas edits the shared <b>front</b> title block. The blurb is
+        written to <code>[cover.&lt;lang&gt;].blurb</code>; Save re-renders the wrap PDF
+        (<code>wrap-&lt;lang&gt;-KDP.pdf</code>). Keep the bottom-right barcode zone clear.</div>
+      <a class="navlink" id="openWrap" href="#" target="_blank" rel="noopener"
+         style="display:inline-block;margin-top:8px;color:var(--accent)">open wrap PDF ↗</a>
+    </div>
+
+    <!-- Audiobook: derived (inferred) from the front/wrap by a center-square crop. -->
+    <div id="audiobookSection" style="display:none">
+      <h3>Audiobook cover (3000×3000)</h3>
+      <div class="hint">Inferred from the rendered <b>front</b> cover by a center-square
+        crop (front scene + title). Render the front/wrap first, then generate.</div>
+      <button class="primary" id="genAudiobook" style="width:100%;margin-top:10px">Generate from front cover</button>
+      <img id="audiobookImg" class="preview-img" style="display:none" alt="audiobook cover" />
     </div>
 
     <h3>Save</h3>

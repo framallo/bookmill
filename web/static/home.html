@@ -55,6 +55,27 @@
   .sheet button .chk { margin-left:auto; opacity:0; }
   .sheet button.sel .chk { opacity:1; }
 
+  /* ---- projects sheet (open folder / recent) ---- */
+  .projsheet { min-width:340px; max-width:440px; }
+  .projsheet .openrow { display:flex; gap:6px; padding:2px 8px 8px; }
+  .projsheet .openrow input { flex:1; height:32px; border-radius:7px; border:1px solid var(--line);
+                              background:var(--panel2); color:var(--ink); padding:0 9px;
+                              font:12px ui-monospace,Menlo,monospace; }
+  .projsheet .openrow input:focus { outline:none; border-color:var(--accent); }
+  .projsheet .openrow button { height:32px; padding:0 12px; border-radius:7px; border:1px solid var(--accent);
+                               background:var(--accent); color:#1a1206; font-weight:600; font-size:12.5px; cursor:pointer; }
+  .projsheet .openrow button:disabled { opacity:.5; cursor:default; }
+  .projerr { color:#e8807f; font-size:11.5px; padding:0 8px 8px; white-space:pre-wrap; }
+  .projrecent-item { display:flex; align-items:center; gap:8px; width:100%; background:transparent; border:none;
+                     color:var(--ink); font:11.5px ui-monospace,Menlo,monospace; text-align:left; padding:6px 8px;
+                     border-radius:7px; cursor:pointer; overflow:hidden; }
+  .projrecent-item:hover { background:var(--panel2); }
+  .projrecent-item.active { color:var(--accent); }
+  .projrecent-item .ptxt { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; direction:rtl; text-align:left; }
+  .projrecent-item .pdot { flex:0 0 auto; width:6px; height:6px; border-radius:50%; background:var(--accent); opacity:0; }
+  .projrecent-item.active .pdot { opacity:1; }
+  .projempty { color:var(--muted); font-size:12px; padding:4px 8px 6px; }
+
   /* ---- library grid (flat tiles; a book's language variants stay adjacent) ---- */
   main { flex:1 1 auto; overflow:auto; padding:22px 20px 60px; }
   .shelf { display:grid; gap:22px 18px; justify-content:center;
@@ -136,6 +157,11 @@
 
   <div class="right">
     <span class="count" id="count"></span>
+    <button class="iconbtn" id="projBtn" title="Projects (open folder / recent)" aria-label="Projects">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+      </svg>
+    </button>
     <button class="iconbtn" id="filterBtn" title="Sort &amp; filter" aria-label="Sort and filter">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>
@@ -146,6 +172,18 @@
         <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
       </svg>
     </button>
+  </div>
+
+  <!-- projects drop sheet: Open Folder (path field) + Open Recent list -->
+  <div class="sheet projsheet" id="projSheet">
+    <div class="lbl">Open folder</div>
+    <div class="openrow">
+      <input id="projPath" type="text" spellcheck="false" placeholder="/absolute/path/to/books-repo" autocomplete="off" />
+      <button id="projOpen">Open</button>
+    </div>
+    <div class="projerr" id="projErr" style="display:none"></div>
+    <div class="lbl">Open recent</div>
+    <div id="projRecent"><div class="projempty">No recent folders.</div></div>
   </div>
 
   <div class="sheet" id="sheet">
