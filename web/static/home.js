@@ -25,6 +25,7 @@ async function init() {
   BOOKS = (res.books || []).map((b) => ({
     slug: b.slug,
     languages: b.languages || [],
+    titles: b.titles || {},
     title: (b.titles && (b.titles.es || b.titles.en || Object.values(b.titles)[0])) || b.slug,
     protected: !!b.protected,
   }));
@@ -116,10 +117,13 @@ function render() {
   shelf.innerHTML = '';
   $('empty').style.display = list.length ? 'none' : '';
 
-  list.forEach((b) => shelf.appendChild(tile(b)));
+  // Flat tile grid: one cover+title tile per language, emitted book by book so a
+  // book's language variants (e.g. its ES and EN tiles) stay adjacent in order.
+  list.forEach((b) => {
+    (b.languages.length ? b.languages : ['']).forEach((lang) => shelf.appendChild(tile(b, lang)));
+  });
 
-  // Refresh the keyboard-selection state against the new tile set. Keep the
-  // current selection if it's still in range; otherwise drop it.
+  // Keyboard selection spans every tile in DOM order.
   TILES = [...shelf.children];
   if (sel >= TILES.length) sel = TILES.length - 1;
   applySel(false);
@@ -160,31 +164,32 @@ function setSel(i) {
   applySel();
 }
 
-function tile(b) {
-  const lang = b.languages[0] || '';
+// One language tile: the rendered front cover for that language + its localized
+// title (with a language badge). The <img> onerror swaps in a title block when no
+// cover is rendered yet. Book language variants are emitted adjacently by render().
+function tile(b, lang) {
   const a = document.createElement('a');
   a.className = 'tile';
-  a.href = `/book.html?book=${encodeURIComponent(b.slug)}`;
+  const title = (b.titles && b.titles[lang]) || b.title;
+  const coverUrl = lang
+    ? `/api/asset/${encodeURIComponent(b.slug)}/${encodeURIComponent(lang)}/rendered`
+    : '';
+  a.href = lang
+    ? `/book.html?book=${encodeURIComponent(b.slug)}&lang=${encodeURIComponent(lang)}`
+    : `/book.html?book=${encodeURIComponent(b.slug)}`;
 
-  const badges = b.languages.map((l) => `<span class="badge">${esc(l)}</span>`).join('') +
+  const badges = (lang ? `<span class="badge">${esc(lang)}</span>` : '') +
     (b.protected ? '<span class="badge prot spacer">locked</span>' : '');
-
-  // Cover image: the rendered front cover for the first language. If the book
-  // has no rendered cover yet, the <img> onerror swaps in a title block.
-  const coverUrl = lang ? `/api/asset/${encodeURIComponent(b.slug)}/${encodeURIComponent(lang)}/rendered` : '';
-  const fake = `<div class="fake">${esc(b.title)}</div>`;
+  const fake = `<div class="fake">${esc(title)}</div>`;
+  const img = coverUrl
+    ? `<img src="${coverUrl}" alt="" loading="lazy"
+         onerror="this.remove();this.parentNode.insertAdjacentHTML('beforeend', this.getAttribute('data-fb'));"
+         data-fb="${escAttr(fake)}" />`
+    : fake;
 
   a.innerHTML =
-    `<div class="cover">
-       <div class="badges">${badges}</div>
-       ${coverUrl
-         ? `<img src="${coverUrl}" alt="" loading="lazy"
-              onerror="this.remove();this.parentNode.insertAdjacentHTML('beforeend', this.getAttribute('data-fb'));"
-              data-fb="${escAttr(fake)}" />`
-         : fake}
-     </div>
-     <div class="ttl">${esc(b.title)}</div>
-     <div class="slug">${esc(b.slug)}</div>`;
+    `<div class="cover"><div class="badges">${badges}</div>${img}</div>
+     <div class="ttl">${esc(title)}</div>`;
   return a;
 }
 
