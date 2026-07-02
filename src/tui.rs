@@ -39,6 +39,12 @@ pub enum Action {
     Covers { book: String, lang: String },
     /// render audiobook
     Audiobook { book: String, lang: String },
+    /// word + page counts (native)
+    Words { book: String, lang: String },
+    /// prose lint (LanguageTool via scripts/lint-prose.py)
+    Lint { book: String, lang: String },
+    /// scaffold/check KDP listing metadata (scripts/kdp-metadata.py)
+    Kdp { book: String },
 }
 
 /// The focusable column-lists on the selector screen, left → right in tab order.
@@ -76,6 +82,9 @@ const ACTIONS: &[(&str, &str)] = &[
     ("Validate", "deep checks: epubcheck + PDF geometry + cover"),
     ("Covers", "render front + wrap covers (resvg)"),
     ("Audiobook", "render audiobook (kab engine)"),
+    ("Words", "word + page counts per book/lang (native)"),
+    ("Lint", "prose lint: grammar + Spanish tildes (LanguageTool)"),
+    ("Kdp", "scaffold/check KDP listing metadata"),
 ];
 
 /// Format selector options; "all" first (the default) so the cursor starts on the
@@ -95,6 +104,9 @@ fn cmd_string(action: &str, slug: &str, lang: &str, edition: &str, format: &str)
         "Validate" => format!("bookmill validate {slug} --deep"),
         "Covers" => format!("bookmill build cover {slug}{langflag}"),
         "Audiobook" => format!("bookmill audiobook {slug}{langflag}"),
+        "Words" => format!("bookmill words {slug}{langflag}"),
+        "Lint" => format!("bookmill lint {slug}{langflag}"),
+        "Kdp" => format!("bookmill kdp {slug}"),
         "Release" | "all" => format!("bookmill build {slug}{langflag} ; build cover ; validate --deep"),
         _ => {
             let mut c = format!("bookmill build {slug}");
@@ -121,6 +133,9 @@ impl Action {
             Action::Validate { book } => cmd_string("Validate", book, "all", "all", "edition"),
             Action::Covers { book, lang } => cmd_string("Covers", book, lang, "all", "edition"),
             Action::Audiobook { book, lang } => cmd_string("Audiobook", book, lang, "all", "edition"),
+            Action::Words { book, lang } => cmd_string("Words", book, lang, "all", "edition"),
+            Action::Lint { book, lang } => cmd_string("Lint", book, lang, "all", "edition"),
+            Action::Kdp { book } => cmd_string("Kdp", book, "all", "all", "edition"),
         }
     }
 }
@@ -328,7 +343,7 @@ pub fn run(repo: &Repo) -> Result<Option<Action>> {
 
                 let act_items: Vec<String> = ACTIONS.iter().map(|(n, _)| n.to_string()).collect();
                 let fmt_items: Vec<String> = FORMATS.iter().map(|s| s.to_string()).collect();
-                let lang_active = action.0 != "Validate";
+                let lang_active = !matches!(action.0, "Validate" | "Kdp");
                 opt_list(cols[0], " Action ", &act_items, act_i % ACTIONS.len(), true, focus == Pane::Action);
                 opt_list(cols[1], " Format ", &fmt_items, fmt_i % FORMATS.len(), is_build, focus == Pane::Format);
                 opt_list(cols[2], " Language ", &lopts, lang_i.min(lopts.len() - 1), lang_active, focus == Pane::Language);
@@ -409,6 +424,9 @@ pub fn run(repo: &Repo) -> Result<Option<Action>> {
                             "Validate" => Action::Validate { book: b },
                             "Covers" => Action::Covers { book: b, lang },
                             "Audiobook" => Action::Audiobook { book: b, lang },
+                            "Words" => Action::Words { book: b, lang },
+                            "Lint" => Action::Lint { book: b, lang },
+                            "Kdp" => Action::Kdp { book: b },
                             _ => Action::Build(BuildReq { book: b, lang, edition, format }),
                         });
                         break;

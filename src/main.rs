@@ -15,7 +15,9 @@ mod cover_tmpl;
 mod covers;
 mod deep;
 mod discover;
+mod scripts;
 mod tui;
+mod words;
 mod typst_pdf;
 mod web;
 
@@ -25,7 +27,7 @@ use discover::Repo;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "bookmill", version, about = "Book publishing pipeline (EPUB/PDF/KDP/covers/audiobook)")]
+#[command(name = "bookmill", version, about = "Book publishing pipeline (EPUB/PDF/KDP/covers/audiobook/words/lint)")]
 struct Cli {
     /// Path to start repo discovery from (defaults to current dir)
     #[arg(long, global = true)]
@@ -98,6 +100,27 @@ enum Cmd {
     },
     /// Print the resolved content file list for a book/lang
     Content { book: String, lang: String },
+    /// Word + page counts per book/lang (native; matches the Makefile `words`)
+    Words {
+        /// book slug (omit or "all" = every book)
+        book: Option<String>,
+        /// limit to a language (es|en|all)
+        #[arg(long)]
+        lang: Option<String>,
+    },
+    /// Prose lint (LanguageTool: grammar + Spanish tildes) via scripts/lint-prose.py
+    Lint {
+        /// book slug (omit or "all" = every book)
+        book: Option<String>,
+        /// limit to a language (es|en|all)
+        #[arg(long)]
+        lang: Option<String>,
+    },
+    /// Scaffold/check KDP listing metadata via scripts/kdp-metadata.py
+    Kdp {
+        /// book slug (omit or "all" = every book)
+        book: Option<String>,
+    },
     /// Interactive terminal UI
     Tui,
     /// Build outputs: interiors (default), covers, or shrink an EPUB
@@ -249,6 +272,9 @@ fn main() -> Result<()> {
             }
         }
         Cmd::Content { book, lang } => cmd_content(&repo, &book, &lang)?,
+        Cmd::Words { book, lang } => words::run(&repo, book, lang)?,
+        Cmd::Lint { book, lang } => scripts::lint(&repo, book, lang)?,
+        Cmd::Kdp { book } => scripts::kdp(&repo, book)?,
         Cmd::Tui => match tui::run(&repo)? {
             Some(action) => {
                 // Show the exact command about to run, before running it.
@@ -282,6 +308,15 @@ fn main() -> Result<()> {
                         let lang = (lang != "all").then_some(lang);
                         audiobook::run(&repo, Some(book), lang, None, None, false)?;
                     }
+                    tui::Action::Words { book, lang } => {
+                        let lang = (lang != "all").then_some(lang);
+                        words::run(&repo, Some(book), lang)?;
+                    }
+                    tui::Action::Lint { book, lang } => {
+                        let lang = (lang != "all").then_some(lang);
+                        scripts::lint(&repo, Some(book), lang)?;
+                    }
+                    tui::Action::Kdp { book } => scripts::kdp(&repo, Some(book))?,
                 }
                 // Bare, copy-pasteable command on its own line (no prefix, no
                 // emoji) so a terminal selection re-runs this exact task verbatim.

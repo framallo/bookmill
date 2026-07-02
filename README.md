@@ -68,8 +68,10 @@ make run                      # dev window for the desktop app on your book repo
 > **`bookmill build` (interiors + covers) needs no external tools** — verified by
 > building with an empty `PATH`. Only optional, non-build commands shell out to a
 > single tool each: `epubcheck` (Java) for `validate --deep`, `pdftoppm`
-> (poppler) for the interior previewer, and `kab` for `audiobook`. Building the
-> CLI needs the Rust toolchain and `nasm` (both are pulled in by Homebrew).
+> (poppler) for the interior previewer, `kab` for `audiobook`, and the repo's
+> `scripts/lint-prose.py` (LanguageTool) / `scripts/kdp-metadata.py` for `lint`
+> and `kdp`. `words` is fully native. Building the CLI needs the Rust toolchain
+> and `nasm` (both are pulled in by Homebrew).
 
 ## Quickstart
 
@@ -99,6 +101,9 @@ bookmill build my-book --format all  # retail + KDP EPUB and PDF
 | `bookmill build cover [book] [--lang]` | Render front PNG + paperback wrap PDF + eBook JPG |
 | `bookmill build shrink <epub> [--px]` | Shrink EPUB images in place (native) |
 | `bookmill audiobook [book] [--lang] [--voice] [--speed]` | Render a chaptered `.m4b` (kab engine) |
+| `bookmill words [book] [--lang]` | Word counts (native, over the resolved content) + page counts (from the built interior PDF) |
+| `bookmill lint [book] [--lang]` | Prose lint — grammar + Spanish tildes (LanguageTool via `scripts/lint-prose.py`) |
+| `bookmill kdp [book]` | Scaffold `kdp/<slug>.md` when missing, else check it against KDP limits (via `scripts/kdp-metadata.py`) |
 | `bookmill web [--port] [--pages]` | Launch the cover-editor web UI (localhost) |
 | `bookmill tui` | Interactive terminal UI |
 
