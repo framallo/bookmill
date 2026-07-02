@@ -43,8 +43,10 @@
             background:#222b36; color:var(--ink); font-size:15px; cursor:pointer; }
   .navbtn:hover { border-color:var(--accent); color:var(--accent); }
   .navbtn:disabled { opacity:.35; cursor:default; }
-  /* keyboard focus ring (part of the unified focus ring shared with the lists) */
+  /* keyboard focus ring — a single ring spans every control on the page */
   .navbtn.kfocus { border-color:var(--accent); color:var(--accent); box-shadow:0 0 0 2px rgba(212,169,55,.35); }
+  .kfocus { outline:none; box-shadow:0 0 0 2px rgba(212,169,55,.55); border-color:var(--accent) !important; border-radius:8px; }
+  .mcol.kfocus { box-shadow:0 0 0 2px var(--accent); }
 
   /* build panorama: TUI-style visible lists (editions × languages × formats) */
   .matrix { display:flex; gap:14px; flex-wrap:wrap; margin:6px 0; outline:none; }
@@ -109,11 +111,11 @@
 <body>
 <header>
   <a class="crumb" href="/">← all books</a>
-  <button class="navbtn" id="prevBook" title="Previous book (←)" disabled>‹</button>
-  <button class="navbtn" id="nextBook" title="Next book (→)" disabled>›</button>
+  <button class="navbtn" id="prevBook" data-ring="prev" title="Previous book (←)" disabled>‹</button>
+  <button class="navbtn" id="nextBook" data-ring="next" title="Next book (→)" disabled>›</button>
   <span class="crumb" id="navpos"></span>
   <span class="spacer"></span>
-  <button class="btn" id="checkAll" title="Run publish-readiness over every book/language">Check all books</button>
+  <button class="btn" id="checkAll" data-ring="checkall" title="Run publish-readiness over every book/language">Check all books</button>
 </header>
 <div id="checkAllPanel" style="max-width:920px;margin:0 auto;padding:0 20px"></div>
 <main id="main">

@@ -11,32 +11,54 @@ const initialLang = params.get('lang');
 let ALLBOOKS = [];   // ordered [{slug, languages}] from /api/books (for nav + check-all)
 let DATA = null;     // /api/book/{slug} response
 
-// Unified keyboard model. A single focus ring walks every field on the page —
-// the prev-book control, the three lists (Editions/Languages/Formats), and the
-// next-book control — in that visual left-to-right order. ←/→ (or Tab) move focus
-// between fields; ↑/↓ toggle the value inside a focused list (each list keeps its
-// own cursor); Enter on prev/next changes book. Formats mirror the TUI's FORMATS
-// (minus the "edition" meta-selector, which the dedicated Editions list covers).
+// Unified keyboard model. A SINGLE focus ring walks EVERY actionable control on
+// the page — prev-book, the three lists (Editions/Languages/Formats), each
+// language's action buttons (Edit cover · Preview book · Check readiness · the
+// readiness details toggle when present), the page-level "Check all books", and
+// next-book. ←/→ (and Tab) move focus along the ring; ↑/↓ toggle the value inside
+// a focused list (each list keeps its own cursor); Enter/Space activates a focused
+// button/link. The focused control's id is persisted per book so a refresh lands
+// on the same control. Formats mirror the TUI's FORMATS (minus the "edition"
+// meta-selector, which the dedicated Editions list covers).
 const FORMATS = ['all', 'epub', 'pdf', 'kdp', 'print'];
 const LISTS = ['editions', 'langs', 'formats'];
 const mx = {
   lists: { editions: [], langs: [], formats: FORMATS.slice() },
   cur: { editions: 0, langs: 0, formats: 0 }, // each list keeps its own cursor
-  focus: 'editions',                          // one of: prev, editions, langs, formats, next
+  focus: 'editions',                          // ring id of the focused control
 };
 
-// The focus ring for the current book: prev-book (unless first) → the three
-// lists → next-book (unless last). Disabled nav ends are skipped so ←/→ never
-// lands on a dead control.
-function focusRing() {
-  const i = bookIndex();
-  const ring = [];
-  if (i > 0) ring.push('prev');
-  ring.push(...LISTS);
-  if (i >= 0 && i < ALLBOOKS.length - 1) ring.push('next');
-  return ring;
-}
 function isList(f) { return LISTS.includes(f); }
+
+// The DOM element for a ring id (every ring control carries data-ring="<id>").
+function ringEl(id) {
+  try { return document.querySelector(`[data-ring="${window.CSS && CSS.escape ? CSS.escape(id) : id}"]`); }
+  catch (e) { return null; }
+}
+function isHidden(el) { return !el || (el.offsetParent === null && getComputedStyle(el).position !== 'fixed'); }
+
+// The ordered focus ring for the current page state. Intuitive left-to-right /
+// top-to-bottom order: prev-book → build panorama lists → per-language action
+// buttons (in language order) → Check all books → next-book. Controls that are
+// absent (first/last book) or hidden (the readiness caret before a run) are
+// filtered out so focus never lands on a dead/invisible target.
+function buildRing() {
+  const i = bookIndex();
+  const want = [];
+  if (i > 0) want.push('prev');
+  want.push(...LISTS);
+  ((DATA && DATA.languages) || []).forEach((l) => {
+    want.push(`cover-${l}`, `preview-${l}`, `readiness-${l}`, `caret-${l}`);
+  });
+  want.push('checkall');
+  if (i >= 0 && i < ALLBOOKS.length - 1) want.push('next');
+  return want.filter((id) => isList(id) ? !!ringEl(id) : !isHidden(ringEl(id)));
+}
+
+// --- focus persistence (per book) ------------------------------------------
+const focusKey = () => `bm.book.${slug}.focus`;
+function saveFocus() { try { localStorage.setItem(focusKey(), mx.focus); } catch (e) {} }
+function loadFocus() { try { return localStorage.getItem(focusKey()); } catch (e) { return null; } }
 
 init();
 
@@ -91,21 +113,26 @@ function wireNav() {
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable;
     if (typing) return;
 
-    // One unified focus ring over every field: prev-book · Editions · Languages ·
-    // Formats · next-book. ←/→ (and Tab) walk the ring; ↑/↓ toggle inside a list;
-    // Enter activates the focused prev/next control.
+    // One unified focus ring over every control: prev-book · Editions ·
+    // Languages · Formats · per-language buttons · Check all · next-book. ←/→ (and
+    // Tab) walk the ring; ↑/↓ toggle inside a focused list; Enter/Space activates a
+    // focused button/link. Keyboard navigation drops any lingering native focus so
+    // the ring highlight is the single source of truth (and Enter never fires twice).
     switch (e.key) {
-      case 'ArrowLeft': e.preventDefault(); moveFocus(-1); break;
-      case 'ArrowRight': e.preventDefault(); moveFocus(1); break;
-      case 'Tab': e.preventDefault(); moveFocus(e.shiftKey ? -1 : 1); break;
+      case 'ArrowLeft': e.preventDefault(); blurNative(); moveFocus(-1); break;
+      case 'ArrowRight': e.preventDefault(); blurNative(); moveFocus(1); break;
+      case 'Tab': e.preventDefault(); blurNative(); moveFocus(e.shiftKey ? -1 : 1); break;
       case 'ArrowUp': if (isList(mx.focus)) { e.preventDefault(); moveWithin(-1); } break;
       case 'ArrowDown': if (isList(mx.focus)) { e.preventDefault(); moveWithin(1); } break;
       case 'Home': if (isList(mx.focus)) { e.preventDefault(); setWithin(0); } break;
       case 'End': if (isList(mx.focus)) { e.preventDefault(); setWithin(mx.lists[mx.focus].length - 1); } break;
       case 'Enter':
       case ' ':
-        if (mx.focus === 'prev') { e.preventDefault(); gotoBook(-1); }
-        else if (mx.focus === 'next') { e.preventDefault(); gotoBook(1); }
+        if (isList(mx.focus)) break; // lists change value via ↑/↓, not activation
+        // If the browser already focuses this control, let it activate natively
+        // (avoids a double fire); otherwise activate the ring target ourselves.
+        if (e.target && (e.target.tagName === 'BUTTON' || e.target.tagName === 'A')) break;
+        { const el = ringEl(mx.focus); if (el) { e.preventDefault(); el.click(); } }
         break;
     }
   });
@@ -126,12 +153,19 @@ function initMatrixState(d) {
   mx.focus = 'editions';
 }
 
+function blurNative() {
+  const a = document.activeElement;
+  if (a && a !== document.body && a.blur) a.blur();
+}
+
 function moveFocus(delta) {
-  const ring = focusRing();
+  const ring = buildRing();
+  if (!ring.length) return;
   let i = ring.indexOf(mx.focus);
-  if (i < 0) i = 0; // focus fell off the ring (e.g. prev/next removed) → snap in
-  mx.focus = ring[Math.max(0, Math.min(ring.length - 1, i + delta))];
-  paintMatrix();
+  if (i < 0) i = delta > 0 ? -1 : 0; // fell off the ring → step onto an end
+  i = (i + delta + ring.length) % ring.length; // wrap so the ring cycles
+  mx.focus = ring[i];
+  paintFocus();
 }
 
 function moveWithin(delta) {
@@ -140,7 +174,7 @@ function moveWithin(delta) {
   const n = mx.lists[key].length;
   if (!n) return;
   mx.cur[key] = Math.max(0, Math.min(n - 1, mx.cur[key] + delta)); // cursor preserved per list
-  paintMatrix();
+  paintFocus();
 }
 
 function setWithin(idx) {
@@ -149,7 +183,7 @@ function setWithin(idx) {
   const n = mx.lists[key].length;
   if (!n) return;
   mx.cur[key] = Math.max(0, Math.min(n - 1, idx));
-  paintMatrix();
+  paintFocus();
 }
 
 function selVal(key) { return mx.lists[key][mx.cur[key]]; }
@@ -169,7 +203,7 @@ function matrixHtml() {
   const col = (key, label) => {
     const opts = mx.lists[key].map((o, i) =>
       `<div class="mopt${i === mx.cur[key] ? ' sel' : ''}" data-list="${key}" data-i="${i}">${esc(o)}</div>`).join('');
-    return `<div class="mcol${mx.focus === key ? ' active' : ''}" data-col="${key}">
+    return `<div class="mcol" data-col="${key}" data-ring="${key}">
        <div class="mh">${esc(label)}</div>${opts}</div>`;
   };
   return `<h2>Build panorama</h2>
@@ -179,49 +213,68 @@ function matrixHtml() {
       ${col('formats', 'Formats')}
     </div>
     <div class="cmdprev" id="cmdprev">${esc(matrixCommand())}</div>
-    <p class="mhint">One keyboard path: ←/→ (or Tab) move focus across ‹ prev · Editions · Languages · Formats · next › · ↑/↓ change the focused list · Enter on ‹/› switches book.</p>`;
+    <p class="mhint">One keyboard path over every control: ←/→ (or Tab) move focus ‹ prev-book → Editions → Languages → Formats → each language's Edit cover / Preview / Check readiness (+details) → Check all books → next-book › · ↑/↓ change the focused list · Enter/Space activates the focused button. Focus is remembered across refresh.</p>`;
 }
 
-function wireMatrix() {
+// Wire pointer interactions to the same focus model: clicking any ring control
+// moves the ring focus onto it (and, for a list option, selects that value).
+function wireRing() {
   const m = $('matrix');
-  if (!m) return;
-  m.querySelectorAll('.mopt').forEach((el) => {
-    el.addEventListener('click', () => {
-      const key = el.dataset.list;
-      mx.focus = key;
-      mx.cur[key] = parseInt(el.dataset.i, 10);
-      paintMatrix();
+  if (m) {
+    m.querySelectorAll('.mopt').forEach((el) => {
+      el.addEventListener('click', () => {
+        const key = el.dataset.list;
+        mx.focus = key;
+        mx.cur[key] = parseInt(el.dataset.i, 10);
+        paintFocus();
+      });
     });
-  });
-  // Clicking a column header (not an option) focuses that list.
-  m.querySelectorAll('.mcol').forEach((c) => {
-    c.addEventListener('click', (e) => {
-      if (e.target.classList.contains('mopt')) return;
-      mx.focus = c.dataset.col;
-      paintMatrix();
+    m.querySelectorAll('.mcol').forEach((c) => {
+      c.addEventListener('click', (e) => {
+        if (e.target.classList.contains('mopt')) return; // header click focuses the list
+        mx.focus = c.dataset.col;
+        paintFocus();
+      });
     });
+  }
+  // Any other ring control (buttons/links): clicking or natively focusing it
+  // moves the ring focus onto it, so the highlight and the persisted focus stay
+  // in sync with pointer use. (No mouseenter — focus should not chase the cursor.)
+  document.querySelectorAll('[data-ring]').forEach((el) => {
+    if (el.classList.contains('mcol')) return; // handled above
+    const id = el.dataset.ring;
+    el.addEventListener('click', () => { mx.focus = id; paintFocus(); }); // before nav for links
+    el.addEventListener('focus', () => { mx.focus = id; paintFocus(); });
   });
-  // Hovering prev/next parks focus there so a click reads as "focus then move".
-  ['prev', 'next'].forEach((k) => {
-    const b = $(k === 'prev' ? 'prevBook' : 'nextBook');
-    if (b) b.addEventListener('mouseenter', () => { if (!b.disabled) { mx.focus = k; paintMatrix(); } });
-  });
-  paintMatrix();
 }
 
-// Repaint selection + focus (columns AND the prev/next controls) without a
-// full page rebuild.
-function paintMatrix() {
+// Repaint the whole focus state: list selection values, the focused list column,
+// the .kfocus ring on the focused control, the command preview — then persist
+// the focused id so a refresh restores it.
+function paintFocus() {
   const m = $('matrix');
-  if (!m) return;
-  m.querySelectorAll('.mcol').forEach((c) => c.classList.toggle('active', c.dataset.col === mx.focus));
-  m.querySelectorAll('.mopt').forEach((el) =>
-    el.classList.toggle('sel', parseInt(el.dataset.i, 10) === mx.cur[el.dataset.list]));
+  if (m) {
+    m.querySelectorAll('.mopt').forEach((el) =>
+      el.classList.toggle('sel', parseInt(el.dataset.i, 10) === mx.cur[el.dataset.list]));
+    m.querySelectorAll('.mcol').forEach((c) => c.classList.toggle('active', c.dataset.col === mx.focus));
+  }
   const cp = $('cmdprev');
   if (cp) cp.textContent = matrixCommand();
-  const prev = $('prevBook'), next = $('nextBook');
-  if (prev) prev.classList.toggle('kfocus', mx.focus === 'prev');
-  if (next) next.classList.toggle('kfocus', mx.focus === 'next');
+  // .kfocus on exactly the focused ring control.
+  document.querySelectorAll('.kfocus').forEach((el) => el.classList.remove('kfocus'));
+  const fe = ringEl(mx.focus);
+  if (fe) fe.classList.add('kfocus');
+  saveFocus();
+}
+
+// Restore the persisted focus for this book, falling back to a sensible default
+// (the Editions list) when the saved control no longer exists.
+function restoreFocus() {
+  const ring = buildRing();
+  const saved = loadFocus();
+  mx.focus = (saved && ring.includes(saved)) ? saved
+    : (ring.includes('editions') ? 'editions' : ring[0]);
+  paintFocus();
 }
 
 // --- page render ------------------------------------------------------------
@@ -267,9 +320,9 @@ function render(d) {
 
     // One aligned action bar: cover / preview / readiness trigger.
     html += `<div class="actions">`;
-    html += `<a class="btn primary" href="/cover.html?${q}">Edit cover</a>`;
-    html += `<a class="btn" href="/preview.html?${q}">Preview book</a>`;
-    html += `<button class="btn" id="${rid}-btn">Check readiness</button>`;
+    html += `<a class="btn primary" data-ring="cover-${lang}" href="/cover.html?${q}">Edit cover</a>`;
+    html += `<a class="btn" data-ring="preview-${lang}" href="/preview.html?${q}">Preview book</a>`;
+    html += `<button class="btn" data-ring="readiness-${lang}" id="${rid}-btn">Check readiness</button>`;
     html += `</div>`;
 
     // Readiness panel (collapsed until run; then expanded only if it has errors).
@@ -278,7 +331,7 @@ function render(d) {
     html += `<h3>Publish readiness</h3>`;
     html += `<span class="pills" id="${rid}-pills"></span>`;
     html += `<span class="verdict" id="${rid}-verdict" style="display:none"></span>`;
-    html += `<button class="caret" id="${rid}-caret" style="display:none"></button>`;
+    html += `<button class="caret" data-ring="caret-${lang}" id="${rid}-caret" style="display:none"></button>`;
     html += `</div>`;
     html += `<div class="rbody collapsed" id="${rid}-body"></div>`;
     html += `</div>`;
@@ -288,11 +341,12 @@ function render(d) {
 
   $('main').innerHTML = html;
 
-  wireMatrix();
   (d.languages || []).forEach((lang) => {
     const btn = $(`rd-${lang}-btn`);
     if (btn) btn.onclick = () => checkReadiness(d.slug, lang);
   });
+  wireRing();
+  restoreFocus();
 }
 
 // --- Publish readiness ------------------------------------------------------
