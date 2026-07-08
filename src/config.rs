@@ -392,6 +392,10 @@ pub fn default_ane_code(lang: &str) -> &'static str {
 pub struct PdfOpts {
     /// "recto" => chapters open on the right page (openright); else openany
     pub chapter_opens: Option<String>,
+    /// chapter-opening plate style: "bleed" (default) fills the verso page
+    /// edge-to-edge (cover-fit, zero margin); "framed" centers the image within
+    /// the page margins with a thin border (no bleed).
+    pub plate_style: Option<String>,
     /// per-book trim override (e.g. "6x9"); else repo defaults / edition trim
     pub trim: Option<String>,
     /// per-book print bleed (e.g. "0.125in" for full-bleed picture books, "0" for

@@ -54,13 +54,14 @@ pub fn run(
     cpdf: Option<&Path>,
     chaps: &[PathBuf],
     openright: bool,
+    plate_framed: bool,
     retail: bool,
     cover: Option<&Path>,
     geometry: Option<PageGeometry>,
     lang: &str,
     out: &Path,
 ) -> Result<()> {
-    let doc = build_doc(repo, meta, cpdf, chaps, openright, retail, cover, geometry, lang)?;
+    let doc = build_doc(repo, meta, cpdf, chaps, openright, plate_framed, retail, cover, geometry, lang)?;
     let odir = out.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(odir)?;
     // Keep the generated markup on disk for debugging only — it is NOT handed to
@@ -204,6 +205,7 @@ fn build_doc(
     cpdf: Option<&Path>,
     chaps: &[PathBuf],
     openright: bool,
+    plate_framed: bool,
     retail: bool,
     cover: Option<&Path>,
     geometry: Option<PageGeometry>,
@@ -258,15 +260,27 @@ bottom: {bottom:.4}in, inside: {inside:.4}in, outside: {outside:.4}in))\n",
     s.push_str("#set heading(numbering: \"1\")\n");
     s.push_str("#let islatitle = rgb(\"#C2571C\")\n");
     s.push_str(&format!("#let chlabel = {}\n", ty_str(chlabel)));
-    // Full-bleed chapter plate on the verso (left) page, facing the chapter
-    // opener on the recto — mirrors the LaTeX `\cleartoverso` + `\AddThisPageImage`.
-    // The image page has zero margin (fills the paper edge-to-edge incl. bleed);
-    // the scoped `set page` reverts to the body geometry on the following page.
-    s.push_str(
-        "#let plate(p) = [\n  #pagebreak(to: \"even\", weak: true)\n  \
+    // Chapter plate on the verso (left) page, facing the chapter opener on the
+    // recto. Two styles:
+    //   * bleed (default): zero-margin, cover-fit, fills the paper edge-to-edge
+    //     (incl. bleed) — mirrors LaTeX `\cleartoverso` + `\AddThisPageImage`.
+    //   * framed: centered within the page margins, contained (never cropped),
+    //     with a thin terracotta keyline border — no bleed.
+    if plate_framed {
+        s.push_str(
+            "#let plate(p) = [\n  #pagebreak(to: \"even\", weak: true)\n  \
+#v(1fr)\n  \
+#align(center, box(stroke: 0.75pt + islatitle, inset: 0pt, \
+image(p, width: 78%, fit: \"contain\")))\n  \
+#v(1fr)\n  #pagebreak()\n]\n",
+        );
+    } else {
+        s.push_str(
+            "#let plate(p) = [\n  #pagebreak(to: \"even\", weak: true)\n  \
 #set page(margin: 0pt, header: none, footer: none)\n  \
 #image(p, width: 100%, height: 100%, fit: \"cover\")\n  #pagebreak()\n]\n",
-    );
+        );
+    }
     // small centered tailpiece (spot)
     s.push_str(
         // Fit inside a 2.4in box (preserve aspect), mirroring pandoc's

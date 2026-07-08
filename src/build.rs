@@ -620,6 +620,7 @@ fn build_one(
     let m = resolve_book_meta(repo, book, lang)?;
     let base = format!("{slug}-{lang}");
     let openright = book.pdf.chapter_opens.as_deref() == Some("recto");
+    let plate_framed = book.pdf.plate_style.as_deref() == Some("framed");
 
     match out {
         Out::RetailEpub => {
@@ -646,6 +647,7 @@ fn build_one(
                 cpdf.as_deref(),
                 &chaps,
                 openright,
+                plate_framed,
                 true,
                 cover.as_deref(),
                 geometry,
@@ -668,6 +670,7 @@ fn build_one(
                 cpdf.as_deref(),
                 &chaps,
                 openright,
+                plate_framed,
                 false,
                 None,
                 geometry,
