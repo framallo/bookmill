@@ -155,6 +155,55 @@ pub struct BookConfig {
     /// per-book prose-lint additions ([lint]); merged over the repo-root [lint].
     #[serde(default)]
     pub lint: LintConfig,
+    /// per-book publishing status ([status]); drives the TUI ribbon (LIVE/REVIEW/…).
+    #[serde(default)]
+    pub status: Status,
+}
+
+// ---------- publishing status ([status]) ----------
+/// Per-channel publishing status, recorded in the book's `[status]` table.
+/// Values are free-form strings ("live", "in-review", "draft", "blocked",
+/// "canceled", …); `ribbon()` distills them into one badge for the TUI.
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct Status {
+    /// Explicit overall override; wins over the per-channel derivation.
+    pub overall: Option<String>,
+    pub kdp_paperback: Option<String>,
+    pub kdp_kindle: Option<String>,
+    pub kdp_hardcover: Option<String>,
+    /// Date first submitted to the store (informational; recorded, not yet surfaced).
+    #[allow(dead_code)]
+    pub submitted: Option<String>,
+    /// Store ASINs keyed however the book likes (e.g. `kindle_es`, `paperback_en`).
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub asin: BTreeMap<String, String>,
+}
+
+impl Status {
+    /// Canonical ribbon key for the books list: `"live" | "in-review" |
+    /// "blocked" | "draft"`. `overall` wins; otherwise the best per-channel
+    /// status decides (live beats in-review beats blocked beats draft), so a
+    /// paperback that is live while the hardcover is blocked still reads LIVE.
+    pub fn ribbon(&self) -> &'static str {
+        let channels = [&self.overall, &self.kdp_paperback, &self.kdp_kindle, &self.kdp_hardcover];
+        let has = |k: &str| {
+            channels
+                .iter()
+                .filter_map(|c| c.as_deref())
+                .any(|v| v.trim().eq_ignore_ascii_case(k))
+        };
+        if has("live") || has("published") {
+            "live"
+        } else if has("in-review") || has("in review") || has("review") || has("submitted") {
+            "in-review"
+        } else if has("blocked") {
+            "blocked"
+        } else {
+            // no status recorded, or only draft/canceled channels → not yet out
+            "draft"
+        }
+    }
 }
 
 // ---------- cover design ([cover]) ----------

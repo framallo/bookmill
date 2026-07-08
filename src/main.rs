@@ -138,23 +138,15 @@ enum Cmd {
         #[command(flatten)]
         interior: InteriorArgs,
     },
-    /// Build audiobook (kab default engine)
+    /// Build audiobook (kab default engine), or `clean` its temp/cache files
+    #[command(args_conflicts_with_subcommands = true)]
     Audiobook {
-        book: Option<String>,
-        #[arg(long)]
-        lang: Option<String>,
-        /// override the Kokoro voice (e.g. ef_dora, af_heart) for all jobs
-        #[arg(long)]
-        voice: Option<String>,
-        /// override speech speed for all jobs (e.g. 1.0, 1.1)
-        #[arg(long)]
-        speed: Option<f64>,
-        /// TTS engine id (default "kab"; reserved for future engines)
-        #[arg(long)]
-        engine: Option<String>,
-        /// re-render even if the manifest shows nothing changed
-        #[arg(long)]
-        force: bool,
+        /// `clean` subcommand; omit to render audiobooks
+        #[command(subcommand)]
+        what: Option<AudiobookSub>,
+        /// render options (used when no subcommand is given)
+        #[command(flatten)]
+        render: AudiobookArgs,
     },
     /// Launch the cover-editor web UI (localhost)
     Web {
@@ -164,6 +156,40 @@ enum Cmd {
         /// spine page count used only when a book's print interior PDF is missing
         #[arg(long, default_value_t = 120)]
         pages: u32,
+    },
+}
+
+/// `audiobook` render options (the default action when no subcommand is given).
+#[derive(Args, Default)]
+struct AudiobookArgs {
+    book: Option<String>,
+    #[arg(long)]
+    lang: Option<String>,
+    /// override the Kokoro voice (e.g. ef_dora, af_heart) for all jobs
+    #[arg(long)]
+    voice: Option<String>,
+    /// override speech speed for all jobs (e.g. 1.0, 1.1)
+    #[arg(long)]
+    speed: Option<f64>,
+    /// TTS engine id (default "kab"; reserved for future engines)
+    #[arg(long)]
+    engine: Option<String>,
+    /// re-render even if the manifest shows nothing changed
+    #[arg(long)]
+    force: bool,
+}
+
+/// `audiobook` subcommands.
+#[derive(Subcommand)]
+enum AudiobookSub {
+    /// Remove audiobook temp/cache files (.audiostage + .audiocache) for all books or one
+    Clean {
+        book: Option<String>,
+        #[arg(long)]
+        lang: Option<String>,
+        /// also delete the render manifest (forces a full re-render next time)
+        #[arg(long)]
+        manifest: bool,
     },
 }
 
@@ -365,14 +391,19 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Cmd::Audiobook { book, lang, voice, speed, engine, force } => {
-            if let Some(e) = &engine {
-                if e != "kab" {
-                    anyhow::bail!("unsupported audiobook engine {e:?} (only \"kab\")");
-                }
+        Cmd::Audiobook { what, render } => match what {
+            Some(AudiobookSub::Clean { book, lang, manifest }) => {
+                audiobook::clean(&repo, book, lang, manifest)?;
             }
-            audiobook::run(&repo, book, lang, voice, speed, force)?;
-        }
+            None => {
+                if let Some(e) = &render.engine {
+                    if e != "kab" {
+                        anyhow::bail!("unsupported audiobook engine {e:?} (only \"kab\")");
+                    }
+                }
+                audiobook::run(&repo, render.book, render.lang, render.voice, render.speed, render.force)?;
+            }
+        },
         Cmd::Web { port, pages } => web::run(&repo.root, port, pages)?,
     }
     Ok(())
@@ -394,6 +425,7 @@ fn cmd_list(repo: &Repo, json: bool) -> Result<()> {
                     "languages": b.languages,
                     "editions": b.editions,
                     "title": b.title,
+                    "status": b.status.ribbon(),
                 })
             })
             .collect();
@@ -402,8 +434,15 @@ fn cmd_list(repo: &Repo, json: bool) -> Result<()> {
         println!("{} book(s) in {}", books.len(), repo.books_dir().display());
         for b in &books {
             let title = b.title.values().next().cloned().unwrap_or_default();
+            let tag = match b.status.ribbon() {
+                "live" => "LIVE",
+                "in-review" => "REVIEW",
+                "blocked" => "BLOCKED",
+                _ => "DRAFT",
+            };
             println!(
-                "  {:30} {:36} [{}] editions: {}",
+                "  {:>7}  {:30} {:36} [{}] editions: {}",
+                tag,
                 b.slug,
                 title,
                 b.languages.join(","),

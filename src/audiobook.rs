@@ -196,6 +196,90 @@ fn plan(
     Ok(jobs)
 }
 
+// ---------- clean (temp / cache housekeeping) ----------
+
+/// Total bytes under a path (recursively). 0 if it can't be stat'd/read.
+fn dir_size(p: &Path) -> u64 {
+    let md = match std::fs::symlink_metadata(p) {
+        Ok(m) => m,
+        Err(_) => return 0,
+    };
+    if md.is_file() {
+        return md.len();
+    }
+    let mut total = 0;
+    if let Ok(entries) = std::fs::read_dir(p) {
+        for e in entries.flatten() {
+            total += dir_size(&e.path());
+        }
+    }
+    total
+}
+
+/// Remove the audiobook temp/cache artifacts under `output/<slug>/<lang>/` —
+/// the `.audiostage` staging dir and the `.audiocache` per-chapter WAV cache
+/// (and, with `drop_manifest`, the `.…audiomanifest.json`). Scoped to one book /
+/// language or all of them. The rendered `.m4b` is never touched. Reports how
+/// many items were removed and how much disk was freed.
+pub fn clean(
+    repo: &Repo,
+    book_slug: Option<String>,
+    lang_filter: Option<String>,
+    drop_manifest: bool,
+) -> Result<()> {
+    let books = match &book_slug {
+        Some(s) => vec![repo.find_book(s)?],
+        None => {
+            let mut v = Vec::new();
+            for d in repo.book_dirs()? {
+                v.push(repo.load_book_at(&d)?);
+            }
+            v
+        }
+    };
+
+    let mut freed: u64 = 0;
+    let mut removed = 0usize;
+    for (book, _dir) in &books {
+        for lang in langs_for(book, &lang_filter) {
+            let odir = repo.root.join("output").join(&book.slug).join(&lang);
+            if !odir.exists() {
+                continue;
+            }
+            let mut targets = vec![odir.join(".audiostage"), odir.join(".audiocache")];
+            if drop_manifest {
+                targets.push(odir.join(format!(".{}-{}.audiomanifest.json", book.slug, lang)));
+            }
+            for t in targets {
+                if !t.exists() {
+                    continue;
+                }
+                let sz = dir_size(&t);
+                let res = if t.is_dir() {
+                    std::fs::remove_dir_all(&t)
+                } else {
+                    std::fs::remove_file(&t)
+                };
+                match res {
+                    Ok(()) => {
+                        freed += sz;
+                        removed += 1;
+                        println!("  removed {} ({:.1} MB)", t.display(), sz as f64 / 1e6);
+                    }
+                    Err(e) => println!("  (warning: could not remove {}: {e})", t.display()),
+                }
+            }
+        }
+    }
+
+    if removed == 0 {
+        println!("nothing to clean (no audiobook temp/cache files found)");
+    } else {
+        println!("\nCleaned {removed} item(s), freed {:.1} MB", freed as f64 / 1e6);
+    }
+    Ok(())
+}
+
 // ---------- render manifest (incremental cache + change report) ----------
 
 /// What a rendered `.m4b` was made from: the engine/voice/speed and a content

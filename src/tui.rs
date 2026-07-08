@@ -156,6 +156,18 @@ struct Book {
     title: String,
     langs: Vec<String>,
     editions: Vec<String>,
+    /// Canonical publishing-status key ("live" | "in-review" | "blocked" | "draft").
+    status: &'static str,
+}
+
+/// Map a status key to its ribbon badge text + color for the books list.
+fn ribbon_style(status: &str) -> (&'static str, Color) {
+    match status {
+        "live" => ("LIVE", Color::Green),
+        "in-review" => ("REVIEW", Color::Yellow),
+        "blocked" => ("BLOCKED", Color::Red),
+        _ => ("DRAFT", Color::DarkGray),
+    }
 }
 
 /// Human description of what a target produces (mirrors build::outputs_for_target).
@@ -179,6 +191,7 @@ pub fn run(repo: &Repo) -> Result<Option<Action>> {
                 slug: b.slug,
                 langs: b.languages,
                 editions: b.editions,
+                status: b.status.ribbon(),
             });
         }
     }
@@ -275,10 +288,20 @@ pub fn run(repo: &Repo) -> Result<Option<Action>> {
                 };
                 let books_focused = focus == Pane::Books;
 
-                // books list — full list of every book
+                // books list — full list of every book, each prefixed with a
+                // colored publishing-status ribbon (LIVE / REVIEW / BLOCKED / DRAFT).
                 let items: Vec<ListItem> = books
                     .iter()
-                    .map(|b| ListItem::new(format!("{}  ·  {}", b.slug, b.title)))
+                    .map(|b| {
+                        let (label, color) = ribbon_style(b.status);
+                        ListItem::new(Line::from(vec![
+                            Span::styled(
+                                format!(" {label:^7} "),
+                                Style::default().fg(Color::Black).bg(color).add_modifier(Modifier::BOLD),
+                            ),
+                            Span::raw(format!("  {}  ·  {}", b.slug, b.title)),
+                        ]))
+                    })
                     .collect();
                 f.render_stateful_widget(
                     List::new(items)
@@ -351,9 +374,11 @@ pub fn run(repo: &Repo) -> Result<Option<Action>> {
 
                 // preview panel — resolved selection + the exact command that will run
                 let lbl = |s: &'static str| Span::styled(s, Style::default().fg(Color::Gray));
+                let (st_label, st_color) = ribbon_style(book.status);
                 let lines = vec![
                     Line::from(vec![lbl("Action    "), Span::styled(format!("{} — {}", action.0, action.1), Style::default().fg(Color::Magenta))]),
                     Line::from(vec![lbl("Book      "), Span::styled(&book.slug, Style::default().fg(Color::White).add_modifier(Modifier::BOLD))]),
+                    Line::from(vec![lbl("Status    "), Span::styled(format!(" {st_label} "), Style::default().fg(Color::Black).bg(st_color).add_modifier(Modifier::BOLD))]),
                     Line::from(vec![lbl(if is_build { "Builds    " } else { "Does      " }), Span::styled(if is_build { outputs } else { action.1.to_string() }, Style::default().fg(Color::Green))]),
                     Line::from(vec![lbl("Language  "), Span::styled(langs_desc, Style::default().fg(Color::Green))]),
                     Line::from(vec![lbl("Runs      "), Span::styled(cmd, Style::default().fg(Color::Yellow))]),
