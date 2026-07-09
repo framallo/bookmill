@@ -118,6 +118,9 @@ pub fn run(
         }
 
         let html = markdown_to_html(&clean, &comrak_opts());
+        // per-image width/alignment from the markdown `{…}` attributes (stripped
+        // before comrak) re-applied to the rendered <img> by matching src.
+        let html = apply_img_styles(&html, &img_styles(&md));
         let body = if captions { figcaption_plates(&html) } else { html };
         let title = nav_title.unwrap_or_else(|| chapter_fallback_title(ch, i));
         let doc = xhtml_doc(lang, &title, &body);
@@ -279,6 +282,101 @@ fn strip_attr_block(line: &str) -> String {
     s.to_string()
 }
 
+/// Raw value token for `key=…` in a pandoc attribute string (stops at whitespace).
+fn pandoc_attr(attrs: &str, key: &str) -> Option<String> {
+    let pat = format!("{key}=");
+    let idx = attrs.find(&pat)?;
+    let val: String = attrs[idx + pat.len()..]
+        .chars()
+        .take_while(|c| !c.is_whitespace())
+        .collect();
+    let val = val.trim_matches(|c| c == '"' || c == '\'');
+    (!val.is_empty()).then(|| val.to_string())
+}
+
+/// The `src` of a standalone `![alt](src){…}` image line.
+fn image_src_of(line: &str) -> Option<String> {
+    let s = line.trim_start();
+    if !s.starts_with("![") {
+        return None;
+    }
+    let close_alt = s.find("](")?;
+    let after = &s[close_alt + 2..];
+    let close_paren = after.find(')')?;
+    let src = after[..close_paren].trim();
+    (!src.is_empty()).then(|| src.to_string())
+}
+
+/// Build (src → inline CSS) for image lines carrying `{width=… align=…}`. In a
+/// reflowable EPUB only width and alignment are meaningful; height/fit/border are
+/// print-layout concepts and stay PDF-only. `.spot` images are skipped (dropped).
+fn img_styles(md: &str) -> Vec<(String, String)> {
+    let mut v = Vec::new();
+    for line in md.lines() {
+        let t = line.trim_start();
+        if !t.starts_with("![") {
+            continue;
+        }
+        let Some(attrs) = attr_block(t) else { continue };
+        if attrs.contains(".spot") {
+            continue;
+        }
+        let Some(src) = image_src_of(t) else { continue };
+        let mut style = String::new();
+        if let Some(w) = pandoc_attr(&attrs, "width") {
+            let w = if !w.is_empty() && w.chars().all(|c| c.is_ascii_digit() || c == '.') {
+                format!("{w}%")
+            } else {
+                w
+            };
+            style.push_str(&format!("width:{w};"));
+        }
+        match pandoc_attr(&attrs, "align").as_deref() {
+            Some("left") => style.push_str("display:block;margin-left:0;margin-right:auto;"),
+            Some("right") => style.push_str("display:block;margin-left:auto;margin-right:0;"),
+            Some("center") => style.push_str("display:block;margin-left:auto;margin-right:auto;"),
+            _ => {}
+        }
+        if !style.is_empty() {
+            v.push((src, style));
+        }
+    }
+    v
+}
+
+/// Inject `style="…"` into each `<img>` whose `src` matches an entry in `styles`,
+/// so the rendered EPUB image mirrors the markdown width/alignment. Comrak runs with
+/// raw HTML off, so this string post-pass is how per-image CSS reaches the output.
+fn apply_img_styles(html: &str, styles: &[(String, String)]) -> String {
+    if styles.is_empty() {
+        return html.to_string();
+    }
+    let mut out = String::with_capacity(html.len() + 64);
+    let mut rest = html;
+    while let Some(pos) = rest.find("<img ") {
+        let Some(end_rel) = rest[pos..].find('>') else { break };
+        let end = pos + end_rel + 1;
+        let tag = &rest[pos..end];
+        out.push_str(&rest[..pos]);
+        let style = styles
+            .iter()
+            .find(|(src, _)| tag.contains(&format!("src=\"{src}\"")))
+            .map(|(_, s)| s);
+        match style {
+            Some(style) if !tag.contains("style=") => {
+                // normalise the tag close to ` />` and insert the style before it
+                let core = tag.trim_end_matches('>').trim_end_matches('/').trim_end();
+                out.push_str(core);
+                out.push_str(&format!(" style=\"{style}\" />"));
+            }
+            _ => out.push_str(tag),
+        }
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Extract every image source (`![alt](src)`) from cleaned Markdown.
 fn image_srcs(md: &str) -> Vec<String> {
     let mut v = Vec::new();
@@ -431,6 +529,32 @@ mod tests {
         assert!(clean.contains("![big](libros/x/ch01.png)"));
         assert!(!clean.contains("{width=80%}"));
         assert!(!clean.contains("vig.png"));
+    }
+
+    #[test]
+    fn img_width_align_reach_epub_html() {
+        // width + align on a plate image should land as inline CSS on the <img>,
+        // matched by src; a plain image (no attrs) is untouched.
+        let md = "![p](libros/x/ch01.png){width=55% align=left}\n\n![q](images/y.jpg)\n";
+        let html = markdown_to_html(&clean_chapter(md).0, &comrak_opts());
+        let styled = apply_img_styles(&html, &img_styles(md));
+        assert!(styled.contains("src=\"libros/x/ch01.png\""));
+        assert!(styled.contains("width:55%;"));
+        assert!(styled.contains("margin-left:0;margin-right:auto;"));
+        // the un-attributed image gets no style attribute
+        let q_tag = &styled[styled.find("src=\"images/y.jpg\"").unwrap()..];
+        let q_tag = &q_tag[..q_tag.find('>').unwrap()];
+        assert!(!q_tag.contains("style="));
+    }
+
+    #[test]
+    fn bare_number_width_becomes_percent_in_epub() {
+        let md = "![p](x.png){width=40}\n";
+        let styled = apply_img_styles(
+            &markdown_to_html(&clean_chapter(md).0, &comrak_opts()),
+            &img_styles(md),
+        );
+        assert!(styled.contains("width:40%;"));
     }
 
     #[test]

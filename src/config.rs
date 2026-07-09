@@ -417,9 +417,18 @@ pub struct PdfOpts {
     /// framed-plate width as a fraction of the text column (0.0–1.0) — the book's
     /// default plate width. Only used when `plate_style = "framed"`. Default 0.78;
     /// set 1.0 for full-width plates that fill the text column edge-to-edge (still
-    /// within margins, no bleed). A single image can override this default with a
-    /// pandoc `{width=NN%}` attribute after its `![alt](src)`, e.g.
-    /// `![…](images/ch03.jpg){width=55%}`.
+    /// within margins, no bleed).
+    ///
+    /// Any single image can override the book defaults with a pandoc attribute
+    /// block after its `![alt](src)`. The full set exposed to Typst:
+    ///   `{width=55%}` / `{width=3in}`   — length or percent (bare number ⇒ %)
+    ///   `{height=2in}`                   — length or percent
+    ///   `{fit=cover|contain|stretch}`    — how the image fills its box
+    ///   `{align=left|center|right}`      — inline-image placement (default center)
+    ///   `{border=false}` or `{.plain}`   — drop the framed-plate keyline border
+    ///   `{.spot}`                        — small centered tailpiece (print-only)
+    /// e.g. `![…](images/ch03.jpg){width=55% fit=contain .plain}`. width + align
+    /// also carry into the EPUB `<img>`; height/fit/border are print-PDF-only.
     pub plate_width: Option<f32>,
     /// per-book trim override (e.g. "6x9"); else repo defaults / edition trim
     pub trim: Option<String>,

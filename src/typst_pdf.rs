@@ -276,12 +276,16 @@ bottom: {bottom:.4}in, inside: {inside:.4}in, outside: {outside:.4}in))\n",
         // `w` is the plate width as a fraction of the text column; it defaults to
         // the book-level `plate_width` (default 0.78) but a single image can
         // override it with a pandoc `{width=NN%}` attribute (see emit_blocks).
+        // `w`/`h`/`ft` map to Typst image width/height/fit; `b` toggles the keyline
+        // border. All default to the book-level style but a single image can override
+        // each via its `{width= height= fit= border=}` attributes (see emit_blocks).
         let pw = (plate_width.clamp(0.1, 1.0) * 100.0).round() as u32;
         s.push_str(&format!(
-            "#let plate(p, c: none, w: {pw}%) = [\n  #pagebreak(to: \"even\", weak: true)\n  \
+            "#let plate(p, c: none, w: {pw}%, h: auto, ft: \"contain\", b: true) = [\n  \
+#pagebreak(to: \"even\", weak: true)\n  \
 #v(1fr)\n  \
-#align(center, box(stroke: 0.75pt + islatitle, inset: 0pt, \
-image(p, width: w, fit: \"contain\")))\n  \
+#align(center, box(stroke: if b {{ 0.75pt + islatitle }} else {{ none }}, inset: 0pt, \
+image(p, width: w, height: h, fit: ft)))\n  \
 #if c != none [\n    #v(0.85em)\n    \
 #align(center, block(width: w, \
 text(size: 9.5pt, style: \"italic\", fill: luma(70))[#c]))\n  ]\n  \
@@ -289,10 +293,12 @@ text(size: 9.5pt, style: \"italic\", fill: luma(70))[#c]))\n  ]\n  \
         ));
     } else {
         // full-bleed plate: image fills the page, so there is no room for a caption
-        // (the alt still ships as EPUB accessibility text). `c`/`w` are accepted +
-        // ignored (a full-bleed plate always fills the page, so width can't apply).
+        // (the alt still ships as EPUB accessibility text). The style args
+        // (`c`/`w`/`h`/`ft`/`b`) are accepted + ignored — a full-bleed plate always
+        // fills the page, so per-image width/fit/border can't apply.
         s.push_str(
-            "#let plate(p, c: none, w: none) = [\n  #pagebreak(to: \"even\", weak: true)\n  \
+            "#let plate(p, c: none, w: none, h: none, ft: none, b: none) = [\n  \
+#pagebreak(to: \"even\", weak: true)\n  \
 #set page(margin: 0pt, header: none, footer: none)\n  \
 #image(p, width: 100%, height: 100%, fit: \"cover\")\n  #pagebreak()\n]\n",
         );
@@ -399,16 +405,24 @@ fn emit_blocks(s: &mut String, blocks: &[Block], root: &Path, captions: bool) {
         match &blocks[i] {
             Block::Heading { level, text, unnumbered } if *level == 1 => {
                 // look ahead for an opening plate image
-                if let Some(Block::Image { src, spot: false, alt, width }) = blocks.get(i + 1) {
+                if let Some(Block::Image {
+                    src, spot: false, alt, width, height, fit, border, ..
+                }) = blocks.get(i + 1)
+                {
                     let p = typst_img_path(root, src);
                     let cap = if !captions || alt.trim().is_empty() {
                         "none".to_string()
                     } else {
                         ty_str(alt)
                     };
-                    // per-image width override (`{width=NN%}`) beats the book default
-                    let warg = width.map(|w| format!(", w: {w}%")).unwrap_or_default();
-                    s.push_str(&format!("#plate({}, c: {}{warg})\n", ty_str(&p), cap));
+                    // per-image overrides (`{width=… height=… fit=… border=…}`) beat
+                    // the book defaults baked into the #plate helper.
+                    let mut a = String::new();
+                    if let Some(w) = width { a += &format!(", w: {w}"); }
+                    if let Some(h) = height { a += &format!(", h: {h}"); }
+                    if let Some(f) = fit { a += &format!(", ft: \"{f}\""); }
+                    if *border == Some(false) { a += ", b: false"; }
+                    s.push_str(&format!("#plate({}, c: {}{a})\n", ty_str(&p), cap));
                     emit_heading(s, *level, text, *unnumbered);
                     i += 2;
                     continue;
@@ -420,16 +434,17 @@ fn emit_blocks(s: &mut String, blocks: &[Block], root: &Path, captions: bool) {
                 emit_heading(s, *level, text, *unnumbered);
                 i += 1;
             }
-            Block::Image { src, spot, width, .. } => {
+            Block::Image { src, spot, width, height, fit, align, .. } => {
                 let p = typst_img_path(root, src);
                 if *spot {
                     s.push_str(&format!("#spot({})\n", ty_str(&p)));
                 } else {
-                    let w = width.unwrap_or(100.0);
-                    s.push_str(&format!(
-                        "#align(center, image({}, width: {w}%))\n",
-                        ty_str(&p)
-                    ));
+                    let w = width.clone().unwrap_or_else(|| "100%".to_string());
+                    let mut args = format!("width: {w}");
+                    if let Some(h) = height { args += &format!(", height: {h}"); }
+                    if let Some(f) = fit { args += &format!(", fit: \"{f}\""); }
+                    let al = align.as_deref().unwrap_or("center");
+                    s.push_str(&format!("#align({al}, image({}, {args}))\n", ty_str(&p)));
                 }
                 i += 1;
             }
@@ -492,7 +507,20 @@ fn emit_heading(s: &mut String, level: usize, text: &str, unnumbered: bool) {
 enum Block {
     Heading { level: usize, text: String, unnumbered: bool },
     Para(String),
-    Image { src: String, spot: bool, width: Option<f64>, alt: String },
+    /// A standalone image with its pandoc `{…}` attributes. `width`/`height` are
+    /// raw Typst dimensions (`"80%"`, `"3in"`); `fit` ∈ cover/contain/stretch;
+    /// `align` ∈ left/center/right; `border` toggles the framed-plate keyline
+    /// (`None` = book default). All optional so an image with no attrs is unchanged.
+    Image {
+        src: String,
+        alt: String,
+        spot: bool,
+        width: Option<String>,
+        height: Option<String>,
+        fit: Option<String>,
+        align: Option<String>,
+        border: Option<bool>,
+    },
     Rule,
     /// GFM pipe table: a header row plus body rows, each a vector of raw cell
     /// strings (inline markdown, converted at emit time).
@@ -688,8 +716,26 @@ fn parse_image(s: &str) -> Option<Block> {
     let alt = s[2..close_alt].trim().to_string();
     let (_, attrs) = split_attrs(s);
     let spot = attrs.contains(".spot");
-    let width = parse_width(&attrs);
-    Some(Block::Image { src, spot, width, alt })
+    // `.plain` class (or `border=false`) drops the framed-plate keyline border.
+    let border = if attrs.contains(".plain") {
+        Some(false)
+    } else {
+        match attr_str(&attrs, "border").as_deref() {
+            Some("false") | Some("no") | Some("off") | Some("none") => Some(false),
+            Some("true") | Some("yes") | Some("on") => Some(true),
+            _ => None,
+        }
+    };
+    Some(Block::Image {
+        src,
+        alt,
+        spot,
+        width: attr_dim(&attrs, "width"),
+        height: attr_dim(&attrs, "height"),
+        fit: attr_enum(&attrs, "fit", &["cover", "contain", "stretch"]),
+        align: attr_enum(&attrs, "align", &["left", "center", "right"]),
+        border,
+    })
 }
 
 /// Split a trailing `{ ... }` pandoc attribute block off the end of a line.
@@ -704,15 +750,34 @@ fn split_attrs(s: &str) -> (String, String) {
     (s.to_string(), String::new())
 }
 
-/// Pull a percentage width out of an attribute string like `width=80%`.
-fn parse_width(attrs: &str) -> Option<f64> {
-    let idx = attrs.find("width=")?;
-    let rest = &attrs[idx + 6..];
-    let val: String = rest
-        .chars()
-        .take_while(|c| c.is_ascii_digit() || *c == '.')
-        .collect();
-    val.parse().ok()
+/// Raw value token for `key=…` in a pandoc attribute string (stops at the next
+/// whitespace). Surrounding quotes are trimmed. Returns None if absent/empty.
+fn attr_str(attrs: &str, key: &str) -> Option<String> {
+    let pat = format!("{key}=");
+    let idx = attrs.find(&pat)?;
+    let rest = &attrs[idx + pat.len()..];
+    let val: String = rest.chars().take_while(|c| !c.is_whitespace()).collect();
+    let val = val.trim_matches(|c| c == '"' || c == '\'');
+    (!val.is_empty()).then(|| val.to_string())
+}
+
+/// A dimension attribute → a Typst length/ratio string. A bare number gets `%`
+/// (back-compat with `{width=80}`); a value carrying a unit or `%` passes through
+/// (`80%`, `3in`, `4cm`, `120pt`).
+fn attr_dim(attrs: &str, key: &str) -> Option<String> {
+    let v = attr_str(attrs, key)?;
+    if !v.is_empty() && v.chars().all(|c| c.is_ascii_digit() || c == '.') {
+        Some(format!("{v}%"))
+    } else {
+        Some(v)
+    }
+}
+
+/// An enum-valued attribute, validated (case-insensitively) against an allow-list.
+/// An unrecognized value is ignored rather than passed through to Typst.
+fn attr_enum(attrs: &str, key: &str, allowed: &[&str]) -> Option<String> {
+    let v = attr_str(attrs, key)?.to_ascii_lowercase();
+    allowed.iter().find(|a| **a == v).map(|a| a.to_string())
 }
 
 // ---------- inline conversion ----------
@@ -881,11 +946,43 @@ mod tests {
             }
             _ => panic!("not an image"),
         }
+        // bare number → percent (back-compat); unit values pass through
         match parse_image("![a](y.png){width=80%}").unwrap() {
             Block::Image { width, spot, .. } => {
-                assert_eq!(width, Some(80.0));
+                assert_eq!(width.as_deref(), Some("80%"));
                 assert!(!spot);
             }
+            _ => panic!("not an image"),
+        }
+        match parse_image("![a](z.png){width=80}").unwrap() {
+            Block::Image { width, .. } => assert_eq!(width.as_deref(), Some("80%")),
+            _ => panic!("not an image"),
+        }
+    }
+
+    #[test]
+    fn image_full_attr_set() {
+        match parse_image("![a](p.png){width=3in height=2in fit=contain align=left}").unwrap() {
+            Block::Image { width, height, fit, align, border, spot, .. } => {
+                assert_eq!(width.as_deref(), Some("3in"));
+                assert_eq!(height.as_deref(), Some("2in"));
+                assert_eq!(fit.as_deref(), Some("contain"));
+                assert_eq!(align.as_deref(), Some("left"));
+                assert_eq!(border, None);
+                assert!(!spot);
+            }
+            _ => panic!("not an image"),
+        }
+        // `.plain` (or border=false) drops the framed keyline; unknown fit ignored
+        match parse_image("![a](p.png){.plain fit=bogus}").unwrap() {
+            Block::Image { border, fit, .. } => {
+                assert_eq!(border, Some(false));
+                assert_eq!(fit, None);
+            }
+            _ => panic!("not an image"),
+        }
+        match parse_image("![a](p.png){border=false}").unwrap() {
+            Block::Image { border, .. } => assert_eq!(border, Some(false)),
             _ => panic!("not an image"),
         }
     }
