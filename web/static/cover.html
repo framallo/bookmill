@@ -6,29 +6,11 @@
 <title>bookmill — edit cover</title>
 <link rel="stylesheet" href="/app.css" />
 <style>
-  :root { --bg:#11151c; --panel:#1b212b; --line:#2c3543; --ink:#e7edf3; --muted:#8a98a8; --accent:#d4a937; }
-  * { box-sizing: border-box; }
-  body { margin:0; font:14px/1.45 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink); }
-  header { display:flex; align-items:center; gap:12px; padding:10px 16px; background:var(--panel); border-bottom:1px solid var(--line); }
-  header h1 { font-size:15px; margin:0; font-weight:600; letter-spacing:.3px; white-space:nowrap; }
-  header .spacer { flex:1; }
-  a.navlink { color:var(--muted); text-decoration:none; font-size:13px; white-space:nowrap; }
-  a.navlink:hover { color:var(--ink); }
-  select, button, input[type=color], input[type=text] {
-    background:#222b36; color:var(--ink); border:1px solid var(--line); border-radius:6px; padding:6px 9px; font:inherit;
+  /* tokens, buttons, .seg, .pill, .help* come from /app.css */
+  select, input[type=color], input[type=text] {
+    background:var(--panel2); color:var(--ink); border:1px solid var(--line-strong); border-radius:var(--radius); padding:7px 9px; font:inherit;
   }
-  button { cursor:pointer; }
-  button.primary { background:var(--accent); color:#1a1206; border-color:var(--accent); font-weight:600; }
-  button:disabled { opacity:.5; cursor:default; }
-
-  /* segmented toggles (language + view) */
-  .seg { display:inline-flex; border:1px solid var(--line); border-radius:7px; overflow:hidden; }
-  .seg button { border:0; border-radius:0; background:transparent; color:var(--muted); padding:6px 12px; font-size:13px; }
-  .seg button + button { border-left:1px solid var(--line); }
-  .seg button.on { background:var(--accent); color:#1a1206; font-weight:600; }
-  .seg button:not(.on):hover { color:var(--ink); }
-
-  .wrap { display:flex; height:calc(100vh - 49px); }
+  .wrap { display:flex; height:calc(100vh - var(--appbar-h)); }
   .side { width:310px; min-width:310px; background:var(--panel); border-right:1px solid var(--line); padding:14px; overflow:auto; }
   .stage-host { flex:1; display:flex; align-items:center; justify-content:center; overflow:auto; padding:20px; background:
      repeating-conic-gradient(#0d1117 0% 25%, #10151d 0% 50%) 50% / 28px 28px; }
@@ -54,22 +36,10 @@
   textarea { width:100%; min-height:54px; background:#222b36; color:var(--ink); border:1px solid var(--line); border-radius:6px; padding:6px; font:inherit; resize:vertical; }
   .hint { color:var(--muted); font-size:12px; }
   #status { font-size:12px; color:var(--muted); }
-  .pill { font-size:11px; padding:2px 7px; border-radius:10px; background:#3a2a12; color:var(--accent); border:1px solid #5a431c; }
-  #log { white-space:pre-wrap; font:11px/1.4 ui-monospace,Menlo,monospace; color:var(--muted); background:#0d1117; border:1px solid var(--line); border-radius:6px; padding:8px; max-height:160px; overflow:auto; margin-top:8px; }
+  .pill { background:rgba(224,182,74,.1); color:var(--accent); border-color:rgba(224,182,74,.28); }
+  #log { white-space:pre-wrap; font:11px/1.4 ui-monospace,Menlo,monospace; color:var(--muted); background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:8px; max-height:160px; overflow:auto; margin-top:8px; }
   .preview-img { width:100%; border:1px solid var(--line); border-radius:6px; margin-top:8px; }
-
-  .helpbtn { position:fixed; right:16px; bottom:16px; z-index:20; width:34px; height:34px;
-             border-radius:50%; border:1px solid var(--line); background:#222b36; color:var(--muted);
-             font-size:16px; font-weight:700; cursor:pointer; }
-  .helpbtn:hover { color:var(--accent); border-color:var(--accent); }
-  .help-overlay { position:fixed; inset:0; z-index:30; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,.55); }
-  .help-overlay.open { display:flex; }
-  .help-card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:18px 20px; min-width:320px; box-shadow:0 20px 60px rgba(0,0,0,.6); }
-  .help-card h3 { margin:0 0 12px; font-size:14px; }
-  .help-card table { border-collapse:collapse; font-size:13px; }
-  .help-card td { padding:3px 10px 3px 0; color:var(--ink); }
-  .help-card kbd { display:inline-block; min-width:16px; text-align:center; padding:1px 6px; border-radius:5px; background:#222b36; border:1px solid var(--line); font:12px ui-monospace,Menlo,monospace; }
-  .help-card .hc-close { color:var(--muted); font-size:11px; margin-top:12px; }
+  /* .helpbtn / .help-overlay / .help-card come from /app.css */
 </style>
 </head>
 <body>

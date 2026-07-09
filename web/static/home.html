@@ -6,15 +6,10 @@
 <title>bookmill — library</title>
 <link rel="stylesheet" href="/app.css" />
 <style>
-  :root {
-    --bg:#11151c; --panel:#1b212b; --panel2:#252d3a; --line:#2c3543;
-    --ink:#e7edf3; --muted:#8a98a8; --accent:#d4a937;
-    --book-w:150px; --book-h:225px; --radius:8px;
-  }
-  * { box-sizing:border-box; }
+  /* colour tokens come from /app.css; only page-specific sizing here */
+  :root { --book-w:150px; --book-h:225px; }
   html, body { height:100%; }
-  body { margin:0; font:14px/1.45 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink);
-         display:flex; flex-direction:column; }
+  body { display:flex; flex-direction:column; }
 
   /* ---- top bar: title left, search center, icons right ---- */
   header { height:56px; flex:0 0 auto; display:flex; align-items:center; gap:18px;

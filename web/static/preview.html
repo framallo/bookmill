@@ -7,11 +7,8 @@
 <link rel="stylesheet" href="/app.css" />
 <script src="https://unpkg.com/konva@9/konva.min.js"></script>
 <style>
-  :root { --bg:#11151c; --panel:#1b212b; --line:#2c3543; --ink:#e7edf3; --muted:#8a98a8; --accent:#d4a937;
-          --ok:#4caf72; --warn:#e0a93b; --err:#e5605f; }
-  * { box-sizing:border-box; }
-  body { margin:0; font:14px/1.45 system-ui,sans-serif; background:var(--bg); color:var(--ink); }
-  header { display:flex; align-items:center; gap:12px; padding:10px 16px; background:var(--panel); border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  /* tokens + .appbar come from /app.css */
+  header { flex-wrap:wrap; }
   header h1 { font-size:15px; margin:0; font-weight:600; white-space:nowrap; }
   .spacer { flex:1; }
   select, button, input { background:#222b36; border:1px solid var(--line); border-radius:6px; padding:6px 9px; color:var(--ink); font:inherit; }

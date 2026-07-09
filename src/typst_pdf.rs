@@ -55,6 +55,7 @@ pub fn run(
     chaps: &[PathBuf],
     openright: bool,
     plate_framed: bool,
+    plate_width: f32,
     captions: bool,
     retail: bool,
     cover: Option<&Path>,
@@ -62,7 +63,7 @@ pub fn run(
     lang: &str,
     out: &Path,
 ) -> Result<()> {
-    let doc = build_doc(repo, meta, cpdf, chaps, openright, plate_framed, captions, retail, cover, geometry, lang)?;
+    let doc = build_doc(repo, meta, cpdf, chaps, openright, plate_framed, plate_width, captions, retail, cover, geometry, lang)?;
     let odir = out.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(odir)?;
     // Keep the generated markup on disk for debugging only — it is NOT handed to
@@ -207,6 +208,7 @@ fn build_doc(
     chaps: &[PathBuf],
     openright: bool,
     plate_framed: bool,
+    plate_width: f32,
     captions: bool,
     retail: bool,
     cover: Option<&Path>,
@@ -271,16 +273,18 @@ bottom: {bottom:.4}in, inside: {inside:.4}in, outside: {outside:.4}in))\n",
     if plate_framed {
         // framed plate: contained image + optional italic caption (from the image
         // alt text) below it, constrained to the image width so long captions wrap.
-        s.push_str(
+        // Width is `plate_width` (fraction of the text column, default 0.78).
+        let pw = (plate_width.clamp(0.1, 1.0) * 100.0).round() as u32;
+        s.push_str(&format!(
             "#let plate(p, c: none) = [\n  #pagebreak(to: \"even\", weak: true)\n  \
 #v(1fr)\n  \
 #align(center, box(stroke: 0.75pt + islatitle, inset: 0pt, \
-image(p, width: 78%, fit: \"contain\")))\n  \
+image(p, width: {pw}%, fit: \"contain\")))\n  \
 #if c != none [\n    #v(0.85em)\n    \
-#align(center, block(width: 78%, \
+#align(center, block(width: {pw}%, \
 text(size: 9.5pt, style: \"italic\", fill: luma(70))[#c]))\n  ]\n  \
 #v(1fr)\n  #pagebreak()\n]\n",
-        );
+        ));
     } else {
         // full-bleed plate: image fills the page, so there is no room for a caption
         // (the alt still ships as EPUB accessibility text). `c` is accepted + ignored.

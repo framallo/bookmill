@@ -621,6 +621,7 @@ fn build_one(
     let base = format!("{slug}-{lang}");
     let openright = book.pdf.chapter_opens.as_deref() == Some("recto");
     let plate_framed = book.pdf.plate_style.as_deref() == Some("framed");
+    let plate_width = book.pdf.plate_width.unwrap_or(0.78);
     // Plate captions (image alt shown under/below each plate): book default, with a
     // per-edition override so e.g. KDP can hide them while retail keeps them.
     let ed_cfg = edition.and_then(|n| repo.config.editions.get(n));
@@ -652,6 +653,7 @@ fn build_one(
                 &chaps,
                 openright,
                 plate_framed,
+                plate_width,
                 captions,
                 true,
                 cover.as_deref(),
@@ -676,6 +678,7 @@ fn build_one(
                 &chaps,
                 openright,
                 plate_framed,
+                plate_width,
                 captions,
                 false,
                 None,
