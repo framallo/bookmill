@@ -273,23 +273,26 @@ bottom: {bottom:.4}in, inside: {inside:.4}in, outside: {outside:.4}in))\n",
     if plate_framed {
         // framed plate: contained image + optional italic caption (from the image
         // alt text) below it, constrained to the image width so long captions wrap.
-        // Width is `plate_width` (fraction of the text column, default 0.78).
+        // `w` is the plate width as a fraction of the text column; it defaults to
+        // the book-level `plate_width` (default 0.78) but a single image can
+        // override it with a pandoc `{width=NN%}` attribute (see emit_blocks).
         let pw = (plate_width.clamp(0.1, 1.0) * 100.0).round() as u32;
         s.push_str(&format!(
-            "#let plate(p, c: none) = [\n  #pagebreak(to: \"even\", weak: true)\n  \
+            "#let plate(p, c: none, w: {pw}%) = [\n  #pagebreak(to: \"even\", weak: true)\n  \
 #v(1fr)\n  \
 #align(center, box(stroke: 0.75pt + islatitle, inset: 0pt, \
-image(p, width: {pw}%, fit: \"contain\")))\n  \
+image(p, width: w, fit: \"contain\")))\n  \
 #if c != none [\n    #v(0.85em)\n    \
-#align(center, block(width: {pw}%, \
+#align(center, block(width: w, \
 text(size: 9.5pt, style: \"italic\", fill: luma(70))[#c]))\n  ]\n  \
 #v(1fr)\n  #pagebreak()\n]\n",
         ));
     } else {
         // full-bleed plate: image fills the page, so there is no room for a caption
-        // (the alt still ships as EPUB accessibility text). `c` is accepted + ignored.
+        // (the alt still ships as EPUB accessibility text). `c`/`w` are accepted +
+        // ignored (a full-bleed plate always fills the page, so width can't apply).
         s.push_str(
-            "#let plate(p, c: none) = [\n  #pagebreak(to: \"even\", weak: true)\n  \
+            "#let plate(p, c: none, w: none) = [\n  #pagebreak(to: \"even\", weak: true)\n  \
 #set page(margin: 0pt, header: none, footer: none)\n  \
 #image(p, width: 100%, height: 100%, fit: \"cover\")\n  #pagebreak()\n]\n",
         );
@@ -396,14 +399,16 @@ fn emit_blocks(s: &mut String, blocks: &[Block], root: &Path, captions: bool) {
         match &blocks[i] {
             Block::Heading { level, text, unnumbered } if *level == 1 => {
                 // look ahead for an opening plate image
-                if let Some(Block::Image { src, spot: false, alt, .. }) = blocks.get(i + 1) {
+                if let Some(Block::Image { src, spot: false, alt, width }) = blocks.get(i + 1) {
                     let p = typst_img_path(root, src);
                     let cap = if !captions || alt.trim().is_empty() {
                         "none".to_string()
                     } else {
                         ty_str(alt)
                     };
-                    s.push_str(&format!("#plate({}, c: {})\n", ty_str(&p), cap));
+                    // per-image width override (`{width=NN%}`) beats the book default
+                    let warg = width.map(|w| format!(", w: {w}%")).unwrap_or_default();
+                    s.push_str(&format!("#plate({}, c: {}{warg})\n", ty_str(&p), cap));
                     emit_heading(s, *level, text, *unnumbered);
                     i += 2;
                     continue;

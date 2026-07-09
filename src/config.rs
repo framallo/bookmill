@@ -414,9 +414,12 @@ pub struct PdfOpts {
     /// edge-to-edge (cover-fit, zero margin); "framed" centers the image within
     /// the page margins with a thin border (no bleed).
     pub plate_style: Option<String>,
-    /// framed-plate width as a fraction of the text column (0.0–1.0). Only used
-    /// when `plate_style = "framed"`. Default 0.78; set 1.0 for full-width plates
-    /// that fill the text column edge-to-edge (still within margins, no bleed).
+    /// framed-plate width as a fraction of the text column (0.0–1.0) — the book's
+    /// default plate width. Only used when `plate_style = "framed"`. Default 0.78;
+    /// set 1.0 for full-width plates that fill the text column edge-to-edge (still
+    /// within margins, no bleed). A single image can override this default with a
+    /// pandoc `{width=NN%}` attribute after its `![alt](src)`, e.g.
+    /// `![…](images/ch03.jpg){width=55%}`.
     pub plate_width: Option<f32>,
     /// per-book trim override (e.g. "6x9"); else repo defaults / edition trim
     pub trim: Option<String>,
