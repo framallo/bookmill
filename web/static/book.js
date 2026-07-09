@@ -14,6 +14,14 @@ let DATA = null;     // /api/book/{slug} response
 // One "generate/build" glyph reused by every Generate control (bolt = build it).
 const GEN_ICON = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>';
 
+// Verdict glyphs as inline SVG (never emoji — they inherit the chip's color via
+// currentColor and stay crisp at any zoom). check / alert-triangle / x-circle.
+const VICON = {
+  ready: '<svg class="vicon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
+  warn: '<svg class="vicon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+  notready: '<svg class="vicon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>',
+};
+
 // A publishing-status pill from the book's [status] ribbon (live/in-review/…).
 function statusBadge(ribbon) {
   const map = {
@@ -421,13 +429,13 @@ function renderReadiness(bslug, lang, data) {
     `<span class="pill warn">${warns} warn</span>` +
     `<span class="pill err">${errs} error</span>`;
 
-  let v, vcls, vtext;
-  if (errs > 0) { v = '❌'; vcls = 'notready'; vtext = 'Not ready'; }
-  else if (warns > 0) { v = '⚠️'; vcls = 'warn'; vtext = 'Ready with warnings'; }
-  else { v = '✅'; vcls = 'ready'; vtext = 'Ready'; }
+  let vcls, vtext;
+  if (errs > 0) { vcls = 'notready'; vtext = 'Not ready'; }
+  else if (warns > 0) { vcls = 'warn'; vtext = 'Ready with warnings'; }
+  else { vcls = 'ready'; vtext = 'Ready'; }
   const vd = $(`${rid}-verdict`);
   vd.className = `verdict ${vcls}`;
-  vd.textContent = `${v} ${vtext}`;
+  vd.innerHTML = `${VICON[vcls]} ${esc(vtext)}`;
   vd.style.display = '';
 
   const groups = new Map();

@@ -83,9 +83,10 @@
           display:flex; flex-direction:column; gap:8px; }
   .cover { position:relative; width:var(--book-w); height:var(--book-h); border-radius:var(--radius);
            overflow:hidden; background:var(--panel2); border:1px solid var(--line);
-           box-shadow:0 6px 16px rgba(0,0,0,.4); transition:transform .12s, box-shadow .12s, border-color .12s; }
-  .tile:hover .cover { transform:translateY(-3px); border-color:var(--accent);
-                       box-shadow:0 12px 26px rgba(0,0,0,.55); }
+           box-shadow:0 6px 16px rgba(0,0,0,.4);
+           transition:transform .24s var(--ease-out), box-shadow .24s var(--ease-out), border-color .14s var(--ease); }
+  .tile:hover .cover { transform:translateY(-4px); border-color:var(--accent);
+                       box-shadow:0 16px 30px rgba(0,0,0,.55); }
   /* keyboard selection (arrow-key navigation) */
   .tile.sel .cover { transform:translateY(-3px); border-color:var(--accent);
                      box-shadow:0 0 0 2px var(--accent), 0 12px 26px rgba(0,0,0,.55); }
