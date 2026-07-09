@@ -43,6 +43,9 @@ manuscript (Markdown)  ──bookmill──▶  EPUB · print PDF · wrap cover 
   and a native macOS desktop app (library grid + cover editor + previewer).
 - **Scaffolder.** `bookmill create` writes a project that builds out of the
   box — repo + book config, a starter chapter, and shared build assets.
+- **Rich chapter images.** Size, fit, align, and frame any image from the
+  markdown itself with pandoc-style `{width= height= fit= align= border=}`
+  attributes — a book-level default plus per-image overrides.
 
 ## Install
 
@@ -147,6 +150,31 @@ Content per language is a glob plus optional ordered front/back matter:
 glob   = "es/capitulo-*.md"
 append = ["es/epilogo.md"]
 ```
+
+### Chapter images
+
+A chapter that opens with a standalone image renders it as a full-page **plate**
+on the facing (verso) page; other standalone images render inline. Any image
+takes an optional pandoc-style `{…}` attribute block after `![alt](src)` to
+control how it's placed — a book-level default (`[pdf].plate_width`) plus
+per-image overrides:
+
+| Attribute | Values | Applies to |
+|---|---|---|
+| `width=` | `55%` · `3in` (bare number ⇒ `%`) | plate + inline, EPUB |
+| `height=` | `2in` · `40%` | plate + inline (PDF) |
+| `fit=` | `cover` · `contain` · `stretch` | plate + inline (PDF) |
+| `align=` | `left` · `center` · `right` | inline (PDF + EPUB) |
+| `border=false` / `.plain` | drop the framed-plate keyline | plate (PDF) |
+| `.spot` | small centered tailpiece | print-only |
+
+```markdown
+![Carl Menger (1840–1921)](images/ch03.jpg){width=70% fit=contain .plain}
+```
+
+`width` and `align` also carry into the reflowable EPUB `<img>`; `height`, `fit`,
+and `border` are print-PDF layout concepts. Set the whole book's default plate
+width with `plate_width` under `[pdf]` (`0.0`–`1.0`; `1.0` = full text column).
 
 ### Editions = distribution channels
 
