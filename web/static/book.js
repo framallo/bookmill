@@ -96,7 +96,9 @@ let LANG = null; // active language (set on first render, changed by the toggle)
 
 function render(d) {
   const langs = d.languages || [];
-  LANG = langs[0] || 'es';
+  // deep-link the active language via ?lang= (shareable / back-consistent)
+  const wanted = params.get('lang');
+  LANG = wanted && langs.includes(wanted) ? wanted : langs[0] || 'es';
   renderActive(d);
 }
 
@@ -178,6 +180,8 @@ function renderActive(d) {
       b.onclick = () => {
         if (b.dataset.lang === LANG) return;
         LANG = b.dataset.lang;
+        // keep the URL in sync so the language is shareable and survives reload
+        try { const u = new URL(location.href); u.searchParams.set('lang', LANG); history.replaceState(null, '', u); } catch (e) { /* ignore */ }
         renderActive(d);
         a11y.announce(`${LANG.toUpperCase()} edition`);
       };
