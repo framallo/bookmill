@@ -153,7 +153,7 @@ function renderActive(d) {
   let html = statStrip(L);
   html += `<div class="sections">`;
   html += `<details class="disc" open>`;
-  html += `<summary class="discsum"><span>Build &amp; outputs</span><button class="iconbtn genall" data-genall="${LANG}" title="Generate all ${LANG.toUpperCase()} outputs" aria-label="Generate all ${LANG.toUpperCase()} outputs">${GEN_ICON}</button></summary>`;
+  html += `<summary class="discsum"><span>Build &amp; outputs</span><button class="obtn gen genall" data-genall="${LANG}" title="Generate all ${LANG.toUpperCase()} outputs" aria-label="Generate all ${LANG.toUpperCase()} outputs">${GEN_ICON}<span>Generate all</span></button></summary>`;
   html += `<div id="out-${LANG}"><p class="muted"><span class="spin"></span> loading…</p></div>`;
   html += `<div class="outlog" id="outlog-${LANG}"></div>`;
   html += `</details>`;
@@ -359,7 +359,7 @@ async function generateAll(bslug, lang) {
     log.textContent = '✗ generate all\n\n' + ((e && e.message) || e);
     a11y.announce(`Build failed for ${lang.toUpperCase()}`);
   } finally {
-    if (btn) { btn.disabled = false; btn.innerHTML = GEN_ICON; }
+    if (btn) { btn.disabled = false; btn.innerHTML = GEN_ICON + '<span>Generate all</span>'; }
     await loadOutputs(bslug, lang);
   }
 }
