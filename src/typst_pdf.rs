@@ -564,7 +564,7 @@ fn emit_table(s: &mut String, header: &[String], rows: &[Vec<String>]) {
         "#table(\n  columns: {cols},\n  table.header({}),\n",
         header
             .iter()
-            .map(|c| format!("[*{}*]", inline(c)))
+            .map(|c| format!("[#strong[{}]]", inline(c)))
             .collect::<Vec<_>>()
             .join(", ")
     ));
@@ -901,25 +901,27 @@ fn inline(s: &str) -> String {
                 continue;
             }
         }
-        // bold **...**
+        // bold **...** -> #strong[...] (function form, not the `*..*` shorthand, so
+        // bold text that starts/ends with `/` can't emit a `*/`/`/*` sequence that
+        // Typst would parse as a block comment — matters for tech books).
         if c == '*' && chars.get(i + 1) == Some(&'*') {
             if let Some(end) = find_seq(&chars, i + 2, &['*', '*']) {
                 let inner: String = chars[i + 2..end].iter().collect();
-                out.push('*');
+                out.push_str("#strong[");
                 out.push_str(&inline(&inner));
-                out.push('*');
+                out.push(']');
                 i = end + 2;
                 continue;
             }
         }
-        // italic *...* or _..._
+        // italic *...* or _..._ -> #emph[...] (function form, same reason as bold)
         if c == '*' || c == '_' {
             if let Some(end) = find_char(&chars, i + 1, c) {
                 let inner: String = chars[i + 1..end].iter().collect();
                 if !inner.is_empty() {
-                    out.push('_');
+                    out.push_str("#emph[");
                     out.push_str(&inline(&inner));
-                    out.push('_');
+                    out.push(']');
                     i = end + 1;
                     continue;
                 }
@@ -974,7 +976,10 @@ fn parse_inline_link(chars: &[char], start: usize) -> Option<(String, String, us
 /// Escape a single char that is special in Typst markup.
 fn push_escaped(out: &mut String, c: char) {
     match c {
-        '\\' | '#' | '$' | '*' | '_' | '`' | '<' | '>' | '@' | '[' | ']' | '~' | '^' => {
+        // `/` is escaped too: a leading `/ ` is a Typst term-list marker, `//` a
+        // line comment, and `/*`/`*/` block-comment delimiters. `\/` renders as a
+        // plain slash, so escaping it keeps dates/fractions/code punctuation safe.
+        '\\' | '#' | '$' | '*' | '_' | '`' | '<' | '>' | '@' | '[' | ']' | '~' | '^' | '/' => {
             out.push('\\');
             out.push(c);
         }
@@ -1064,8 +1069,12 @@ mod tests {
     #[test]
     fn inline_emphasis_and_escape() {
         assert_eq!(inline("plain text"), "plain text");
-        assert_eq!(inline("**bold**"), "*bold*");
-        assert_eq!(inline("*italic*"), "_italic_");
+        assert_eq!(inline("**bold**"), "#strong[bold]");
+        assert_eq!(inline("*italic*"), "#emph[italic]");
+        // bold starting with `/`: `/` is escaped so it can't form `*/` (comment)
+        // or a leading `/ ` term-list marker
+        assert_eq!(inline("**/ 5.0**"), "#strong[\\/ 5.0]");
+        assert_eq!(inline("a/b"), "a\\/b");
         assert_eq!(inline("a #b [c]"), "a \\#b \\[c\\]");
     }
 
@@ -1167,7 +1176,7 @@ mod tests {
         emit_blocks(&mut s, &blocks, Path::new("/repo"), true, false);
         assert!(s.contains("#table("));
         assert!(s.contains("columns: 2"));
-        assert!(s.contains("table.header([*A*], [*B*])"));
+        assert!(s.contains("table.header([#strong[A]], [#strong[B]])"));
         assert!(s.contains("[1], [two]"));
         // a separator line alone (no header above) must not become a table
         assert!(!s.contains("table.header([])"));
