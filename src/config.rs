@@ -440,6 +440,10 @@ pub struct PdfOpts {
     pub paper: Option<String>,
     /// per-book ink/color override ("black"|"standard-color"|"premium-color");
     /// e.g. a picture book opting into premium color. Falls back to edition / defaults.
+    /// Also drives the B&W-print split: when resolved to "black", interior images are
+    /// rendered grayscale in the KDP/POD **print** PDF (matching what a black-ink
+    /// interior actually prints), while the retail digital PDF and the Kindle EPUB
+    /// keep them in color. A color ink value keeps the print images in color too.
     pub ink: Option<String>,
     /// per-book cover finish override ("matte"|"glossy"). Falls back to edition /
     /// defaults. Cover/listing only (no interior geometry); reserved, not yet consumed.

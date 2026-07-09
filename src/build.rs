@@ -626,6 +626,10 @@ fn build_one(
     // per-edition override so e.g. KDP can hide them while retail keeps them.
     let ed_cfg = edition.and_then(|n| repo.config.editions.get(n));
     let captions = crate::config::resolve_captions(ed_cfg, book);
+    // B&W print split: when the book prints in black ink, render interior images in
+    // grayscale for the KDP/POD print interior only (matches what KDP physically
+    // prints). The retail digital PDF and the Kindle EPUB keep the images in color.
+    let print_grayscale = crate::config::resolve_ink(ed_cfg, book, &repo.config) == "black";
 
     match out {
         Out::RetailEpub => {
@@ -656,6 +660,7 @@ fn build_one(
                 plate_width,
                 captions,
                 true,
+                false,
                 cover.as_deref(),
                 geometry,
                 lang,
@@ -681,6 +686,7 @@ fn build_one(
                 plate_width,
                 captions,
                 false,
+                print_grayscale,
                 None,
                 geometry,
                 lang,

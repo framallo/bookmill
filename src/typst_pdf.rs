@@ -32,6 +32,7 @@
 use crate::build::{BookMeta, PageGeometry};
 use crate::discover::Repo;
 use anyhow::{anyhow, Context, Result};
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -58,6 +59,7 @@ pub fn run(
     plate_width: f32,
     captions: bool,
     retail: bool,
+    grayscale: bool,
     cover: Option<&Path>,
     geometry: Option<PageGeometry>,
     lang: &str,
@@ -73,7 +75,7 @@ pub fn run(
 
     // Compile natively. The World resolves images under the repo root, exactly
     // as the CLI's `--root <repo.root>` did.
-    let world = BookWorld::new(repo.root.clone(), doc)?;
+    let world = BookWorld::new(repo.root.clone(), doc, grayscale)?;
     let result = typst::compile::<PagedDocument>(&world);
     let document = result.output.map_err(|diags| {
         anyhow!(
@@ -105,6 +107,43 @@ fn join_diags(msgs: impl Iterator<Item = String>) -> String {
     }
 }
 
+/// Raster image whose bytes can be recolored (the `image` crate has png+jpeg).
+fn is_raster_image(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref(),
+        Some("png" | "jpg" | "jpeg")
+    )
+}
+
+/// Convert image bytes to grayscale, re-encoded in the **same container format**
+/// as the input (so a `.jpg`-named source stays JPEG and a `.png` stays PNG —
+/// Typst picks its decoder from the file extension, so the byte format must not
+/// change). PNG keeps its alpha channel (luma + alpha) so cut-out chapter plates
+/// still float on the page color; JPEG has no alpha (luma only). Returns `None`
+/// on any decode/encode failure so the caller falls back to the original bytes.
+fn to_grayscale(data: &[u8]) -> Option<Vec<u8>> {
+    let fmt = image::guess_format(data).ok()?;
+    let img = image::load_from_memory(data).ok()?;
+    let mut out = Vec::new();
+    let cur = &mut Cursor::new(&mut out);
+    match fmt {
+        // PNG: preserve transparency; standard luma weighting carries alpha through.
+        image::ImageFormat::Png => image::DynamicImage::ImageLumaA8(img.to_luma_alpha8())
+            .write_to(cur, image::ImageFormat::Png)
+            .ok()?,
+        // JPEG: no alpha; re-encode at high quality for print.
+        image::ImageFormat::Jpeg => {
+            let gray = img.to_luma8();
+            image::codecs::jpeg::JpegEncoder::new_with_quality(cur, 92)
+                .encode_image(&gray)
+                .ok()?
+        }
+        // Only png/jpeg reach here (see `is_raster_image`); anything else is left alone.
+        _ => return None,
+    }
+    Some(out)
+}
+
 // ---------- Typst compilation World ----------
 
 /// Process-wide font store: Typst's embedded defaults plus the system fonts.
@@ -129,10 +168,13 @@ struct BookWorld {
     fonts: &'static FontStore,
     main_id: FileId,
     main: Source,
+    /// Convert raster image files to grayscale as they are read (KDP/POD print
+    /// interiors, so the paperback prints B&W while EPUB/retail keep color).
+    grayscale: bool,
 }
 
 impl BookWorld {
-    fn new(root: PathBuf, markup: String) -> Result<Self> {
+    fn new(root: PathBuf, markup: String, grayscale: bool) -> Result<Self> {
         // Main source lives at a fixed project-rooted vpath; image paths in the
         // markup are absolute (`/images/…`) so they resolve from `root`.
         let vpath = VirtualPath::new("/.typst-build.typ")
@@ -145,6 +187,7 @@ impl BookWorld {
             fonts: font_store(),
             main_id,
             main,
+            grayscale,
         })
     }
 
@@ -185,6 +228,15 @@ impl World for BookWorld {
     fn file(&self, id: FileId) -> FileResult<Bytes> {
         let path = self.realize(id)?;
         let data = std::fs::read(&path).map_err(|e| FileError::from_io(e, &path))?;
+        // Print-interior B&W split: convert raster images to grayscale on read.
+        // Only for the KDP/POD print PDF (EPUB and retail PDF pass grayscale=false).
+        // On any decode/encode failure, fall back to the original bytes so the
+        // build never breaks over a conversion.
+        if self.grayscale && is_raster_image(&path) {
+            if let Some(gray) = to_grayscale(&data) {
+                return Ok(Bytes::new(gray));
+            }
+        }
         Ok(Bytes::new(data))
     }
 
@@ -911,6 +963,50 @@ fn typst_img_path(root: &Path, src: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_raster_image_matches_png_and_jpeg_only() {
+        assert!(is_raster_image(Path::new("/a/b.png")));
+        assert!(is_raster_image(Path::new("/a/b.JPG")));
+        assert!(is_raster_image(Path::new("/a/b.jpeg")));
+        assert!(!is_raster_image(Path::new("/a/b.svg")));
+        assert!(!is_raster_image(Path::new("/a/b")));
+    }
+
+    #[test]
+    fn grayscale_keeps_png_format_removes_color_preserves_alpha() {
+        let mut img = image::RgbaImage::new(2, 1);
+        img.put_pixel(0, 0, image::Rgba([200, 10, 10, 255]));
+        img.put_pixel(1, 0, image::Rgba([10, 200, 10, 128])); // semi-transparent
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+
+        let gray = to_grayscale(&png).expect("grayscale png");
+        // Still a PNG (format preserved so Typst's extension-based decode matches).
+        assert_eq!(image::guess_format(&gray).unwrap(), image::ImageFormat::Png);
+        let out = image::load_from_memory(&gray).unwrap().to_rgba8();
+        // Grayscale: r == g == b for every pixel.
+        for p in out.pixels() {
+            assert_eq!(p.0[0], p.0[1]);
+            assert_eq!(p.0[1], p.0[2]);
+        }
+        // Alpha preserved (cut-out plates must stay transparent).
+        assert_eq!(out.get_pixel(1, 0).0[3], 128);
+    }
+
+    #[test]
+    fn grayscale_keeps_jpeg_format() {
+        let img = image::RgbImage::from_pixel(2, 2, image::Rgb([200, 10, 10]));
+        let mut jpg = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut Cursor::new(&mut jpg), image::ImageFormat::Jpeg)
+            .unwrap();
+        let gray = to_grayscale(&jpg).expect("grayscale jpeg");
+        // A .jpg source must stay JPEG bytes, not become PNG.
+        assert_eq!(image::guess_format(&gray).unwrap(), image::ImageFormat::Jpeg);
+    }
 
     #[test]
     fn inline_emphasis_and_escape() {
