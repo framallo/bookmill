@@ -611,10 +611,8 @@ fn build_one(
     // copyright pages are optional (the new es-only fables ship without them)
     let cpdf = some_if_exists(dir.join(lang).join("copyright.md"));
     let cepub = some_if_exists(dir.join(lang).join("copyright-epub.md"));
-    // cover art is optional (the new es-only fables have no cover/ assets yet).
-    // Path is config-driven: [cover.<lang>].front → [cover].front → the
-    // `cover/front-<lang>.png` convention (see config::resolve_cover_front).
-    let cover = some_if_exists(dir.join(crate::config::resolve_cover_front(book, lang)));
+    // cover art is optional (the new es-only fables have no cover/ assets yet)
+    let cover = some_if_exists(dir.join("cover").join(format!("front-{lang}.png")));
     let odir = repo.root.join("output").join(slug).join(lang);
     std::fs::create_dir_all(&odir)?;
     // Front-matter values (title/author/lang/rights) resolved from config; shared

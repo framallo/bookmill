@@ -246,11 +246,6 @@ pub struct CoverConfig {
     // background art (filenames inside the book's cover/ dir)
     pub bg: Option<String>,
     pub wrap_bg: Option<String>,
-    /// pre-rendered front-cover image to EMBED (EPUB cover + retail PDF page 1),
-    /// path relative to the book dir. Overrides the default
-    /// `cover/front-<lang>.png` convention; per-language override in
-    /// `[cover.<lang>].front`. See config::resolve_cover_front.
-    pub front: Option<String>,
     // wrap-specific
     pub wrap_title_px: Option<f64>,
     pub wrap_lh: Option<f64>,
@@ -279,9 +274,6 @@ pub struct CoverConfig {
 /// Per-language cover overrides (`[cover.<lang>]`).
 #[derive(Debug, Deserialize, Default, Clone)]
 pub struct CoverLang {
-    /// per-language pre-rendered front-cover image path (relative to the book
-    /// dir). Overrides `[cover].front` and the `cover/front-<lang>.png` convention.
-    pub front: Option<String>,
     /// front title size override (e.g. la-riqueza EN = 235)
     pub title_size: Option<f64>,
     /// cover back-blurb override (else falls back to [listing.<lang>].blurb)
@@ -656,22 +648,6 @@ pub fn resolve_captions(edition: Option<&Edition>, book: &BookConfig) -> bool {
         .and_then(|e| e.captions)
         .or(book.pdf.plate_captions)
         .unwrap_or(true)
-}
-
-/// Resolve the pre-rendered front-cover image path for one (book, lang), relative
-/// to the book dir: `[cover.<lang>].front` → `[cover].front` → the default
-/// `cover/front-<lang>.png` convention. The build treats the result as optional
-/// (a missing file just means no embedded cover).
-pub fn resolve_cover_front(book: &BookConfig, lang: &str) -> String {
-    if let Some(cc) = &book.cover {
-        if let Some(f) = cc.lang.get(lang).and_then(|cl| cl.front.clone()) {
-            return f;
-        }
-        if let Some(f) = &cc.front {
-            return f.clone();
-        }
-    }
-    format!("cover/front-{lang}.png")
 }
 
 /// Resolve whether bookmill auto-grayscales non-`{bw=…}` interior images for the
