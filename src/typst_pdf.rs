@@ -65,7 +65,7 @@ pub fn run(
     lang: &str,
     out: &Path,
 ) -> Result<()> {
-    let doc = build_doc(repo, meta, cpdf, chaps, openright, plate_framed, plate_width, captions, retail, cover, geometry, lang)?;
+    let doc = build_doc(repo, meta, cpdf, chaps, openright, plate_framed, plate_width, captions, retail, grayscale, cover, geometry, lang)?;
     let odir = out.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(odir)?;
     // Keep the generated markup on disk for debugging only — it is NOT handed to
@@ -107,10 +107,15 @@ fn join_diags(msgs: impl Iterator<Item = String>) -> String {
     }
 }
 
-/// Location of an optional precomputed grayscale variant for a print image:
-/// `<dir>/<file>` -> `<dir>/bw/<file>` (same basename, in a sibling `bw/` dir).
-fn grayscale_variant_path(path: &Path) -> Option<PathBuf> {
-    Some(path.parent()?.join("bw").join(path.file_name()?))
+/// True if `path` is a pre-made grayscale print variant — i.e. it lives directly
+/// in a `bw/` directory (the convention the markdown `{bw=…}` attribute points
+/// at). Such a file is already grayscale, so the print build uses it verbatim
+/// instead of re-encoding it.
+fn is_bw_variant_path(path: &Path) -> bool {
+    path.parent()
+        .and_then(|p| p.file_name())
+        .map(|n| n == "bw")
+        .unwrap_or(false)
 }
 
 /// Raster image whose bytes can be recolored (the `image` crate has png+jpeg).
@@ -234,18 +239,18 @@ impl World for BookWorld {
     fn file(&self, id: FileId) -> FileResult<Bytes> {
         let path = self.realize(id)?;
         // Print-interior B&W split (KDP/POD print PDF only; EPUB and retail pass
-        // grayscale=false, keeping full color). Two tiers:
-        //   1. A precomputed grayscale variant at `<dir>/bw/<file>` — lets a book
-        //      ship a tuned B&W version generated once (e.g. contrast adjusted for
-        //      print) instead of a naive luma conversion. Used verbatim if present.
-        //   2. Otherwise, convert the color image to grayscale on the fly.
+        // grayscale=false, keeping full color). Two ways an image goes grayscale:
+        //   1. The markdown `{bw=…}` attribute already swapped in a pre-made
+        //      grayscale variant (see emit_blocks; print build only). That path
+        //      lives in a `bw/` directory and is read verbatim — no re-encode, so
+        //      a hand-tuned print variant survives untouched.
+        //   2. Otherwise bookmill converts the color image to grayscale on the fly.
         // On any read/decode failure it falls back to the original bytes so the
         // build never breaks over the split.
         if self.grayscale && is_raster_image(&path) {
-            if let Some(bw) = grayscale_variant_path(&path) {
-                if let Ok(pre) = std::fs::read(&bw) {
-                    return Ok(Bytes::new(pre));
-                }
+            if is_bw_variant_path(&path) {
+                let data = std::fs::read(&path).map_err(|e| FileError::from_io(e, &path))?;
+                return Ok(Bytes::new(data));
             }
             let data = std::fs::read(&path).map_err(|e| FileError::from_io(e, &path))?;
             return Ok(Bytes::new(to_grayscale(&data).unwrap_or(data)));
@@ -277,6 +282,7 @@ fn build_doc(
     plate_width: f32,
     captions: bool,
     retail: bool,
+    grayscale: bool,
     cover: Option<&Path>,
     geometry: Option<PageGeometry>,
     lang: &str,
@@ -455,7 +461,7 @@ text(weight: \"bold\", size: 13pt, it.body))\n",
         let txt = std::fs::read_to_string(ch)
             .with_context(|| format!("reading {}", ch.display()))?;
         let blocks = parse_blocks(&txt);
-        emit_blocks(&mut s, &blocks, &repo.root, captions);
+        emit_blocks(&mut s, &blocks, &repo.root, captions, grayscale);
         s.push('\n');
     }
 
@@ -465,17 +471,25 @@ text(weight: \"bold\", size: 13pt, it.body))\n",
 /// Emit a chapter's blocks, applying the heading+plate reorder: a chapter that
 /// opens with a standalone (non-spot) image renders the image as a full-page
 /// verso plate BEFORE its heading, so heading+body open together on the recto.
-fn emit_blocks(s: &mut String, blocks: &[Block], root: &Path, captions: bool) {
+fn emit_blocks(s: &mut String, blocks: &[Block], root: &Path, captions: bool, grayscale: bool) {
+    // On a grayscale (print) build, an image's `{bw=…}` variant replaces `src`;
+    // otherwise (EPUB/retail) `src` is used and its color is kept.
+    let eff_src = |src: &str, bw: &Option<String>| -> String {
+        match (grayscale, bw) {
+            (true, Some(b)) => b.clone(),
+            _ => src.to_string(),
+        }
+    };
     let mut i = 0;
     while i < blocks.len() {
         match &blocks[i] {
             Block::Heading { level, text, unnumbered } if *level == 1 => {
                 // look ahead for an opening plate image
                 if let Some(Block::Image {
-                    src, spot: false, alt, width, height, fit, border, ..
+                    src, spot: false, alt, width, height, fit, border, bw, ..
                 }) = blocks.get(i + 1)
                 {
-                    let p = typst_img_path(root, src);
+                    let p = typst_img_path(root, &eff_src(src, bw));
                     let cap = if !captions || alt.trim().is_empty() {
                         "none".to_string()
                     } else {
@@ -500,8 +514,8 @@ fn emit_blocks(s: &mut String, blocks: &[Block], root: &Path, captions: bool) {
                 emit_heading(s, *level, text, *unnumbered);
                 i += 1;
             }
-            Block::Image { src, spot, width, height, fit, align, .. } => {
-                let p = typst_img_path(root, src);
+            Block::Image { src, spot, width, height, fit, align, bw, .. } => {
+                let p = typst_img_path(root, &eff_src(src, bw));
                 if *spot {
                     s.push_str(&format!("#spot({})\n", ty_str(&p)));
                 } else {
@@ -586,6 +600,11 @@ enum Block {
         fit: Option<String>,
         align: Option<String>,
         border: Option<bool>,
+        /// Explicit grayscale variant for the print interior (`{bw=path}`). When
+        /// set, the KDP/POD print PDF uses this file verbatim instead of
+        /// converting `src` on the fly; the EPUB/retail build ignores it and
+        /// keeps `src` in color. `None` → bookmill grayscales `src` itself.
+        bw: Option<String>,
     },
     Rule,
     /// GFM pipe table: a header row plus body rows, each a vector of raw cell
@@ -801,6 +820,7 @@ fn parse_image(s: &str) -> Option<Block> {
         fit: attr_enum(&attrs, "fit", &["cover", "contain", "stretch"]),
         align: attr_enum(&attrs, "align", &["left", "center", "right"]),
         border,
+        bw: attr_str(&attrs, "bw"),
     })
 }
 
@@ -979,11 +999,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn grayscale_variant_path_points_at_bw_subdir() {
-        assert_eq!(
-            grayscale_variant_path(Path::new("/repo/libros/x/images/ch01.jpg")),
-            Some(PathBuf::from("/repo/libros/x/images/bw/ch01.jpg"))
-        );
+    fn is_bw_variant_path_detects_bw_dir() {
+        assert!(is_bw_variant_path(Path::new("/repo/libros/x/images/bw/ch01.jpg")));
+        assert!(!is_bw_variant_path(Path::new("/repo/libros/x/images/ch01.jpg")));
+        // only the immediate parent counts, not a `bw` further up the tree
+        assert!(!is_bw_variant_path(Path::new("/repo/bw/images/ch01.jpg")));
     }
 
     #[test]
@@ -1133,7 +1153,7 @@ mod tests {
             _ => panic!("not a table"),
         }
         let mut s = String::new();
-        emit_blocks(&mut s, &blocks, Path::new("/repo"), true);
+        emit_blocks(&mut s, &blocks, Path::new("/repo"), true, false);
         assert!(s.contains("#table("));
         assert!(s.contains("columns: 2"));
         assert!(s.contains("table.header([*A*], [*B*])"));
@@ -1155,5 +1175,25 @@ mod tests {
         let root = Path::new("/repo");
         assert_eq!(typst_img_path(root, "libros/a/ch01.png"), "/libros/a/ch01.png");
         assert_eq!(typst_img_path(root, "/repo/libros/a/ch01.png"), "/libros/a/ch01.png");
+    }
+
+    #[test]
+    fn bw_attr_parsed_and_swapped_only_for_print() {
+        let md = "# T\n\n![a](libros/x/images/ch.jpg){bw=libros/x/images/bw/ch.jpg}\n";
+        let blocks = parse_blocks(md);
+        // the attribute is parsed onto the image block
+        assert!(matches!(
+            blocks.iter().find(|b| matches!(b, Block::Image { .. })),
+            Some(Block::Image { bw: Some(p), .. }) if p == "libros/x/images/bw/ch.jpg"
+        ));
+        // color build (grayscale=false) keeps the color src
+        let mut color = String::new();
+        emit_blocks(&mut color, &blocks, Path::new("/repo"), true, false);
+        assert!(color.contains("/libros/x/images/ch.jpg"));
+        assert!(!color.contains("/libros/x/images/bw/ch.jpg"));
+        // print build (grayscale=true) swaps in the bw variant
+        let mut print = String::new();
+        emit_blocks(&mut print, &blocks, Path::new("/repo"), true, true);
+        assert!(print.contains("/libros/x/images/bw/ch.jpg"));
     }
 }
