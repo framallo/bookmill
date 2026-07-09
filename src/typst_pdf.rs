@@ -107,6 +107,12 @@ fn join_diags(msgs: impl Iterator<Item = String>) -> String {
     }
 }
 
+/// Location of an optional precomputed grayscale variant for a print image:
+/// `<dir>/<file>` -> `<dir>/bw/<file>` (same basename, in a sibling `bw/` dir).
+fn grayscale_variant_path(path: &Path) -> Option<PathBuf> {
+    Some(path.parent()?.join("bw").join(path.file_name()?))
+}
+
 /// Raster image whose bytes can be recolored (the `image` crate has png+jpeg).
 fn is_raster_image(path: &Path) -> bool {
     matches!(
@@ -227,16 +233,24 @@ impl World for BookWorld {
 
     fn file(&self, id: FileId) -> FileResult<Bytes> {
         let path = self.realize(id)?;
-        let data = std::fs::read(&path).map_err(|e| FileError::from_io(e, &path))?;
-        // Print-interior B&W split: convert raster images to grayscale on read.
-        // Only for the KDP/POD print PDF (EPUB and retail PDF pass grayscale=false).
-        // On any decode/encode failure, fall back to the original bytes so the
-        // build never breaks over a conversion.
+        // Print-interior B&W split (KDP/POD print PDF only; EPUB and retail pass
+        // grayscale=false, keeping full color). Two tiers:
+        //   1. A precomputed grayscale variant at `<dir>/bw/<file>` — lets a book
+        //      ship a tuned B&W version generated once (e.g. contrast adjusted for
+        //      print) instead of a naive luma conversion. Used verbatim if present.
+        //   2. Otherwise, convert the color image to grayscale on the fly.
+        // On any read/decode failure it falls back to the original bytes so the
+        // build never breaks over the split.
         if self.grayscale && is_raster_image(&path) {
-            if let Some(gray) = to_grayscale(&data) {
-                return Ok(Bytes::new(gray));
+            if let Some(bw) = grayscale_variant_path(&path) {
+                if let Ok(pre) = std::fs::read(&bw) {
+                    return Ok(Bytes::new(pre));
+                }
             }
+            let data = std::fs::read(&path).map_err(|e| FileError::from_io(e, &path))?;
+            return Ok(Bytes::new(to_grayscale(&data).unwrap_or(data)));
         }
+        let data = std::fs::read(&path).map_err(|e| FileError::from_io(e, &path))?;
         Ok(Bytes::new(data))
     }
 
@@ -963,6 +977,14 @@ fn typst_img_path(root: &Path, src: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grayscale_variant_path_points_at_bw_subdir() {
+        assert_eq!(
+            grayscale_variant_path(Path::new("/repo/libros/x/images/ch01.jpg")),
+            Some(PathBuf::from("/repo/libros/x/images/bw/ch01.jpg"))
+        );
+    }
 
     #[test]
     fn is_raster_image_matches_png_and_jpeg_only() {
