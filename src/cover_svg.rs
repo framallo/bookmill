@@ -110,6 +110,39 @@ impl CoverRenderer {
         Ok(())
     }
 
+    /// The eBook front cover as an SVG string (the exact source `render_front_png`
+    /// rasterizes). Used by the web editor so its canvas is the authoritative
+    /// render, eliminating editor/output drift. (Consumed via the library surface
+    /// `bookmill::editor_cover_svg`, so it reads as dead code inside the binary.)
+    #[allow(dead_code)]
+    pub fn front_svg_string(
+        &self,
+        repo: &RepoConfig,
+        book: &BookConfig,
+        lang: &str,
+        cover_dir: &Path,
+    ) -> Result<String> {
+        let r = resolve(repo, book, lang);
+        self.front_svg(&r, cover_dir)
+    }
+
+    /// The full paperback wrap (back + spine + front) as an SVG string — the exact
+    /// source `render_wrap_pdf` rasterizes. Powers the web editor's full-wrap canvas.
+    /// (Consumed via `bookmill::editor_cover_svg`, so it reads as dead code inside
+    /// the binary.)
+    #[allow(dead_code)]
+    pub fn wrap_svg_string(
+        &self,
+        repo: &RepoConfig,
+        book: &BookConfig,
+        lang: &str,
+        cover_dir: &Path,
+        pages: u32,
+    ) -> Result<String> {
+        let r = resolve(repo, book, lang);
+        self.wrap_svg(&r, cover_dir, pages)
+    }
+
     /// Render the paperback wrap to a print-sized PDF (full_w x full_h inches).
     pub fn render_wrap_pdf(
         &self,
@@ -503,6 +536,7 @@ impl CoverRenderer {
             "tsh",
             w,
             h,
+            0.0,
         );
 
         // Accent rule, centered under the title block (default 46px gap, 220x3).
@@ -529,6 +563,7 @@ impl CoverRenderer {
             "ssh",
             w,
             h,
+            0.0,
         );
 
         // Author (absolute; rendered as stored — the editor does not upper-case it).
@@ -545,6 +580,7 @@ impl CoverRenderer {
             "aush",
             w,
             h,
+            0.0,
         );
     }
 
@@ -567,6 +603,7 @@ impl CoverRenderer {
         shadow_id: &str,
         w: f64,
         h: f64,
+        x0: f64,
     ) -> (f64, f64, f64) {
         let (def_x, def_y, def_w, def_font) = def;
         let x_pct = el.map(|e| e.x_pct).unwrap_or(def_x);
@@ -586,7 +623,7 @@ impl CoverRenderer {
             .unwrap_or_else(|| def_text.to_string());
 
         let size = font_pct * h;
-        let block_cx = x_pct * w;
+        let block_cx = x0 + x_pct * w;
         let box_w = (w_pct * w).max(1.0);
         let italic = style.contains("italic");
         let weight: u16 = if style.contains("bold") { 700 } else { 400 };
@@ -618,6 +655,80 @@ impl CoverRenderer {
             );
         }
         (block_top, total_h, block_cx)
+    }
+
+    /// Absolute back-panel text layout from `[cover.<lang>.wrap]` (web wrap editor).
+    /// Places badge/blurb/author at their saved back-panel-fraction centers/sizes
+    /// via `emit_abs_element`, mapped into the back panel's absolute wrap rectangle
+    /// (origin at the wrap's left edge `x0=0`, width `back_w`, height `fh`). Each
+    /// element falls back to a default fraction chosen to sit where the flex stack
+    /// puts it (badge near the top, blurb in the upper-middle, author near the
+    /// bottom-left), so a partial saved layout still renders sensibly. Editor model:
+    /// centered on (xPct·back_w, yPct·fh), wrapped to wPct·back_w, at fontPct·fh.
+    fn back_absolute(
+        &self,
+        body: &mut String,
+        defs: &mut String,
+        r: &Resolved,
+        back_w: f64,
+        fh: f64,
+        bpad_x: f64,
+    ) {
+        let wl = r.wrap_layout.as_ref();
+        let bcontent_w = back_w - 2.0 * bpad_x;
+        let w_frac = bcontent_w / back_w;
+
+        // Badge (absolute; default: top-center, small caps like the flex badge).
+        self.emit_abs_element(
+            body,
+            defs,
+            wl.and_then(|w| w.badge.as_ref()),
+            (0.5, 0.085, w_frac, 13.0 / fh),
+            &r.badge,
+            &r.badge_color,
+            "Montserrat",
+            "normal",
+            "none",
+            "wbbsh",
+            back_w,
+            fh,
+            0.0,
+        );
+
+        // Blurb (absolute; default: upper-middle of the back panel).
+        self.emit_abs_element(
+            body,
+            defs,
+            wl.and_then(|w| w.blurb.as_ref()),
+            (0.5, 0.42, w_frac, 21.0 / fh),
+            &r.blurb,
+            &r.blurb_color,
+            &r.serif,
+            "normal",
+            &r.blurb_shadow,
+            "wbbbsh",
+            back_w,
+            fh,
+            0.0,
+        );
+
+        // Author (absolute; default: near the bottom, kept off the bottom-right
+        // barcode keep-out by defaulting to center-x). Rendered upper-cased.
+        self.emit_abs_element(
+            body,
+            defs,
+            wl.and_then(|w| w.author.as_ref()),
+            (0.5, 0.94, w_frac, 13.0 / fh),
+            &r.author,
+            &r.author_color,
+            "Montserrat",
+            "normal",
+            "none",
+            "wbaush",
+            back_w,
+            fh,
+            0.0,
+        );
     }
 
     fn wrap_svg(&self, r: &Resolved, cover_dir: &Path, pages: u32) -> Result<String> {
@@ -659,6 +770,16 @@ impl CoverRenderer {
         let bpad_b = 0.55 * DPI;
         let bcx = back_w / 2.0;
         let bcontent_w = back_w - 2.0 * bpad_x;
+        // Web-editor absolute back-panel layout: when [cover.<lang>.wrap] is present,
+        // place badge/blurb/author from its saved fractions (of the BACK panel:
+        // width = back_w, height = fh, origin at the wrap's left edge) instead of the
+        // flex stack below. Absent => unchanged default flex back (no regression).
+        let has_wrap_layout = r.wrap_layout.as_ref().map_or(false, |wl| {
+            wl.blurb.is_some() || wl.badge.is_some() || wl.author.is_some()
+        });
+        if has_wrap_layout {
+            self.back_absolute(&mut body, &mut defs, r, back_w, fh, bpad_x);
+        } else {
         let mut by = bpad_t;
         // bbadge
         self.emit_line(
@@ -723,6 +844,7 @@ impl CoverRenderer {
                 anchor: "start",
             },
         );
+        }
 
         // ---- SPINE ------------------------------------------------------
         body.push_str(&format!(
@@ -813,6 +935,70 @@ impl CoverRenderer {
                 anchor: "middle",
             },
         );
+        let has_layout = r.layout.as_ref().map_or(false, |l| {
+            l.title.is_some() || l.subtitle.is_some() || l.author.is_some()
+        });
+        if has_layout {
+            // Web-editor absolute layout ([cover.<lang>.layout]) mapped into the
+            // front panel: offset by front_x, sized to front_w x fh, so the wrap
+            // front matches the eBook front (which is the edited surface). Without
+            // this the wrap kept its own flex math and the title landed off-band.
+            let l = r.layout.as_ref();
+            let (t_top, t_h, t_cx) = self.emit_abs_element(
+                &mut body,
+                &mut defs,
+                l.and_then(|l| l.title.as_ref()),
+                (0.5, 0.62, 0.80, ft_px / fh),
+                &r.title,
+                &r.title_color,
+                &r.serif,
+                "bold",
+                &ft_shadow_css,
+                "ftsh",
+                front_w,
+                fh,
+                front_x,
+            );
+            let rule_y = t_top + t_h + 0.18 * DPI;
+            body.push_str(&format!(
+                "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"2\" fill=\"{}\" opacity=\"0.85\"/>",
+                fmt(t_cx - 0.6 * DPI),
+                fmt(rule_y),
+                fmt(1.2 * DPI),
+                r.accent
+            ));
+            let fsub_style = if r.sub_italic == "italic" { "italic" } else { "normal" };
+            self.emit_abs_element(
+                &mut body,
+                &mut defs,
+                l.and_then(|l| l.subtitle.as_ref()),
+                (0.5, 0.76, 0.85, 18.0 / fh),
+                &r.sub,
+                &r.sub_color,
+                &r.sub_font,
+                fsub_style,
+                &r.sub_shadow,
+                "fssh",
+                front_w,
+                fh,
+                front_x,
+            );
+            self.emit_abs_element(
+                &mut body,
+                &mut defs,
+                l.and_then(|l| l.author.as_ref()),
+                (0.5, 0.93, 0.80, 15.0 / fh),
+                &r.author,
+                &r.author_color,
+                "Montserrat",
+                "normal",
+                "none",
+                "faush",
+                front_w,
+                fh,
+                front_x,
+            );
+        } else {
         fy += fbadge_h + fgap1;
         let ftvm = self.vmetrics(&r.serif, 800, false);
         let ftshadow = shadow_def(&mut defs, &ft_shadow_css, "ftsh");
@@ -887,10 +1073,12 @@ impl CoverRenderer {
                 anchor: "middle",
             },
         );
+        }
 
         Ok(WRAP_SVG_TMPL
             .replace("{{FULL_W_PX}}", &fmt(fw))
             .replace("{{FULL_H_PX}}", &fmt(fh))
+            .replace("{{BACK_W_PX}}", &fmt(back_w))
             .replace("{{BGCOLOR}}", &xml_attr(&r.bgcolor))
             .replace("{{DEFS}}", &defs)
             .replace("{{WRAPBG}}", &wrapbg)

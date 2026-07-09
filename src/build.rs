@@ -621,11 +621,15 @@ fn build_one(
     let base = format!("{slug}-{lang}");
     let openright = book.pdf.chapter_opens.as_deref() == Some("recto");
     let plate_framed = book.pdf.plate_style.as_deref() == Some("framed");
+    // Plate captions (image alt shown under/below each plate): book default, with a
+    // per-edition override so e.g. KDP can hide them while retail keeps them.
+    let ed_cfg = edition.and_then(|n| repo.config.editions.get(n));
+    let captions = crate::config::resolve_captions(ed_cfg, book);
 
     match out {
         Out::RetailEpub => {
             let o = odir.join(format!("{base}.epub"));
-            crate::epub_native::run(repo, &m, cepub.as_deref(), &chaps, cover.as_deref(), lang, true, &o)?;
+            crate::epub_native::run(repo, &m, cepub.as_deref(), &chaps, cover.as_deref(), lang, true, captions, &o)?;
             shrink_epub(repo, &o, epub_px)?;
             if let Some(c) = &cover {
                 emit_cover_jpg(c, &odir.join(format!("{base}-cover.jpg")))?;
@@ -633,7 +637,7 @@ fn build_one(
         }
         Out::KdpEpub => {
             let o = odir.join(format!("{base}-kdp.epub"));
-            crate::epub_native::run(repo, &m, cepub.as_deref(), &chaps, cover.as_deref(), lang, false, &o)?;
+            crate::epub_native::run(repo, &m, cepub.as_deref(), &chaps, cover.as_deref(), lang, false, captions, &o)?;
             shrink_epub(repo, &o, epub_px)?;
             if let Some(c) = &cover {
                 emit_cover_jpg(c, &odir.join(format!("{base}-cover.jpg")))?;
@@ -648,6 +652,7 @@ fn build_one(
                 &chaps,
                 openright,
                 plate_framed,
+                captions,
                 true,
                 cover.as_deref(),
                 geometry,
@@ -671,6 +676,7 @@ fn build_one(
                 &chaps,
                 openright,
                 plate_framed,
+                captions,
                 false,
                 None,
                 geometry,

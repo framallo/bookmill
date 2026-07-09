@@ -1,71 +1,36 @@
-// Book detail = attributes + a TUI-style build panorama (editions × languages ×
-// formats) + per-language actions and publish readiness. Arrow keys navigate
-// prev/next book across the repo (when the panorama is not focused); when the
-// panorama has focus, ←/→ switch list focus and ↑/↓ move within the focused list.
+// Book detail (v2). A compact hub: the two language variants sit side by side as
+// cards — cover + title + primary actions (Edit cover / Preview) above the fold —
+// with Build & outputs and Publish readiness tucked behind disclosures so the page
+// no longer scrolls forever. ←/→ move to the prev/next book. The library-wide
+// "check all books" sweep now lives on the home page, not here.
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const slug = params.get('book');
-const initialLang = params.get('lang');
 
-let ALLBOOKS = [];   // ordered [{slug, languages}] from /api/books (for nav + check-all)
+let ALLBOOKS = [];   // ordered [{slug, languages}] from /api/books (for prev/next)
 let DATA = null;     // /api/book/{slug} response
 
-// Unified keyboard model. A SINGLE focus ring walks EVERY actionable control on
-// the page — prev-book, the three lists (Editions/Languages/Formats), each
-// language's action buttons (Edit cover · Preview book · Check readiness · the
-// readiness details toggle when present), the page-level "Check all books", and
-// next-book. ←/→ (and Tab) move focus along the ring; ↑/↓ toggle the value inside
-// a focused list (each list keeps its own cursor); Enter/Space activates a focused
-// button/link. The focused control's id is persisted per book so a refresh lands
-// on the same control. Formats mirror the TUI's FORMATS (minus the "edition"
-// meta-selector, which the dedicated Editions list covers).
-const FORMATS = ['all', 'epub', 'pdf', 'kdp', 'print'];
-const LISTS = ['editions', 'langs', 'formats'];
-const mx = {
-  lists: { editions: [], langs: [], formats: FORMATS.slice() },
-  cur: { editions: 0, langs: 0, formats: 0 }, // each list keeps its own cursor
-  focus: 'editions',                          // ring id of the focused control
-};
+// One "generate/build" glyph reused by every Generate control (bolt = build it).
+const GEN_ICON = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>';
 
-function isList(f) { return LISTS.includes(f); }
-
-// The DOM element for a ring id (every ring control carries data-ring="<id>").
-function ringEl(id) {
-  try { return document.querySelector(`[data-ring="${window.CSS && CSS.escape ? CSS.escape(id) : id}"]`); }
-  catch (e) { return null; }
+// A publishing-status pill from the book's [status] ribbon (live/in-review/…).
+function statusBadge(ribbon) {
+  const map = {
+    live: ['ready', 'LIVE'], 'in-review': ['warn', 'IN REVIEW'],
+    blocked: ['notready', 'BLOCKED'], draft: ['', 'DRAFT'],
+  };
+  const [cls, label] = map[ribbon] || map.draft;
+  return `<span class="verdict ${cls}" style="font-size:11px;padding:2px 9px">${label}</span>`;
 }
-function isHidden(el) { return !el || (el.offsetParent === null && getComputedStyle(el).position !== 'fixed'); }
-
-// The ordered focus ring for the current page state. Intuitive left-to-right /
-// top-to-bottom order: prev-book → build panorama lists → per-language action
-// buttons (in language order) → Check all books → next-book. Controls that are
-// absent (first/last book) or hidden (the readiness caret before a run) are
-// filtered out so focus never lands on a dead/invisible target.
-function buildRing() {
-  const i = bookIndex();
-  const want = [];
-  if (i > 0) want.push('prev');
-  want.push(...LISTS);
-  ((DATA && DATA.languages) || []).forEach((l) => {
-    want.push(`cover-${l}`, `preview-${l}`, `readiness-${l}`, `caret-${l}`);
-  });
-  want.push('checkall');
-  if (i >= 0 && i < ALLBOOKS.length - 1) want.push('next');
-  return want.filter((id) => isList(id) ? !!ringEl(id) : !isHidden(ringEl(id)));
-}
-
-// --- focus persistence (per book) ------------------------------------------
-const focusKey = () => `bm.book.${slug}.focus`;
-function saveFocus() { try { localStorage.setItem(focusKey(), mx.focus); } catch (e) {} }
-function loadFocus() { try { return localStorage.getItem(focusKey()); } catch (e) { return null; } }
 
 init();
 
 async function init() {
-  if (!slug) { $('main').innerHTML = '<p class="muted">No ?book=<slug> given. <a class="crumb" href="/">← all books</a></p>'; return; }
-
-  // Book ordering for prev/next navigation + the "check all" sweep.
+  if (!slug) {
+    $('main').innerHTML = '<p class="muted">No <code>?book=&lt;slug&gt;</code> given. <a class="crumb" href="/">← all books</a></p>';
+    return;
+  }
   try {
     const r = await fetch('/api/books').then((x) => x.json());
     ALLBOOKS = (r.books || []).map((b) => ({ slug: b.slug, languages: b.languages || [] }));
@@ -82,7 +47,6 @@ async function init() {
     return;
   }
   DATA = d;
-  initMatrixState(d);
   render(d);
 }
 
@@ -106,264 +70,107 @@ function wireNav() {
   prev.onclick = () => gotoBook(-1);
   next.onclick = () => gotoBook(1);
   if (i >= 0 && ALLBOOKS.length) $('navpos').textContent = `${i + 1} / ${ALLBOOKS.length}`;
-  $('checkAll').onclick = checkAllBooks;
 
   document.addEventListener('keydown', (e) => {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable;
     if (typing) return;
-
-    // One unified focus ring over every control: prev-book · Editions ·
-    // Languages · Formats · per-language buttons · Check all · next-book. ←/→ (and
-    // Tab) walk the ring; ↑/↓ toggle inside a focused list; Enter/Space activates a
-    // focused button/link. Keyboard navigation drops any lingering native focus so
-    // the ring highlight is the single source of truth (and Enter never fires twice).
-    switch (e.key) {
-      case 'ArrowLeft': e.preventDefault(); blurNative(); moveFocus(-1); break;
-      case 'ArrowRight': e.preventDefault(); blurNative(); moveFocus(1); break;
-      case 'Tab': e.preventDefault(); blurNative(); moveFocus(e.shiftKey ? -1 : 1); break;
-      case 'ArrowUp': if (isList(mx.focus)) { e.preventDefault(); moveWithin(-1); } break;
-      case 'ArrowDown': if (isList(mx.focus)) { e.preventDefault(); moveWithin(1); } break;
-      case 'Home': if (isList(mx.focus)) { e.preventDefault(); setWithin(0); } break;
-      case 'End': if (isList(mx.focus)) { e.preventDefault(); setWithin(mx.lists[mx.focus].length - 1); } break;
-      case 'Enter':
-      case ' ':
-        if (isList(mx.focus)) break; // lists change value via ↑/↓, not activation
-        // If the browser already focuses this control, let it activate natively
-        // (avoids a double fire); otherwise activate the ring target ourselves.
-        if (e.target && (e.target.tagName === 'BUTTON' || e.target.tagName === 'A')) break;
-        { const el = ringEl(mx.focus); if (el) { e.preventDefault(); el.click(); } }
-        break;
-    }
+    if (e.key === 'ArrowLeft') { e.preventDefault(); gotoBook(-1); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); gotoBook(1); }
   });
-}
-
-// --- build panorama (TUI-style visible lists) -------------------------------
-
-function initMatrixState(d) {
-  mx.lists.editions = ['all', ...(d.editions || [])];
-  mx.lists.langs = ['all', ...(d.languages || [])];
-  mx.lists.formats = FORMATS.slice();
-  mx.cur = { editions: 0, langs: 0, formats: 0 };
-  // Honor ?lang=<l>: preselect it in the Languages list.
-  if (initialLang) {
-    const li = mx.lists.langs.indexOf(initialLang);
-    if (li >= 0) mx.cur.langs = li;
-  }
-  mx.focus = 'editions';
-}
-
-function blurNative() {
-  const a = document.activeElement;
-  if (a && a !== document.body && a.blur) a.blur();
-}
-
-function moveFocus(delta) {
-  const ring = buildRing();
-  if (!ring.length) return;
-  let i = ring.indexOf(mx.focus);
-  if (i < 0) i = delta > 0 ? -1 : 0; // fell off the ring → step onto an end
-  i = (i + delta + ring.length) % ring.length; // wrap so the ring cycles
-  mx.focus = ring[i];
-  paintFocus();
-}
-
-function moveWithin(delta) {
-  if (!isList(mx.focus)) return;
-  const key = mx.focus;
-  const n = mx.lists[key].length;
-  if (!n) return;
-  mx.cur[key] = Math.max(0, Math.min(n - 1, mx.cur[key] + delta)); // cursor preserved per list
-  paintFocus();
-}
-
-function setWithin(idx) {
-  if (!isList(mx.focus)) return;
-  const key = mx.focus;
-  const n = mx.lists[key].length;
-  if (!n) return;
-  mx.cur[key] = Math.max(0, Math.min(n - 1, idx));
-  paintFocus();
-}
-
-function selVal(key) { return mx.lists[key][mx.cur[key]]; }
-
-// Mirror the TUI's cmd_string: a specific format wins; else an explicit edition;
-// else a plain build. `all`/`all` lang means "every language".
-function matrixCommand() {
-  const ed = selVal('editions'), lang = selVal('langs'), fmt = selVal('formats');
-  let c = `bookmill build ${slug}`;
-  if (fmt !== 'all') c += ` --format ${fmt}`;
-  else if (ed !== 'all') c += ` --edition ${ed}`;
-  if (lang !== 'all') c += ` --lang ${lang}`;
-  return c;
-}
-
-function matrixHtml() {
-  const col = (key, label) => {
-    const opts = mx.lists[key].map((o, i) =>
-      `<div class="mopt${i === mx.cur[key] ? ' sel' : ''}" data-list="${key}" data-i="${i}">${esc(o)}</div>`).join('');
-    return `<div class="mcol" data-col="${key}" data-ring="${key}">
-       <div class="mh">${esc(label)}</div>${opts}</div>`;
-  };
-  return `<h2>Build panorama</h2>
-    <div class="matrix" id="matrix">
-      ${col('editions', 'Editions')}
-      ${col('langs', 'Languages')}
-      ${col('formats', 'Formats')}
-    </div>`;
-}
-
-// Wire pointer interactions to the same focus model: clicking any ring control
-// moves the ring focus onto it (and, for a list option, selects that value).
-function wireRing() {
-  const m = $('matrix');
-  if (m) {
-    m.querySelectorAll('.mopt').forEach((el) => {
-      el.addEventListener('click', () => {
-        const key = el.dataset.list;
-        mx.focus = key;
-        mx.cur[key] = parseInt(el.dataset.i, 10);
-        paintFocus();
-      });
-    });
-    m.querySelectorAll('.mcol').forEach((c) => {
-      c.addEventListener('click', (e) => {
-        if (e.target.classList.contains('mopt')) return; // header click focuses the list
-        mx.focus = c.dataset.col;
-        paintFocus();
-      });
-    });
-  }
-  // Any other ring control (buttons/links): clicking or natively focusing it
-  // moves the ring focus onto it, so the highlight and the persisted focus stay
-  // in sync with pointer use. (No mouseenter — focus should not chase the cursor.)
-  document.querySelectorAll('[data-ring]').forEach((el) => {
-    if (el.classList.contains('mcol')) return; // handled above
-    const id = el.dataset.ring;
-    el.addEventListener('click', () => { mx.focus = id; paintFocus(); }); // before nav for links
-    el.addEventListener('focus', () => { mx.focus = id; paintFocus(); });
-  });
-}
-
-// Repaint the whole focus state: list selection values, the focused list column,
-// the .kfocus ring on the focused control, the command preview — then persist
-// the focused id so a refresh restores it.
-function paintFocus() {
-  const m = $('matrix');
-  if (m) {
-    m.querySelectorAll('.mopt').forEach((el) =>
-      el.classList.toggle('sel', parseInt(el.dataset.i, 10) === mx.cur[el.dataset.list]));
-    m.querySelectorAll('.mcol').forEach((c) => c.classList.toggle('active', c.dataset.col === mx.focus));
-  }
-  const cp = $('cmdprev');
-  if (cp) cp.textContent = matrixCommand();
-  // .kfocus on exactly the focused ring control.
-  document.querySelectorAll('.kfocus').forEach((el) => el.classList.remove('kfocus'));
-  const fe = ringEl(mx.focus);
-  if (fe) fe.classList.add('kfocus');
-  saveFocus();
-}
-
-// Restore the persisted focus for this book, falling back to a sensible default
-// (the Editions list) when the saved control no longer exists.
-function restoreFocus() {
-  const ring = buildRing();
-  const saved = loadFocus();
-  mx.focus = (saved && ring.includes(saved)) ? saved
-    : (ring.includes('editions') ? 'editions' : ring[0]);
-  paintFocus();
 }
 
 // --- page render ------------------------------------------------------------
 
 function render(d) {
   const firstTitle = (d.langs[d.languages[0]] && d.langs[d.languages[0]].title) || d.slug;
+  $('bookTitle').textContent = firstTitle;
+
   const editions = (d.editions || []).map((e) => `<span class="tag">${esc(e)}</span>`).join('') || '<span class="muted">—</span>';
 
-  let html = '';
-  html += `<h1>${esc(firstTitle)}</h1>`;
+  const firstLang = (d.languages || [])[0] || 'es';
+  const q0 = `book=${encodeURIComponent(d.slug)}&lang=${encodeURIComponent(firstLang)}`;
+
+  let html = '<div class="hero">';
+  html += `<div class="herotop"><h1>${esc(firstTitle)}</h1>${d.status ? statusBadge(d.status) : ''}</div>`;
   html += `<div class="slug">${esc(d.slug)}</div>`;
   html += `<div class="meta">`;
-  if (d.author) html += `<span>by <b style="color:var(--ink)">${esc(d.author)}</b></span>`;
-  if (d.series) html += `<span>series: ${esc(d.series)}</span>`;
+  if (d.author) html += `<span>by <b>${esc(d.author)}</b></span>`;
+  if (d.series) html += `<span>${esc(d.series)}</span>`;
   html += `<span>${(d.languages || []).map((l) => l.toUpperCase()).join(' · ')}</span>`;
   if (d.protected) html += `<span class="tag prot">protected</span>`;
+  html += `<span style="display:inline-flex;gap:6px;align-items:center">editions: ${editions}</span>`;
   html += `</div>`;
+  // One Edit / one Preview — the editor and previewer carry their own language
+  // tabs, so per-language buttons on the cards are redundant.
+  html += `<div class="hero-actions">`;
+  html += `<a class="btn primary" href="/cover.html?${q0}">Edit cover</a>`;
+  html += `<a class="btn" href="/preview.html?${q0}">Preview</a>`;
+  html += `</div></div>`;
 
-  html += `<h2>Editions</h2><div class="editions">${editions}</div>`;
-
-  html += matrixHtml();
-
-  html += `<h2>Languages</h2>`;
-  (d.languages || []).forEach((lang) => {
-    const L = d.langs[lang] || {};
-    const rid = `rd-${lang}`;
-    const q = `book=${encodeURIComponent(d.slug)}&lang=${encodeURIComponent(lang)}`;
-    const coverUrl = `/api/asset/${encodeURIComponent(d.slug)}/${encodeURIComponent(lang)}/rendered`;
-    const wrapUrl = `/api/output/${encodeURIComponent(d.slug)}/${encodeURIComponent(lang)}/wrap-cover`;
-
-    html += `<div class="langcard">`;
-    // header: cover thumbnail + title/subtitle + KDP readiness block
-    html += `<div class="lgrid">`;
-    html += `<div class="lcover">`;
-    html += `<img src="${coverUrl}" alt="cover" `;
-    html += `onerror="this.outerHTML='<div class=&quot;fakecover&quot;>${escAttr(L.title || d.slug)}</div>'" />`;
-    html += `<a class="wraplink navbtn-none" href="${wrapUrl}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">wrap PDF ↗</a>`;
-    html += `</div>`;
-    html += `<div class="lmain">`;
-    html += `<div class="lh"><span class="code">${lang.toUpperCase()}</span>`;
-    html += `<span class="title">${esc(L.title || '(untitled)')}</span></div>`;
-    if (L.subtitle) html += `<div class="sub">${esc(L.subtitle)}</div>`;
-    html += kdpBlock(L);
-    html += `</div>`; // .lmain
-    html += `</div>`; // .lgrid
-
-    // Outputs section (built artifacts): filled by loadOutputs() after render.
-    html += `<div class="outsec">`;
-    html += `<div class="oshead"><h3>Outputs</h3>`;
-    html += `<button class="obtn" data-genall="${lang}">Generate all</button></div>`;
-    html += `<div id="out-${lang}"><p class="muted"><span class="spin"></span> loading outputs…</p></div>`;
-    html += `<div class="outlog" id="outlog-${lang}"></div>`;
-    html += `</div>`;
-
-    // One aligned action bar: cover / preview / readiness trigger.
-    html += `<div class="actions">`;
-    html += `<a class="btn primary" data-ring="cover-${lang}" href="/cover.html?${q}">Edit cover</a>`;
-    html += `<a class="btn" data-ring="preview-${lang}" href="/preview.html?${q}">Preview book</a>`;
-    html += `<button class="btn" data-ring="readiness-${lang}" id="${rid}-btn">Check readiness</button>`;
-    html += `</div>`;
-
-    // Readiness panel (collapsed until run; then expanded only if it has errors).
-    html += `<div class="readiness">`;
-    html += `<div class="rhead">`;
-    html += `<h3>Publish readiness</h3>`;
-    html += `<span class="pills" id="${rid}-pills"></span>`;
-    html += `<span class="verdict" id="${rid}-verdict" style="display:none"></span>`;
-    html += `<button class="caret" data-ring="caret-${lang}" id="${rid}-caret" style="display:none"></button>`;
-    html += `</div>`;
-    html += `<div class="rbody collapsed" id="${rid}-body"></div>`;
-    html += `</div>`;
-
-    html += `</div>`;
-  });
+  html += `<div class="langgrid">`;
+  (d.languages || []).forEach((lang) => { html += langCard(d, lang); });
+  html += `</div>`;
 
   $('main').innerHTML = html;
 
+  // Wire per-language controls + lazy-load the outputs list.
   (d.languages || []).forEach((lang) => {
-    const btn = $(`rd-${lang}-btn`);
-    if (btn) btn.onclick = () => checkReadiness(d.slug, lang);
     const ga = document.querySelector(`[data-genall="${lang}"]`);
-    if (ga) ga.onclick = () => generateAll(d.slug, lang);
+    if (ga) ga.onclick = (e) => { e.preventDefault(); e.stopPropagation(); generateAll(d.slug, lang); };
+    const rb = $(`rd-${lang}-btn`);
+    if (rb) rb.onclick = () => checkReadiness(d.slug, lang);
     loadOutputs(d.slug, lang);
   });
-  wireRing();
-  restoreFocus();
+}
+
+// One language column: cover + title + primary actions, then two disclosures
+// (Build & outputs, Publish readiness) so depth is one click away, not a scroll.
+function langCard(d, lang) {
+  const L = d.langs[lang] || {};
+  const rid = `rd-${lang}`;
+  const q = `book=${encodeURIComponent(d.slug)}&lang=${encodeURIComponent(lang)}`;
+  const coverUrl = `/api/asset/${encodeURIComponent(d.slug)}/${encodeURIComponent(lang)}/rendered`;
+  const wrapUrl = `/api/output/${encodeURIComponent(d.slug)}/${encodeURIComponent(lang)}/wrap-cover`;
+
+  let h = `<div class="card langcard">`;
+  h += `<div class="lgrid">`;
+  h += `<div class="lcover">`;
+  h += `<img src="${coverUrl}" alt="cover" onerror="this.outerHTML='<div class=&quot;fakecover&quot;>${escAttr(L.title || d.slug)}</div>'" />`;
+  h += `<a class="wraplink" href="${wrapUrl}" target="_blank" rel="noopener">wrap PDF ↗</a>`;
+  h += `</div>`;
+  h += `<div class="lmain">`;
+  h += `<div class="lh"><span class="code">${lang.toUpperCase()}</span><span class="title">${esc(L.title || '(untitled)')}</span></div>`;
+  if (L.subtitle) h += `<div class="lsub">${esc(L.subtitle)}</div>`;
+  h += `</div>`; // .lmain
+  h += `</div>`; // .lgrid
+
+  // Build & outputs disclosure — "Generate all" is an icon button on the summary row.
+  h += `<details class="disc">`;
+  h += `<summary class="discsum"><span>Build &amp; outputs</span><button class="iconbtn genall" data-genall="${lang}" title="Generate all">${GEN_ICON}</button></summary>`;
+  h += `<div id="out-${lang}"><p class="muted"><span class="spin"></span> loading…</p></div>`;
+  h += `<div class="outlog" id="outlog-${lang}"></div>`;
+  h += `</details>`;
+
+  // Publish readiness disclosure
+  h += `<details class="disc">`;
+  h += `<summary>Publish readiness</summary>`;
+  h += `<div class="rhead">`;
+  h += `<button class="btn sm" id="${rid}-btn">Check readiness</button>`;
+  h += `<span class="pills" id="${rid}-pills"></span>`;
+  h += `<span class="verdict" id="${rid}-verdict" style="display:none"></span>`;
+  h += `</div>`;
+  h += `<div id="${rid}-body"><p class="muted">Runs epubcheck + geometry + DPI + cover + house rules.</p></div>`;
+  h += `</details>`;
+
+  // KDP listing facts (cheap; expanded by default)
+  h += `<details class="disc" open><summary>KDP listing</summary>${kdpBlock(L)}</details>`;
+
+  h += `</div>`; // .card
+  return h;
 }
 
 // --- KDP readiness block ----------------------------------------------------
-// Surface the KDP listing facts with a flag per field: 7-keyword check, BISAC
-// count, reading age, blurb char count vs the 4000 limit, and the page count.
 function kdpBlock(L) {
   const li = L.listing || null;
   const fact = (label, value, flag) => {
@@ -372,21 +179,18 @@ function kdpBlock(L) {
   };
   let h = `<div class="kdp">`;
   h += fact('Title', esc(L.title || '—'), L.title ? null : { cls: 'err', text: 'missing' });
-  h += fact('Subtitle', esc(L.subtitle || '—'), null);
   h += fact('Pages', L.pages != null ? L.pages : '—', L.pages != null ? null : { cls: 'warn', text: 'not built' });
   h += fact('KDP PDF', L.kdpPdfExists ? 'built' : 'not built',
     L.kdpPdfExists ? { cls: 'ok', text: 'ok' } : { cls: 'warn', text: 'build' });
   if (li) {
     const kc = (li.keywords || []).length;
-    h += fact('Keywords', kc,
-      kc === 7 ? { cls: 'ok', text: '7/7' } : { cls: kc > 7 ? 'err' : 'warn', text: `${kc}/7` });
+    h += fact('Keywords', kc, kc === 7 ? { cls: 'ok', text: '7/7' } : { cls: kc > 7 ? 'err' : 'warn', text: `${kc}/7` });
     const bc = (li.bisac || []).length;
     h += fact('BISAC', (li.bisac || []).join(', ') || '—',
       bc >= 2 && bc <= 3 ? { cls: 'ok', text: `${bc}` } : { cls: 'warn', text: `${bc} (want 2–3)` });
     h += fact('Reading age', esc(li.readingAge || '—'), li.readingAge ? null : { cls: 'warn', text: 'unset' });
     if (li.blurbChars != null) {
-      h += fact('Blurb', `${li.blurbChars} chars`,
-        li.blurbChars > 4000 ? { cls: 'err', text: 'over 4000' } : { cls: 'ok', text: '≤4000' });
+      h += fact('Blurb', `${li.blurbChars} chars`, li.blurbChars > 4000 ? { cls: 'err', text: 'over 4000' } : { cls: 'ok', text: '≤4000' });
     } else {
       h += fact('Blurb', '—', { cls: 'err', text: 'missing' });
     }
@@ -399,7 +203,6 @@ function kdpBlock(L) {
 
 // --- Outputs (built artifacts: open / generate) -----------------------------
 
-// Load the output rows for one language and render Open/Generate per flavor.
 async function loadOutputs(bslug, lang) {
   const host = $(`out-${lang}`);
   if (!host) return;
@@ -422,12 +225,10 @@ async function loadOutputs(bslug, lang) {
     row.innerHTML =
       `<span class="olabel">${esc(o.label)}</span>` +
       `<span class="ostatus ${o.exists ? 'built' : ''}">${o.exists ? 'built · ' + esc(when) : 'not built'}</span>` +
-      `<a class="obtn" ${o.exists ? `href="${openUrl}" target="_blank" rel="noopener"` : 'aria-disabled="true"'} data-open>${'Open'}</a>` +
-      `<button class="obtn" data-gen="${esc(o.kind)}">Generate</button>`;
-    if (!o.exists) row.querySelector('[data-open]').classList.add('disabled-open');
+      `<a class="obtn" ${o.exists ? `href="${openUrl}" target="_blank" rel="noopener"` : 'aria-disabled="true"'} data-open>Open</a>` +
+      `<button class="obtn gen" data-gen="${esc(o.kind)}" title="Generate">${GEN_ICON}<span>Generate</span></button>`;
     host.appendChild(row);
-    const genBtn = row.querySelector('[data-gen]');
-    genBtn.onclick = () => generateOutput(bslug, lang, o.kind, o.label);
+    row.querySelector('[data-gen]').onclick = () => generateOutput(bslug, lang, o.kind, o.label);
     if (!o.exists) {
       const open = row.querySelector('[data-open]');
       open.style.pointerEvents = 'none';
@@ -436,7 +237,6 @@ async function loadOutputs(bslug, lang) {
   });
 }
 
-// Trigger one build via POST /api/build; stream the log into the per-lang log box.
 async function generateOutput(bslug, lang, kind, label) {
   const row = $(`outrow-${lang}-${kind}`);
   const log = $(`outlog-${lang}`);
@@ -448,8 +248,7 @@ async function generateOutput(bslug, lang, kind, label) {
   log.textContent = `Building ${label} (${kind})…\n`;
   try {
     const res = await fetch(`/api/build/${encodeURIComponent(bslug)}/${encodeURIComponent(lang)}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind }),
     });
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
@@ -457,22 +256,20 @@ async function generateOutput(bslug, lang, kind, label) {
   } catch (e) {
     log.textContent = `✗ ${label}\n\n` + ((e && e.message) || e);
   } finally {
-    if (genBtn) { genBtn.disabled = false; genBtn.textContent = 'Generate'; }
-    await loadOutputs(bslug, lang); // refresh built/not-built + timestamps
+    if (genBtn) { genBtn.disabled = false; genBtn.innerHTML = GEN_ICON + '<span>Generate</span>'; }
+    await loadOutputs(bslug, lang);
   }
 }
 
-// Generate everything for a book/language (interiors + covers).
 async function generateAll(bslug, lang) {
   const btn = document.querySelector(`[data-genall="${lang}"]`);
   const log = $(`outlog-${lang}`);
-  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin"></span> building all'; }
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin"></span>'; }
   log.style.display = '';
   log.textContent = `Building everything for ${bslug} · ${lang.toUpperCase()}…\n`;
   try {
     const res = await fetch(`/api/build/${encodeURIComponent(bslug)}/${encodeURIComponent(lang)}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind: 'all' }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'all' }),
     });
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
@@ -480,12 +277,11 @@ async function generateAll(bslug, lang) {
   } catch (e) {
     log.textContent = '✗ generate all\n\n' + ((e && e.message) || e);
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Generate all'; }
+    if (btn) { btn.disabled = false; btn.innerHTML = GEN_ICON; }
     await loadOutputs(bslug, lang);
   }
 }
 
-// escAttr — safe for double-quoted HTML attributes (onerror handler).
 function escAttr(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -525,8 +321,6 @@ async function checkReadiness(bslug, lang) {
   if (btn) btn.disabled = true;
   pills.innerHTML = '';
   $(`${rid}-verdict`).style.display = 'none';
-  $(`${rid}-caret`).style.display = 'none';
-  body.classList.remove('collapsed');
   body.innerHTML = `<p class="muted"><span class="spin"></span> running checks… this can take a minute</p>`;
   try {
     const res = await fetch(`/api/warnings/${encodeURIComponent(bslug)}/${encodeURIComponent(lang)}`);
@@ -536,7 +330,7 @@ async function checkReadiness(bslug, lang) {
   } catch (e) {
     body.innerHTML = `<p class="err-msg">${esc((e && e.message) || e)}</p>`;
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Re-check'; } // always re-runnable
+    if (btn) { btn.disabled = false; btn.textContent = 'Re-check'; }
   }
 }
 
@@ -559,7 +353,6 @@ function renderReadiness(bslug, lang, data) {
   vd.textContent = `${v} ${vtext}`;
   vd.style.display = '';
 
-  // Build the grouped issue body.
   const groups = new Map();
   KINDS.forEach((k) => groups.set(k.key, { label: k.label, items: [] }));
   issues.forEach((it) => {
@@ -589,66 +382,7 @@ function renderReadiness(bslug, lang, data) {
     bodyHtml += `</div>`;
   }
   if (!any) bodyHtml = `<p class="muted">No checks reported.</p>`;
-  const body = $(`${rid}-body`);
-  body.innerHTML = bodyHtml;
-
-  // Collapse unless there is an error; expose a caret to toggle either way.
-  const caret = $(`${rid}-caret`);
-  caret.style.display = '';
-  const setCollapsed = (collapsed) => {
-    body.classList.toggle('collapsed', collapsed);
-    caret.textContent = collapsed ? `▸ show details` : `▾ hide details`;
-  };
-  setCollapsed(errs === 0);
-  caret.onclick = () => setCollapsed(!body.classList.contains('collapsed'));
-}
-
-// --- Check all books --------------------------------------------------------
-
-async function checkAllBooks() {
-  const btn = $('checkAll');
-  const panel = $('checkAllPanel');
-  btn.disabled = true;
-  const jobs = [];
-  ALLBOOKS.forEach((b) => (b.languages || []).forEach((l) => jobs.push({ slug: b.slug, lang: l })));
-
-  panel.innerHTML =
-    `<h2 style="margin-top:18px">All books · publish readiness</h2>` +
-    `<p class="muted" id="ca-status"><span class="spin"></span> running validate --deep across ${jobs.length} book/language targets…</p>` +
-    `<div id="ca-rows"></div>`;
-  const rows = $('ca-rows');
-
-  let done = 0;
-  for (const j of jobs) {
-    const rowId = `ca-${j.slug}-${j.lang}`;
-    const row = document.createElement('div');
-    row.className = 'carow';
-    row.id = rowId;
-    row.innerHTML = `<span class="caslug">${esc(j.slug)}</span><span class="calang">${esc(j.lang.toUpperCase())}</span><span class="pill muted"><span class="spin"></span></span>`;
-    rows.appendChild(row);
-    try {
-      const res = await fetch(`/api/warnings/${encodeURIComponent(j.slug)}/${encodeURIComponent(j.lang)}`);
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
-      const { errs, warns } = tally(data.issues || []);
-      let vcls = 'ready', v = '✅ ready';
-      if (errs > 0) { vcls = 'notready'; v = `❌ ${errs} error${errs === 1 ? '' : 's'}`; }
-      else if (warns > 0) { vcls = 'warn'; v = `⚠️ ${warns} warn`; }
-      row.innerHTML =
-        `<span class="caslug">${esc(j.slug)}</span><span class="calang">${esc(j.lang.toUpperCase())}</span>` +
-        `<a class="verdict ${vcls}" style="text-decoration:none" href="/book.html?book=${encodeURIComponent(j.slug)}&lang=${encodeURIComponent(j.lang)}">${v}</a>`;
-    } catch (e) {
-      row.innerHTML =
-        `<span class="caslug">${esc(j.slug)}</span><span class="calang">${esc(j.lang.toUpperCase())}</span>` +
-        `<span class="err-msg">${esc((e && e.message) || e)}</span>`;
-    }
-    done++;
-    const st = $('ca-status');
-    if (st) st.innerHTML = done < jobs.length
-      ? `<span class="spin"></span> checked ${done}/${jobs.length}…`
-      : `Done — checked ${jobs.length} book/language targets.`;
-  }
-  btn.disabled = false; // re-runnable once finished
+  $(`${rid}-body`).innerHTML = bodyHtml;
 }
 
 function esc(s) {

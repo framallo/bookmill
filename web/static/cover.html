@@ -4,15 +4,15 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>bookmill — edit cover</title>
-<script src="https://unpkg.com/konva@9/konva.min.js"></script>
+<link rel="stylesheet" href="/app.css" />
 <style>
   :root { --bg:#11151c; --panel:#1b212b; --line:#2c3543; --ink:#e7edf3; --muted:#8a98a8; --accent:#d4a937; }
   * { box-sizing: border-box; }
   body { margin:0; font:14px/1.45 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink); }
-  header { display:flex; align-items:center; gap:14px; padding:10px 16px; background:var(--panel); border-bottom:1px solid var(--line); }
-  header h1 { font-size:15px; margin:0; font-weight:600; letter-spacing:.3px; }
+  header { display:flex; align-items:center; gap:12px; padding:10px 16px; background:var(--panel); border-bottom:1px solid var(--line); }
+  header h1 { font-size:15px; margin:0; font-weight:600; letter-spacing:.3px; white-space:nowrap; }
   header .spacer { flex:1; }
-  a.navlink { color:var(--muted); text-decoration:none; font-size:13px; }
+  a.navlink { color:var(--muted); text-decoration:none; font-size:13px; white-space:nowrap; }
   a.navlink:hover { color:var(--ink); }
   select, button, input[type=color], input[type=text] {
     background:#222b36; color:var(--ink); border:1px solid var(--line); border-radius:6px; padding:6px 9px; font:inherit;
@@ -20,10 +20,32 @@
   button { cursor:pointer; }
   button.primary { background:var(--accent); color:#1a1206; border-color:var(--accent); font-weight:600; }
   button:disabled { opacity:.5; cursor:default; }
+
+  /* segmented toggles (language + view) */
+  .seg { display:inline-flex; border:1px solid var(--line); border-radius:7px; overflow:hidden; }
+  .seg button { border:0; border-radius:0; background:transparent; color:var(--muted); padding:6px 12px; font-size:13px; }
+  .seg button + button { border-left:1px solid var(--line); }
+  .seg button.on { background:var(--accent); color:#1a1206; font-weight:600; }
+  .seg button:not(.on):hover { color:var(--ink); }
+
   .wrap { display:flex; height:calc(100vh - 49px); }
-  .side { width:300px; min-width:300px; background:var(--panel); border-right:1px solid var(--line); padding:14px; overflow:auto; }
-  .stage-host { flex:1; display:flex; align-items:center; justify-content:center; overflow:auto; padding:20px; }
-  #editor { box-shadow:0 8px 40px rgba(0,0,0,.55); }
+  .side { width:310px; min-width:310px; background:var(--panel); border-right:1px solid var(--line); padding:14px; overflow:auto; }
+  .stage-host { flex:1; display:flex; align-items:center; justify-content:center; overflow:auto; padding:20px; background:
+     repeating-conic-gradient(#0d1117 0% 25%, #10151d 0% 50%) 50% / 28px 28px; }
+
+  /* the SVG-as-canvas: the authoritative render IS the editing surface */
+  #stage { position:relative; display:inline-block; line-height:0; box-shadow:0 8px 40px rgba(0,0,0,.55); }
+  #stage svg, #stage img { display:block; }
+
+  /* draggable position handles (front view only) — boxes, not glyphs: appearance
+     comes from the SVG underneath, so no font-metric drift. */
+  .handle { position:absolute; border:1.5px dashed rgba(212,169,55,.9); border-radius:3px;
+            background:rgba(212,169,55,.08); cursor:move; touch-action:none; }
+  .handle:hover { background:rgba(212,169,55,.16); }
+  .handle.sel { border-style:solid; border-color:var(--accent); background:rgba(212,169,55,.22); }
+  .handle .tag { position:absolute; top:-19px; left:-1px; font:600 10px/1.4 system-ui; letter-spacing:.4px;
+                 text-transform:uppercase; color:#1a1206; background:var(--accent); padding:1px 6px; border-radius:4px 4px 0 0; }
+
   .field { margin-bottom:12px; }
   .field label { display:block; color:var(--muted); font-size:12px; margin-bottom:4px; text-transform:uppercase; letter-spacing:.4px; }
   .row { display:flex; gap:8px; align-items:center; }
@@ -36,56 +58,47 @@
   #log { white-space:pre-wrap; font:11px/1.4 ui-monospace,Menlo,monospace; color:var(--muted); background:#0d1117; border:1px solid var(--line); border-radius:6px; padding:8px; max-height:160px; overflow:auto; margin-top:8px; }
   .preview-img { width:100%; border:1px solid var(--line); border-radius:6px; margin-top:8px; }
 
-  /* ---- keyboard-shortcuts help ---- */
   .helpbtn { position:fixed; right:16px; bottom:16px; z-index:20; width:34px; height:34px;
              border-radius:50%; border:1px solid var(--line); background:#222b36; color:var(--muted);
              font-size:16px; font-weight:700; cursor:pointer; }
   .helpbtn:hover { color:var(--accent); border-color:var(--accent); }
-  .help-overlay { position:fixed; inset:0; z-index:30; display:none; align-items:center; justify-content:center;
-                  background:rgba(0,0,0,.55); }
+  .help-overlay { position:fixed; inset:0; z-index:30; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,.55); }
   .help-overlay.open { display:flex; }
-  .help-card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:18px 20px;
-               min-width:320px; box-shadow:0 20px 60px rgba(0,0,0,.6); }
+  .help-card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:18px 20px; min-width:320px; box-shadow:0 20px 60px rgba(0,0,0,.6); }
   .help-card h3 { margin:0 0 12px; font-size:14px; }
   .help-card table { border-collapse:collapse; font-size:13px; }
   .help-card td { padding:3px 10px 3px 0; color:var(--ink); }
-  .help-card kbd { display:inline-block; min-width:16px; text-align:center; padding:1px 6px; border-radius:5px;
-                   background:#222b36; border:1px solid var(--line); font:12px ui-monospace,Menlo,monospace; }
+  .help-card kbd { display:inline-block; min-width:16px; text-align:center; padding:1px 6px; border-radius:5px; background:#222b36; border:1px solid var(--line); font:12px ui-monospace,Menlo,monospace; }
   .help-card .hc-close { color:var(--muted); font-size:11px; margin-top:12px; }
 </style>
 </head>
 <body>
-<header>
+<header class="appbar">
   <a class="navlink" href="/">← all books</a>
   <a class="navlink" id="backBook" href="#">← book</a>
   <h1>Edit cover</h1>
-  <select id="coverType" title="Which cover to edit">
-    <option value="front">Front (eBook)</option>
-    <option value="wrap">Paperback wrap</option>
-    <option value="audiobook">Audiobook (square)</option>
-  </select>
   <span id="bookLabel" class="hint"></span>
-  <span id="protBadge" class="pill" style="display:none">protected · comparison render</span>
   <span class="spacer"></span>
+  <span class="seg" id="langSeg" title="Language"></span>
+  <span class="seg" id="viewSeg">
+    <button data-view="front">Front</button>
+    <button data-view="wrap" class="on">Wrap</button>
+    <button data-view="audiobook">Audiobook</button>
+  </span>
+  <span id="protBadge" class="pill" style="display:none">protected</span>
+  <button class="btn primary" id="saveBtn">Save &amp; re-render</button>
   <span id="status"></span>
   <a class="navlink" id="toPreview" href="#">preview →</a>
 </header>
 
 <div class="wrap">
   <aside class="side">
-    <div class="field">
-      <label>Background color</label>
-      <div class="row">
-        <input type="color" id="bgcolor" />
-        <input type="text" id="bgcolorHex" />
-      </div>
-    </div>
-
-    <h3>Selected element</h3>
-    <div id="noSel" class="hint">Click a text block on the canvas to edit it. Drag to move, use the handles to resize. Double-click to edit text.</div>
-    <div id="selPanel" style="display:none">
+    <!-- Contextual: a text block is selected (front title/subtitle/author or wrap
+         blurb/badge/author). -->
+    <div id="blockPane" style="display:none">
+      <h3 id="selName">Title</h3>
       <div class="field">
-        <label id="selName">Title</label>
+        <label>Text</label>
         <textarea id="selText"></textarea>
       </div>
       <div class="field">
@@ -96,53 +109,47 @@
         </div>
       </div>
       <div class="field">
-        <label>Font size (px @ 1600×2560)</label>
+        <label>Font size</label>
         <input type="text" id="selSize" />
       </div>
     </div>
 
-    <h3>Guides</h3>
-    <div class="field">
-      <label><input type="checkbox" id="guidesOn" checked style="width:auto" /> Show trim / bleed / safe guides</label>
+    <!-- Contextual: the background is clicked (front view). -->
+    <div id="bgPane" style="display:none">
+      <h3>Background color</h3>
+      <div class="row">
+        <input type="color" id="bgcolor" />
+        <input type="text" id="bgcolorHex" />
+      </div>
     </div>
 
-    <!-- Paperback wrap: edit the front title block on the canvas + the back-cover
-         blurb here. Saving writes [cover.<lang>].blurb and re-renders the wrap PDF.
-         TODO: full drag layout of all three wrap panels (back/spine/front). -->
-    <div id="wrapSection" style="display:none">
-      <h3>Paperback wrap · back-cover blurb</h3>
+    <!-- Wrap default: the back-cover blurb. -->
+    <div id="wrapPane" style="display:none">
+      <h3>Back-cover blurb</h3>
       <div class="field">
-        <label>Back-cover blurb</label>
-        <textarea id="blurbText" style="min-height:120px"></textarea>
+        <textarea id="blurbText" style="min-height:150px"></textarea>
       </div>
-      <div class="hint">The canvas edits the shared <b>front</b> title block. The blurb is
-        written to <code>[cover.&lt;lang&gt;].blurb</code>; Save re-renders the wrap PDF
-        (<code>wrap-&lt;lang&gt;-KDP.pdf</code>). Keep the bottom-right barcode zone clear.</div>
+      <div class="hint">Drag the blurb / badge / author boxes on the back panel; click a box to edit it. Keep the bottom-right barcode zone clear.</div>
       <a class="navlink" id="openWrap" href="#" target="_blank" rel="noopener"
          style="display:inline-block;margin-top:8px;color:var(--accent)">open wrap PDF ↗</a>
     </div>
 
-    <!-- Audiobook: derived (inferred) from the front/wrap by a center-square crop. -->
-    <div id="audiobookSection" style="display:none">
-      <h3>Audiobook cover (3000×3000)</h3>
-      <div class="hint">Inferred from the rendered <b>front</b> cover by a center-square
-        crop (front scene + title). Render the front/wrap first, then generate.</div>
-      <button class="primary" id="genAudiobook" style="width:100%;margin-top:10px">Generate from front cover</button>
+    <!-- Audiobook: inferred square crop of the front. -->
+    <div id="audiobookPane" style="display:none">
+      <h3>Audiobook cover</h3>
+      <button class="btn primary" id="genAudiobook" style="width:100%">Generate from front</button>
+      <div class="hint" style="margin-top:8px">Center-square crop of the front (3000×3000).</div>
       <img id="audiobookImg" class="preview-img" style="display:none" alt="audiobook cover" />
     </div>
 
-    <h3>Save</h3>
-    <button class="primary" id="saveBtn" style="width:100%">Save &amp; re-render</button>
-    <div class="hint" style="margin-top:8px">Writes the layout to <code>[cover.&lt;lang&gt;.layout]</code> and re-renders via <code>bookmill covers</code>.</div>
-    <div id="log" style="display:none"></div>
+    <!-- Front default hint. -->
+    <div id="hintPane" class="hint">Click a block to edit it, or the background to change its color.</div>
 
-    <h3>Authoritative render</h3>
-    <div class="hint">What ships (resvg output). Refreshes after save.</div>
-    <img id="renderImg" class="preview-img" style="display:none" alt="rendered cover" />
+    <div id="log" style="display:none"></div>
   </aside>
 
   <main class="stage-host">
-    <div id="editor"></div>
+    <div id="stage"></div>
   </main>
 </div>
 
@@ -152,7 +159,7 @@
     <h3>Keyboard shortcuts</h3>
     <table>
       <tr><td><kbd>⌘</kbd>/<kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>Save &amp; re-render</td></tr>
-      <tr><td><kbd>←</kbd> <kbd>↑</kbd> <kbd>→</kbd> <kbd>↓</kbd></td><td>Nudge selected element</td></tr>
+      <tr><td><kbd>←</kbd> <kbd>↑</kbd> <kbd>→</kbd> <kbd>↓</kbd></td><td>Nudge selected box</td></tr>
       <tr><td><kbd>Shift</kbd> + arrows</td><td>Nudge by a larger step</td></tr>
       <tr><td><kbd>Esc</kbd></td><td>Deselect</td></tr>
       <tr><td><kbd>?</kbd></td><td>Toggle this help</td></tr>

@@ -36,6 +36,7 @@ pub fn run(
     cover: Option<&Path>,
     lang: &str,
     toc: bool,
+    captions: bool,
     out: &Path,
 ) -> Result<()> {
     let mut b = EpubBuilder::new(ZipLibrary::new().map_err(anyhow::Error::msg)?)
@@ -116,7 +117,8 @@ pub fn run(
             }
         }
 
-        let body = markdown_to_html(&clean, &comrak_opts());
+        let html = markdown_to_html(&clean, &comrak_opts());
+        let body = if captions { figcaption_plates(&html) } else { html };
         let title = nav_title.unwrap_or_else(|| chapter_fallback_title(ch, i));
         let doc = xhtml_doc(lang, &title, &body);
         let href = format!("chapter-{:03}.xhtml", i + 1);
@@ -194,6 +196,43 @@ fn clean_chapter(md: &str) -> (String, Option<String>) {
         out.push('\n');
     }
     (out, nav_title)
+}
+
+/// Turn each standalone plate-image paragraph (`<p><img … alt="…"/></p>`) into a
+/// `<figure class="plate">` with a visible `<figcaption>` carrying the alt text, so
+/// the caption shows in the reader (not just as accessibility metadata). Images with
+/// an empty alt are left untouched. Non-matching HTML passes through verbatim.
+fn figcaption_plates(html: &str) -> String {
+    let mut out = String::with_capacity(html.len() + 64);
+    let mut rest = html;
+    while let Some(pos) = rest.find("<p><img ") {
+        let Some(end_rel) = rest[pos..].find("</p>") else { break };
+        let end = pos + end_rel + 4;
+        let inner = &rest[pos + 3..end - 4]; // the <img …/> between <p> and </p>
+        out.push_str(&rest[..pos]);
+        match attr_value(inner, "alt") {
+            Some(alt) if !alt.trim().is_empty() => {
+                out.push_str("<figure class=\"plate\">");
+                out.push_str(inner);
+                out.push_str("<figcaption>");
+                out.push_str(&alt);
+                out.push_str("</figcaption></figure>");
+            }
+            _ => out.push_str(&rest[pos..end]),
+        }
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Read a double-quoted HTML attribute value (already entity-escaped by the
+/// renderer) out of a tag string. `None` if the attribute is absent.
+fn attr_value(tag: &str, name: &str) -> Option<String> {
+    let pat = format!("{name}=\"");
+    let i = tag.find(&pat)? + pat.len();
+    let j = tag[i..].find('"')? + i;
+    Some(tag[i..j].to_string())
 }
 
 /// True if a standalone image line carries a `{… .spot …}` attribute block.

@@ -11,10 +11,14 @@ const PAGE_H = 440; // displayed page height in px (both pages share it)
 const GAP = 10;
 
 let meta = null;        // /api/preview metadata (geometry, pages, dpi)
-let spread = 0;         // spread index: 0 = [—, p1], k = [p2k, p2k+1]
+// spread index: 0 = the full paperback WRAP (back·spine·front); 1 = [—, p1];
+// k>=2 = [p(2k-2), p(2k-1)]. The leading spread is the wrap so the previewer
+// opens on the whole printed cover, not just the front.
+let spread = 0;
 let stage = null;
 let warnPages = new Set();
 let SLUG = null, LANG = null; // scope: ?book=<slug>&lang=<lang>
+let LANGS = [];               // book's declared languages (for the ES/EN toggle)
 let wantPage = null;          // optional ?page=<n> deep-link (jump on load)
 
 init();
@@ -27,15 +31,19 @@ async function init() {
   wantPage = isNaN(pg) ? null : pg;
 
   // Graceful fallback when opened without query params: pick the first book/lang.
+  let books = [];
+  try { books = (await fetch('/api/books').then((r) => r.json())).books || []; } catch { books = []; }
   if (!SLUG || !LANG) {
-    const res = await fetch('/api/books').then((r) => r.json());
-    const b = res.books[0];
+    const b = books[0];
     if (b) { SLUG = SLUG || b.slug; LANG = LANG || (b.languages[0] || 'es'); }
   }
+  const me = books.find((x) => x.slug === SLUG);
+  LANGS = (me && me.languages) || [LANG];
 
-  $('bookLabel').textContent = `${SLUG} · ${LANG.toUpperCase()}`;
+  $('bookLabel').textContent = SLUG;
   $('backBook').href = `/book.html?book=${encodeURIComponent(SLUG)}`;
   $('toCover').href = `/cover.html?book=${encodeURIComponent(SLUG)}&lang=${encodeURIComponent(LANG)}`;
+  buildLangSeg();
 
   ['tTrim', 'tBleed', 'tSafe'].forEach((id) => ($(id).onchange = draw));
   $('prev').onclick = () => gotoSpread(spread - 1);
@@ -45,7 +53,31 @@ async function init() {
   $('go').onclick = jumpToInput;
   $('jump').onkeydown = (e) => { if (e.key === 'Enter') jumpToInput(); };
   $('reload').onclick = loadWarnings;
+  $('resClose').onclick = () => $('resultsPanel').classList.remove('open');
+  $('counts').onclick = () => $('resultsPanel').classList.toggle('open');
   wireShortcuts();
+  load();
+}
+
+// ES/EN language toggle (matches the cover editor). Switches in place: the page
+// count and geometry can differ per language, so reload metadata + redraw.
+function buildLangSeg() {
+  const seg = $('langSeg');
+  seg.innerHTML = '';
+  LANGS.forEach((l) => {
+    const b = document.createElement('button');
+    b.textContent = l.toUpperCase();
+    b.className = l === LANG ? 'on' : '';
+    b.onclick = () => { if (l !== LANG) switchLang(l); };
+    seg.appendChild(b);
+  });
+}
+
+function switchLang(l) {
+  LANG = l;
+  $('toCover').href = `/cover.html?book=${encodeURIComponent(SLUG)}&lang=${encodeURIComponent(LANG)}`;
+  buildLangSeg();
+  spread = 0;
   load();
 }
 
@@ -96,15 +128,19 @@ async function load() {
     return;
   }
   $('jump').max = meta.pages || 1;
-  // Honor a ?page=<n> deep-link once, then fall back to the first spread.
-  if (wantPage != null) { spread = Math.floor(wantPage / 2); wantPage = null; }
+  // Honor a ?page=<n> deep-link once, then fall back to the wrap (spread 0).
+  if (wantPage != null) { spread = pageToSpread(wantPage); wantPage = null; }
   else spread = 0;
   draw();
 }
 
+// Interior page n → its spread. Spread 0 is the wrap; spread 1 holds p1 alone,
+// spread k>=2 holds [p(2k-2), p(2k-1)]. So n maps to floor(n/2)+1.
+function pageToSpread(n) { return Math.floor(n / 2) + 1; }
+
 function lastSpread() {
   const p = meta && meta.pages ? meta.pages : 1;
-  return Math.floor(p / 2);
+  return Math.floor(p / 2) + 1;   // +1: spread 0 is the wrap
 }
 
 function gotoSpread(n) {
@@ -114,48 +150,90 @@ function gotoSpread(n) {
 
 function jumpToInput() {
   const n = parseInt($('jump').value, 10);
-  if (!isNaN(n)) gotoSpread(Math.floor(n / 2));
+  if (!isNaN(n)) gotoSpread(pageToSpread(n));
 }
 
-// pages shown in the current spread: left (verso, even) + right (recto, odd).
+// Interior pages in the current spread (spread>=1): left (verso) + right (recto).
+// spread 1 = [—, p1]; spread k>=2 = [p(2k-2), p(2k-1)].
 function spreadPages() {
-  const left = spread === 0 ? null : spread * 2;       // even page
-  const right = spread * 2 + 1;                          // odd page
+  const i = spread;                                   // >=1 here (0 is the wrap)
+  const left = i <= 1 ? null : 2 * (i - 1);           // even page (verso)
+  const right = 2 * i - 1;                            // odd page (recto)
   const P = meta && meta.pages ? meta.pages : 1;
   return [left && left <= P ? left : null, right <= P ? right : null];
 }
 
 async function draw() {
   if (!meta || !meta.pdfExists) return;
+  if (spread === 0) return drawWrap();
+  return drawInterior();
+}
+
+// Leading view: the full paperback WRAP (back·spine·front) — the authoritative
+// resvg SVG, the exact output `build cover` rasterizes. Shown wide so the
+// previewer opens on the whole printed cover, not just the front face.
+async function drawWrap() {
+  if (stage) { stage.destroy(); stage = null; }
+  const host = $('stage');
+  host.innerHTML = '<div class="loadingwrap">loading wrap…</div>';
+  updateNav('wrap · back·spine·front', meta.pages || 1);
+  try {
+    const svg = await fetch(`/api/cover/${SLUG}/${LANG}/svg?wrap=1&t=${Date.now()}`)
+      .then((r) => (r.ok ? r.text() : r.text().then((t) => { throw new Error(t); })));
+    host.innerHTML = `<div class="wrapview">${svg}</div>`;
+    const svgEl = host.querySelector('svg');
+    if (svgEl) {
+      const vb = (svgEl.getAttribute('viewBox') || '0 0 1200 880').split(/\s+/).map(Number);
+      const aspect = (vb[2] || 1200) / (vb[3] || 880);
+      // Match the interior two-page spread's height (PAGE_H) so switching between
+      // wrap and interior doesn't jump in scale. Shrink to fit width if needed.
+      let h = PAGE_H, w = h * aspect;
+      const availW = host.parentElement.clientWidth - 40;
+      if (w > availW) { w = availW; h = w / aspect; }
+      svgEl.removeAttribute('width'); svgEl.removeAttribute('height');
+      svgEl.style.width = w + 'px';
+      svgEl.style.height = h + 'px';
+    }
+  } catch (e) {
+    host.innerHTML = `<div class="err-msg">wrap render failed:\n${escapeHtml((e && e.message) || e)}</div>`;
+  }
+}
+
+// Interior two-page spread (verso+recto) with trim/bleed/safe guides — the
+// proven Konva path over the pdftoppm page rasters.
+function drawInterior() {
   const g = meta.geometry;
   const slug = SLUG, lang = LANG;
   const [lp, rp] = spreadPages();
   const P = meta.pages || 1;
 
-  // page aspect from geometry (full page incl. bleed)
   const aspect = g ? g.pageW / g.pageH : 6.125 / 9.25;
   const pageWpx = PAGE_H * aspect;
   const W = pageWpx * 2 + GAP, H = PAGE_H;
 
+  const host = $('stage');
   if (stage) stage.destroy();
+  host.innerHTML = '';                 // drop any prior wrap SVG before Konva mounts
   stage = new Konva.Stage({ container: 'stage', width: W, height: H });
   const art = new Konva.Layer(), guides = new Konva.Layer();
   stage.add(art, guides);
 
-  // page slots: left at x=0, right at x=pageWpx+GAP. The first spread's empty
-  // left slot shows the front COVER (page 0), so the preview opens on the cover
-  // beside interior page 1 — matching how the physical book presents.
-  if (spread === 0 && !lp) drawCover(art, guides, 0, pageWpx, H, slug, lang);
-  else drawPage(art, guides, lp, 0, pageWpx, H, 'verso', slug, lang);
+  drawPage(art, guides, lp, 0, pageWpx, H, 'verso', slug, lang);
   drawPage(art, guides, rp, pageWpx + GAP, pageWpx, H, 'recto', slug, lang);
 
-  const leftLabel = spread === 0 ? 'cover' : (lp ? 'p' + lp : '—');
-  $('pglabel').textContent = `${leftLabel} · ${rp ? 'p' + rp : '—'}  (of ${P})`;
+  updateNav(`${lp ? 'p' + lp : '—'} · ${rp ? 'p' + rp : '—'}`, P);
+}
+
+// Shared page-label + nav-button state. (No status line in the normal case —
+// book/lang live in the header, the page count in the label; status is reserved
+// for errors.)
+function updateNav(leftLabel, P) {
+  $('pglabel').textContent = `${leftLabel}  ·  of ${P}`;
   $('prev').disabled = spread <= 0;
   $('first').disabled = spread <= 0;
   $('next').disabled = spread >= lastSpread();
   $('last').disabled = spread >= lastSpread();
-  $('status').textContent = `${slug} · ${lang} · ${P} pages · preview ${meta.previewDpi || ''}dpi`;
+  $('status').textContent = '';
 }
 
 function drawPage(art, guides, page, ox, pageWpx, H, side, slug, lang) {
@@ -185,31 +263,6 @@ function drawPage(art, guides, page, ox, pageWpx, H, side, slug, lang) {
   }
 
   drawGuides(guides, page, ox, pageWpx, H, side);
-}
-
-// Draw the rendered front cover in a page slot (page 0 of the preview). The cover
-// PNG (1600×2560) is fit into the slot via 'contain' so its whole face is visible;
-// if no cover has been rendered yet the slot shows a subtle placeholder.
-function drawCover(art, guides, ox, pageWpx, H, slug, lang) {
-  art.add(new Konva.Rect({ x: ox, y: 0, width: pageWpx, height: H, fill: '#15191f' }));
-  const url = `/api/asset/${slug}/${lang}/rendered?t=${Date.now()}`;
-  Konva.Image.fromURL(url, (img) => {
-    const iw = img.width(), ih = img.height();
-    const s = Math.min(pageWpx / iw, H / ih);       // contain
-    const w = iw * s, h = ih * s;
-    img.setAttrs({ x: ox + (pageWpx - w) / 2, y: (H - h) / 2, width: w, height: h });
-    art.add(img);
-    art.draw();
-  }, () => {
-    art.add(new Konva.Text({
-      x: ox + 12, y: 0, width: pageWpx - 24, height: H,
-      text: 'front cover\n(not rendered yet)', fontSize: 13, fill: '#8a98a8',
-      align: 'center', verticalAlign: 'middle', fontFamily: 'system-ui, sans-serif',
-    }));
-    art.draw();
-  });
-  // outline the cover slot
-  guides.add(new Konva.Rect({ x: ox, y: 0, width: pageWpx, height: H, stroke: '#2c3543', strokeWidth: 1 }));
 }
 
 // Fetch the failing page URL to recover the backend error text and paint it on
@@ -279,15 +332,17 @@ function drawGuides(guides, page, ox, pageWpx, H, side) {
 // -------------------------------------------------------------------------
 
 function resetWarningsPanel() {
-  $('counts').innerHTML = '<span class="muted">not loaded</span>';
-  $('issues').innerHTML = '<p class="muted">Click “run validate --deep” to audit this book.</p>';
+  $('counts').innerHTML = '';
+  $('issues').innerHTML = '';
+  $('resultsPanel').classList.remove('open');
 }
 
 async function loadWarnings() {
   const slug = SLUG, lang = LANG;
   $('reload').disabled = true;
-  $('counts').innerHTML = '<span class="muted">running validate --deep… (may take a while)</span>';
-  $('issues').innerHTML = '';
+  $('resultsPanel').classList.add('open');
+  $('counts').innerHTML = '';
+  $('issues').innerHTML = '<p class="muted">validate --deep — this can take a minute…</p>';
   try {
     const res = await fetch(`/api/warnings/${slug}/${lang}`);
     if (!res.ok) throw new Error(await res.text());
@@ -308,6 +363,7 @@ function renderWarnings(data) {
     `<span class="pill warn">${s.warn || 0} warn</span>` +
     `<span class="pill err">${s.error || 0} error</span>`;
 
+  $('resultsPanel').classList.add('open');
   warnPages = new Set();
   const issues = (data.issues || []).slice().sort((a, b) => rank(b.level) - rank(a.level));
   const host = $('issues');
@@ -336,3 +392,5 @@ function renderWarnings(data) {
 }
 
 function rank(level) { return level === 'error' ? 3 : level === 'warn' ? 2 : 1; }
+
+function escapeHtml(s) { return String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }

@@ -23,14 +23,14 @@ mod render;
 
 use anyhow::Result;
 use axum::{
-    extract::{Path as AxPath, Request, State},
+    extract::{Path as AxPath, Query, Request, State},
     http::{header, StatusCode},
     middleware::{self, Next},
     response::{Html, IntoResponse, Json, Response},
     routing::{get, post},
     Router,
 };
-use cover::{Element, Elements, Repo};
+use cover::{Element, Elements, Repo, WrapElements};
 use serde::Deserialize;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -54,6 +54,7 @@ const COVER_HTML: &str = include_str!("../../web/static/cover.html");
 const APP_JS: &str = include_str!("../../web/static/app.js");
 const PREVIEW_HTML: &str = include_str!("../../web/static/preview.html");
 const PREVIEW_JS: &str = include_str!("../../web/static/preview.js");
+const APP_CSS: &str = include_str!("../../web/static/app.css");
 
 /// The currently-open books repo, in both models the server needs:
 ///   * `repo` — the cover/IO model (`toml_edit`-based, used by the cover editor).
@@ -110,6 +111,7 @@ async fn serve(repo_root: PathBuf, port: u16, pages: u32) -> Result<()> {
         .route("/book.js", get(book_js))
         .route("/cover.html", get(cover_html))
         .route("/app.js", get(app_js))
+        .route("/app.css", get(app_css))
         .route("/preview.html", get(preview_html))
         .route("/preview.js", get(preview_js))
         // projects (Open Folder / Open Recent)
@@ -124,6 +126,7 @@ async fn serve(repo_root: PathBuf, port: u16, pages: u32) -> Result<()> {
         .route("/api/build/{book}/{lang}", post(api_build))
         // cover editor
         .route("/api/cover/{book}/{lang}", get(api_cover).post(api_save))
+        .route("/api/cover/{book}/{lang}/svg", get(api_cover_svg))
         .route("/api/cover/{book}/{lang}/audiobook", post(api_audiobook_cover))
         .route("/api/asset/{book}/{lang}/{kind}", get(api_asset))
         // interior previewer
@@ -200,6 +203,9 @@ async fn preview_html() -> impl IntoResponse {
 }
 async fn app_js() -> impl IntoResponse {
     js(APP_JS)
+}
+async fn app_css() -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "text/css")], APP_CSS)
 }
 async fn preview_js() -> impl IntoResponse {
     js(PREVIEW_JS)
@@ -361,11 +367,20 @@ async fn api_books(State(st): State<Shared>) -> Result<impl IntoResponse, (Statu
     let list: Vec<_> = books
         .iter()
         .map(|b| {
+            // Publishing-status ribbon (live/in-review/blocked/draft) from the book's
+            // [status] table — read through the config model.
+            let status = act
+                .disco
+                .find_book(&b.slug)
+                .ok()
+                .map(|(c, _)| c.status.ribbon())
+                .unwrap_or("draft");
             serde_json::json!({
                 "slug": b.slug,
                 "languages": b.languages,
                 "titles": b.titles,
                 "protected": cover::is_protected(&b.slug),
+                "status": status,
             })
         })
         .collect();
@@ -418,6 +433,7 @@ async fn api_book(
         "author": author,
         "series": cfg.meta.series,
         "protected": cover::is_protected(&slug),
+        "status": cfg.status.ribbon(),
         "langs": langs,
     })))
 }
@@ -613,6 +629,39 @@ async fn api_cover(
 }
 
 #[derive(Deserialize)]
+struct SvgQuery {
+    /// `wrap=1` → the full paperback wrap (back+spine+front); default is the front.
+    #[serde(default)]
+    wrap: u8,
+}
+
+/// `GET /api/cover/{book}/{lang}/svg?wrap=0|1` — the **authoritative** cover SVG
+/// the build rasterizes, served straight to the editor so its canvas *is* the
+/// real output (no Konva re-implementation, no drift). Text is pre-laid-out
+/// server-side with real font metrics and the bg is an embedded data URI, so the
+/// browser renders it standalone. `wrap=1` returns the full wrap (spine width from
+/// the built KDP interior's page count, else `default_pages`).
+async fn api_cover_svg(
+    State(st): State<Shared>,
+    AxPath((book, lang)): AxPath<(String, String)>,
+    Query(q): Query<SvgQuery>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let act = st.active.read().unwrap();
+    let (cfg, dir) = act.disco.find_book(&book).map_err(err)?;
+    check_lang(&cfg.languages, &lang)?;
+    let wrap = q.wrap != 0;
+    let pages = pdf_pages(&kdp_pdf_path(&act.disco.root, &book, &lang)).unwrap_or(st.default_pages);
+    let svg = bookmill::editor_cover_svg(&act.disco.root, &dir, &lang, wrap, pages).map_err(err)?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "image/svg+xml"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        svg,
+    ))
+}
+
+#[derive(Deserialize)]
 struct SaveBody {
     title: Element,
     subtitle: Element,
@@ -623,6 +672,11 @@ struct SaveBody {
     /// `[cover.<lang>].blurb` before the re-render so the wrap PDF reflects it.
     #[serde(default)]
     blurb: Option<String>,
+    /// Optional back-panel drag layout (paperback wrap). When present its blocks
+    /// are written to `[cover.<lang>.wrap]` before the re-render so the wrap PDF
+    /// positions the back-cover blurb/badge/author absolutely.
+    #[serde(default)]
+    wrap: Option<WrapElements>,
 }
 
 async fn api_save(
@@ -640,6 +694,10 @@ async fn api_save(
     // Back-cover blurb (wrap): persist to `[cover.<lang>].blurb` when supplied.
     if let Some(blurb) = &body.blurb {
         cover::save_blurb(&b, &lang, blurb).map_err(err)?;
+    }
+    // Back-panel drag layout (wrap): persist to `[cover.<lang>.wrap]` when supplied.
+    if let Some(wrap) = &body.wrap {
+        cover::save_wrap_layout(&b, &lang, wrap).map_err(err)?;
     }
 
     // Re-render authoritatively. Pass --pages only if the print interior is absent.

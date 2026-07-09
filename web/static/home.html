@@ -4,6 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>bookmill — library</title>
+<link rel="stylesheet" href="/app.css" />
 <style>
   :root {
     --bg:#11151c; --panel:#1b212b; --panel2:#252d3a; --line:#2c3543;
@@ -109,6 +110,9 @@
            color:var(--ink); border:1px solid rgba(255,255,255,.14); backdrop-filter:blur(2px); }
   .badge.prot { background:rgba(58,42,18,.9); color:var(--accent); border-color:#5a431c; }
   .badge.spacer { margin-left:auto; }
+  .badge.st-live { background:rgba(22,48,29,.92); color:var(--ok); border-color:#2c5a3a; }
+  .badge.st-in-review { background:rgba(58,47,18,.92); color:var(--warn); border-color:#5a4a1c; }
+  .badge.st-blocked { background:rgba(58,24,24,.92); color:var(--err); border-color:#5a2a2a; }
 
   .ttl { font-size:13px; font-weight:600; line-height:1.3; text-align:center;
          display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
@@ -133,6 +137,16 @@
   .help-card kbd { display:inline-block; min-width:16px; text-align:center; padding:1px 6px; border-radius:5px;
                    background:var(--panel2); border:1px solid var(--line); font:12px ui-monospace,Menlo,monospace; }
   .help-card .hc-close { color:var(--muted); font-size:11px; margin-top:12px; }
+
+  /* check-all-books sweep modal */
+  .ca-card { width:min(560px, 92vw); max-height:80vh; overflow:auto; }
+  .ca-head { display:flex; align-items:center; justify-content:space-between; }
+  .ca-head h3 { margin:0; }
+  .carow { display:flex; align-items:center; gap:10px; padding:6px 9px; border-radius:7px; background:var(--panel2);
+           border:1px solid var(--line); margin-bottom:5px; font-size:12.5px; }
+  .carow .caslug { font-family:ui-monospace,Menlo,monospace; color:var(--ink); flex:1;
+                   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .carow .calang { color:var(--muted); font-size:11px; }
 </style>
 </head>
 <body>
@@ -157,6 +171,11 @@
 
   <div class="right">
     <span class="count" id="count"></span>
+    <button class="iconbtn" id="checkAllBtn" title="Check all books (publish readiness)" aria-label="Check all books">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+      </svg>
+    </button>
     <button class="iconbtn" id="projBtn" title="Projects (open folder / recent)" aria-label="Projects">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
@@ -200,6 +219,19 @@
   <div class="shelf" id="shelf"></div>
   <p class="empty" id="empty" style="display:none">No books found.</p>
 </main>
+
+<!-- Check all books: library-wide publish-readiness sweep (moved off the book page) -->
+<div class="help-overlay" id="caOverlay">
+  <div class="help-card ca-card">
+    <div class="ca-head">
+      <h3>All books · publish readiness</h3>
+      <button class="iconbtn" id="caClose" title="Close">✕</button>
+    </div>
+    <p class="muted" id="caStatus">Runs <code>validate --deep</code> across every book &amp; language.</p>
+    <button class="btn primary" id="caRun" style="margin-bottom:12px">Run check</button>
+    <div id="caRows"></div>
+  </div>
+</div>
 
 <button class="helpbtn" id="helpBtn" title="Keyboard shortcuts (?)">?</button>
 <div class="help-overlay" id="helpOverlay">

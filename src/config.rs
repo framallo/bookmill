@@ -126,6 +126,9 @@ pub struct Edition {
     pub target: Option<String>,
     /// max image width (px) for EPUB editions; lower = smaller Kindle delivery
     pub epub_image_px: Option<u32>,
+    /// show chapter-plate alt text as a visible caption for this edition; overrides
+    /// the book `[pdf].plate_captions`. Set false to hide captions on e.g. KDP.
+    pub captions: Option<bool>,
 }
 
 // ---------- book level (book.toml) ----------
@@ -256,7 +259,6 @@ pub struct CoverConfig {
     // series badge text + page geometry defaults (repo-level)
     pub badge_es: Option<String>,
     pub badge_en: Option<String>,
-    pub font_link: Option<String>,
     pub heavy_shadow: Option<String>,
     pub trim_w: Option<f64>,
     pub trim_h: Option<f64>,
@@ -282,6 +284,22 @@ pub struct CoverLang {
     /// title/subtitle/author from these absolute coordinates instead of its
     /// default flex stack. Absent => unchanged default layout (no regression).
     pub layout: Option<CoverLayout>,
+    /// absolute back-panel layout for the paperback wrap (`[cover.<lang>.wrap]`),
+    /// written by the editor's full-wrap mode. Front and wrap are one design: the
+    /// front layout above governs both the eBook front and the wrap's front panel;
+    /// this governs the wrap's *back* panel (blurb/badge/author). Coordinates are
+    /// fractions of the **back panel**. Absent => default flex back (no regression).
+    pub wrap: Option<CoverWrapLayout>,
+}
+
+/// Absolute back-panel layout for the paperback wrap (`[cover.<lang>.wrap]`).
+/// One optional [`CoverElement`] per back-cover text block; coordinates are
+/// fractions of the back panel (width = trim + bleed, height = the full wrap).
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct CoverWrapLayout {
+    pub blurb: Option<CoverElement>,
+    pub badge: Option<CoverElement>,
+    pub author: Option<CoverElement>,
 }
 
 /// Absolute eBook-front cover layout (`[cover.<lang>.layout]`) authored by the
@@ -413,6 +431,11 @@ pub struct PdfOpts {
     pub finish: Option<String>,
     /// per-book print margins (inches); falls back to repo [defaults.margins]
     pub margins: Option<Margins>,
+    /// show each chapter plate's alt text as a visible caption (PDF: a line under
+    /// the framed plate; EPUB: a `<figcaption>`). Default true. Set false to keep
+    /// plates caption-free (the alt still ships as EPUB accessibility text). A
+    /// per-edition `[editions.<name>].captions` overrides this (e.g. hide on KDP).
+    pub plate_captions: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
@@ -584,6 +607,17 @@ pub fn resolve_ink(edition: Option<&Edition>, book: &BookConfig, repo: &RepoConf
         .or_else(|| book.pdf.ink.clone())
         .or_else(|| repo.defaults.ink.clone())
         .unwrap_or_else(|| "black".into())
+}
+
+/// Resolve whether chapter-plate captions (from image alt text) are shown for one
+/// (edition, book): edition `[editions.<name>].captions` → book `[pdf].plate_captions`
+/// → default `true`. Lets a book keep captions while hiding them on a specific
+/// edition (e.g. KDP).
+pub fn resolve_captions(edition: Option<&Edition>, book: &BookConfig) -> bool {
+    edition
+        .and_then(|e| e.captions)
+        .or(book.pdf.plate_captions)
+        .unwrap_or(true)
 }
 
 /// Validate an ISBN-13 (checksum + 13 digits). Hyphens/spaces are ignored.

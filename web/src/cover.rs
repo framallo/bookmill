@@ -143,6 +143,24 @@ pub struct CoverResponse {
     /// Back-cover blurb for the paperback wrap (`[cover.<lang>].blurb`, falling
     /// back to `[listing.<lang>].blurb`). Editable in the editor's wrap mode.
     pub blurb: String,
+    /// Draggable back-panel blocks for the wrap (blurb/badge/author), as
+    /// back-panel fractions. Seeded from `[cover.<lang>.wrap]` when saved, else
+    /// from defaults matching the renderer's `back_absolute` flex-equivalent
+    /// positions. The editor positions these within the back-panel sub-rect of the
+    /// wrap SVG (whose width the SVG exposes as `data-back-w`).
+    pub wrap: WrapLayoutResponse,
+    /// True when `[cover.<lang>.wrap]` was present (positions came from the saved
+    /// wrap layout). When false, the seeded defaults match the renderer's flex back.
+    pub wrap_saved: bool,
+}
+
+/// Back-panel layout the editor seeds its wrap drag handles from. Each block is a
+/// full [`Element`] (back-panel fractions).
+#[derive(Serialize)]
+pub struct WrapLayoutResponse {
+    pub blurb: Element,
+    pub badge: Element,
+    pub author: Element,
 }
 
 #[derive(Serialize)]
@@ -202,6 +220,10 @@ pub fn load_cover(repo: &Repo, book: &BookSummary, lang: &str) -> Result<CoverRe
     let blurb = lang_str(&book_doc, "cover", lang, "blurb")
         .or_else(|| lang_str(&book_doc, "listing", lang, "blurb"))
         .unwrap_or_default();
+    // Blurb color + serif for the wrap back-panel default seed (before `d`'s fields
+    // are moved into the front elements below).
+    let wrap_blurb_color = d.blurb_color.clone();
+    let wrap_serif = d.serif.clone();
 
     // Existing saved layout, if any, wins over computed defaults.
     let saved = read_saved_layout(&book_doc, lang);
@@ -236,6 +258,48 @@ pub fn load_cover(repo: &Repo, book: &BookSummary, lang: &str) -> Result<CoverRe
         font_family: "Montserrat".into(),
         font_style: "normal".into(),
     });
+    // Wrap back-panel layout: seed the editor's drag handles from the saved
+    // `[cover.<lang>.wrap]` when present, else from defaults matching the renderer's
+    // `back_absolute` positions (fractions of the back panel). The back panel is
+    // `bleed + trim_w` wide by `trim_h + 2·bleed` tall (× 96 px/in); fractions are
+    // resolution-free, so we work in px only to derive w/font fractions.
+    const DPI: f64 = 96.0;
+    let back_w_px = (d.bleed + d.trim_w) * DPI;
+    let fh_px = (d.trim_h + 2.0 * d.bleed) * DPI;
+    let bcontent_w = back_w_px - 2.0 * 0.55 * DPI; // matches wrap_svg bpad_x
+    let w_frac = (bcontent_w / back_w_px).max(0.05);
+    let saved_wrap = read_saved_wrap(&book_doc, lang);
+    let wrap_blurb = saved_wrap.as_ref().and_then(|w| w.blurb.clone()).unwrap_or(Element {
+        text: blurb.clone(),
+        x_pct: 0.5,
+        y_pct: 0.42,
+        w_pct: w_frac,
+        font_pct: 21.0 / fh_px,
+        fill: wrap_blurb_color.clone(),
+        font_family: wrap_serif.clone(),
+        font_style: "normal".into(),
+    });
+    let wrap_badge = saved_wrap.as_ref().and_then(|w| w.badge.clone()).unwrap_or(Element {
+        text: badge.clone(),
+        x_pct: 0.5,
+        y_pct: 0.085,
+        w_pct: w_frac,
+        font_pct: 13.0 / fh_px,
+        fill: badge_color.clone(),
+        font_family: "Montserrat".into(),
+        font_style: "normal".into(),
+    });
+    let wrap_author = saved_wrap.as_ref().and_then(|w| w.author.clone()).unwrap_or(Element {
+        text: author_el.text.clone(),
+        x_pct: 0.5,
+        y_pct: 0.94,
+        w_pct: w_frac,
+        font_pct: 13.0 / fh_px,
+        fill: author_el.fill.clone(),
+        font_family: "Montserrat".into(),
+        font_style: "normal".into(),
+    });
+
     let bgcolor = d.bgcolor;
 
     let protected = is_protected(&book.slug);
@@ -257,6 +321,8 @@ pub fn load_cover(repo: &Repo, book: &BookSummary, lang: &str) -> Result<CoverRe
         title_mt,
         author_mt,
         blurb,
+        wrap: WrapLayoutResponse { blurb: wrap_blurb, badge: wrap_badge, author: wrap_author },
+        wrap_saved: saved_wrap.is_some(),
     })
 }
 
@@ -324,6 +390,76 @@ pub fn save_cover(book: &BookSummary, lang: &str, els: &Elements, bgcolor: &str)
     Ok(path)
 }
 
+/// The editable back-panel text blocks of the paperback wrap. Each is optional so
+/// the editor can persist only what it exposes (blurb today; badge/author when
+/// dragged). Mirrors [`Elements`] but for the wrap's BACK panel; coordinates are
+/// fractions of the back panel (see `CoverWrapLayout` in the main crate).
+#[derive(Deserialize, Default)]
+pub struct WrapElements {
+    #[serde(default)]
+    pub blurb: Option<Element>,
+    #[serde(default)]
+    pub badge: Option<Element>,
+    #[serde(default)]
+    pub author: Option<Element>,
+}
+
+impl WrapElements {
+    fn is_empty(&self) -> bool {
+        self.blurb.is_none() && self.badge.is_none() && self.author.is_none()
+    }
+}
+
+/// Persist the paperback-wrap back-panel layout into `[cover.<lang>.wrap]` in the
+/// book's `bookmill.toml`, preserving comments/formatting. Mirrors `save_cover`'s
+/// `[cover.<lang>.layout]` writer: one inline sub-table per present block
+/// (`blurb`/`badge`/`author`) with `{ xPct, yPct, wPct, fontPct, fill, fontFamily,
+/// fontStyle, text }`. The wrap renderer (`cover_svg::wrap_svg`) reads it to place
+/// the back panel absolutely; absent blocks fall back to the flex defaults.
+/// Returns the path that was written. A no-op (all-empty) returns without writing.
+pub fn save_wrap_layout(book: &BookSummary, lang: &str, els: &WrapElements) -> Result<PathBuf> {
+    let path = book.dir.join("bookmill.toml");
+    if els.is_empty() {
+        return Ok(path);
+    }
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("reading {}", path.display()))?;
+    let mut doc: DocumentMut = text.parse().context("parsing book bookmill.toml")?;
+
+    // ensure [cover] then [cover.<lang>] exist
+    if doc.get("cover").and_then(|i| i.as_table()).is_none() {
+        doc["cover"] = Item::Table(Table::new());
+    }
+    {
+        let cover = doc["cover"].as_table_mut().unwrap();
+        if cover.get(lang).and_then(|i| i.as_table()).is_none() {
+            let mut t = Table::new();
+            t.set_implicit(false);
+            cover.insert(lang, Item::Table(t));
+        }
+    }
+
+    // [cover.<lang>.wrap] — merge present blocks over any prior saved wrap layout,
+    // so dragging only the blurb doesn't drop a previously-placed badge/author.
+    if doc["cover"][lang].get("wrap").and_then(|i| i.as_table()).is_none() {
+        let mut t = Table::new();
+        t.set_implicit(false);
+        doc["cover"][lang]["wrap"] = Item::Table(t);
+    }
+    if let Some(e) = &els.blurb {
+        doc["cover"][lang]["wrap"]["blurb"] = Item::Value(element_inline(e));
+    }
+    if let Some(e) = &els.badge {
+        doc["cover"][lang]["wrap"]["badge"] = Item::Value(element_inline(e));
+    }
+    if let Some(e) = &els.author {
+        doc["cover"][lang]["wrap"]["author"] = Item::Value(element_inline(e));
+    }
+
+    std::fs::write(&path, doc.to_string()).with_context(|| format!("writing {}", path.display()))?;
+    Ok(path)
+}
+
 /// Persist the paperback-wrap back-cover blurb into `[cover.<lang>].blurb` in the
 /// book's `bookmill.toml`, preserving comments/formatting. Written by the cover
 /// editor's "Paperback wrap" mode; the wrap renderer (`cover_tmpl::wrap_html`)
@@ -378,6 +514,23 @@ fn read_saved_layout(doc: &DocumentMut, lang: &str) -> Option<Elements> {
         title: read_element(layout.get("title")?)?,
         subtitle: read_element(layout.get("subtitle")?)?,
         author: read_element(layout.get("author")?)?,
+    })
+}
+
+/// Saved `[cover.<lang>.wrap]` back-panel blocks, each optional (the editor may
+/// have placed only some). None only when the `wrap` table itself is absent.
+struct SavedWrap {
+    blurb: Option<Element>,
+    badge: Option<Element>,
+    author: Option<Element>,
+}
+
+fn read_saved_wrap(doc: &DocumentMut, lang: &str) -> Option<SavedWrap> {
+    let wrap = doc.get("cover")?.get(lang)?.get("wrap")?;
+    Some(SavedWrap {
+        blurb: wrap.get("blurb").and_then(read_element),
+        badge: wrap.get("badge").and_then(read_element),
+        author: wrap.get("author").and_then(read_element),
     })
 }
 

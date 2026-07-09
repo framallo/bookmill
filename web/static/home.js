@@ -17,8 +17,69 @@ init();
 async function init() {
   wireControls();
   wireProjects();
+  wireCheckAll();
   await loadBooks();
   loadProjects();
+}
+
+// --- Check all books: library-wide publish-readiness sweep ------------------
+// Moved here from the per-book page (it's a whole-library operation). Opens a
+// modal, runs `validate --deep` for every book × language sequentially, and lists
+// a verdict per target that links to that book/lang.
+function wireCheckAll() {
+  const overlay = $('caOverlay');
+  const close = () => overlay.classList.remove('open');
+  $('checkAllBtn').addEventListener('click', () => overlay.classList.add('open'));
+  $('caClose').addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  $('caRun').addEventListener('click', runCheckAll);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && overlay.classList.contains('open')) close();
+  });
+}
+
+async function runCheckAll() {
+  const btn = $('caRun'), rows = $('caRows'), status = $('caStatus');
+  btn.disabled = true;
+  const jobs = [];
+  BOOKS.forEach((b) => (b.languages || []).forEach((l) => jobs.push({ slug: b.slug, lang: l })));
+  rows.innerHTML = '';
+  const rowEls = {};
+  jobs.forEach((j) => {
+    const row = document.createElement('div');
+    row.className = 'carow';
+    row.innerHTML = caLabel(j) + `<span class="pill"><span class="spin"></span></span>`;
+    rows.appendChild(row);
+    rowEls[`${j.slug}/${j.lang}`] = row;
+  });
+  let done = 0;
+  for (const j of jobs) {
+    const row = rowEls[`${j.slug}/${j.lang}`];
+    try {
+      const res = await fetch(`/api/warnings/${encodeURIComponent(j.slug)}/${encodeURIComponent(j.lang)}`);
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      let errs = 0, warns = 0;
+      (data.issues || []).forEach((it) => { if (it.level === 'error') errs++; else if (it.level === 'warn') warns++; });
+      let vcls = 'ready', v = '✅ ready';
+      if (errs) { vcls = 'notready'; v = `❌ ${errs} error${errs === 1 ? '' : 's'}`; }
+      else if (warns) { vcls = 'warn'; v = `⚠️ ${warns} warn`; }
+      row.innerHTML = caLabel(j) +
+        `<a class="verdict ${vcls}" href="/book.html?book=${encodeURIComponent(j.slug)}&lang=${encodeURIComponent(j.lang)}">${v}</a>`;
+    } catch (e) {
+      row.innerHTML = caLabel(j) + `<span class="err-msg">${esc((e && e.message) || e)}</span>`;
+    }
+    done++;
+    status.innerHTML = done < jobs.length
+      ? `<span class="spin"></span> checked ${done}/${jobs.length}…`
+      : `Done — ${jobs.length} target${jobs.length === 1 ? '' : 's'} checked.`;
+  }
+  btn.disabled = false;
+  btn.textContent = 'Re-run check';
+}
+
+function caLabel(j) {
+  return `<span class="caslug">${esc(j.slug)}</span><span class="calang">${esc(j.lang.toUpperCase())}</span>`;
 }
 
 // Load (or reload) the book grid for the currently-active project. Called on
@@ -39,6 +100,7 @@ async function loadBooks() {
     titles: b.titles || {},
     title: (b.titles && (b.titles.es || b.titles.en || Object.values(b.titles)[0])) || b.slug,
     protected: !!b.protected,
+    status: b.status || 'draft',
   }));
   sel = -1;
   render();
@@ -267,12 +329,16 @@ function tile(b, lang) {
     ? `/book.html?book=${encodeURIComponent(b.slug)}&lang=${encodeURIComponent(lang)}`
     : `/book.html?book=${encodeURIComponent(b.slug)}`;
 
+  // Only surface a meaningful status (live / in-review / blocked); draft is the
+  // silent default, so we don't stamp it on every cover.
+  const stLabels = { live: 'LIVE', 'in-review': 'REVIEW', blocked: 'BLOCKED' };
+  const st = stLabels[b.status] ? `<span class="badge st-${b.status} spacer">${stLabels[b.status]}</span>` : '';
   const badges = (lang ? `<span class="badge">${esc(lang)}</span>` : '') +
-    (b.protected ? '<span class="badge prot spacer">locked</span>' : '');
+    (b.protected ? '<span class="badge prot spacer">locked</span>' : '') + st;
   const fake = `<div class="fake">${esc(title)}</div>`;
   const img = coverUrl
     ? `<img src="${coverUrl}" alt="" loading="lazy"
-         onerror="this.remove();this.parentNode.insertAdjacentHTML('beforeend', this.getAttribute('data-fb'));"
+         onerror="var p=this.parentNode;this.remove();if(p)p.insertAdjacentHTML('beforeend', this.getAttribute('data-fb'));"
          data-fb="${escAttr(fake)}" />`
     : fake;
 

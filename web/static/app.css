@@ -1,0 +1,100 @@
+/* bookmill web — shared design system. Loaded by every page so the app bar,
+   buttons, cards, pills and disclosures look and behave the same everywhere.
+   Page files keep only their page-specific rules and may override these. */
+
+:root {
+  --bg:#11151c; --panel:#1b212b; --panel2:#252d3a; --line:#2c3543;
+  --ink:#e7edf3; --muted:#8a98a8; --accent:#d4a937; --accent-ink:#1a1206;
+  --ok:#7fd99a; --warn:#e8c25a; --err:#e8807f;
+  --radius:8px; --radius-lg:12px;
+  --appbar-h:52px;
+}
+* { box-sizing:border-box; }
+body { margin:0; font:14px/1.45 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+
+/* ---- app bar (shared header) ------------------------------------------- */
+.appbar { display:flex; align-items:center; gap:12px; min-height:var(--appbar-h);
+          padding:0 16px; background:var(--panel); border-bottom:1px solid var(--line); flex-wrap:wrap; }
+.appbar h1 { font-size:15px; font-weight:600; margin:0; letter-spacing:.2px; white-space:nowrap; }
+.appbar .spacer { flex:1; }
+.appbar .sub { color:var(--muted); font-size:13px; white-space:nowrap; }
+.crumb, a.navlink { color:var(--muted); text-decoration:none; font-size:13px; white-space:nowrap; }
+.crumb:hover, a.navlink:hover { color:var(--ink); }
+
+/* ---- buttons ----------------------------------------------------------- */
+.btn { display:inline-flex; align-items:center; justify-content:center; gap:6px;
+       height:32px; padding:0 12px; border-radius:var(--radius); border:1px solid var(--line);
+       background:#222b36; color:var(--ink); font:inherit; font-size:13px; cursor:pointer;
+       text-decoration:none; white-space:nowrap; }
+.btn:hover { border-color:var(--accent); }
+.btn.primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); font-weight:600; }
+.btn.sm { height:28px; padding:0 10px; font-size:12px; }
+.btn:disabled { opacity:.5; cursor:default; }
+/* small square icon button */
+.iconbtn { width:34px; height:34px; display:inline-flex; align-items:center; justify-content:center;
+           border-radius:var(--radius); border:1px solid transparent; background:transparent;
+           color:var(--muted); cursor:pointer; }
+.iconbtn svg { width:18px; height:18px; }
+.iconbtn:hover { color:var(--ink); background:var(--panel2); }
+.iconbtn.active { color:var(--accent); border-color:var(--line); }
+
+/* ---- segmented toggle (language / view switches) ----------------------- */
+.seg { display:inline-flex; border:1px solid var(--line); border-radius:7px; overflow:hidden; }
+.seg button { border:0; border-radius:0; background:transparent; color:var(--muted);
+              padding:6px 12px; font:inherit; font-size:13px; cursor:pointer; }
+.seg button + button { border-left:1px solid var(--line); }
+.seg button.on { background:var(--accent); color:var(--accent-ink); font-weight:600; }
+.seg button:not(.on):hover { color:var(--ink); }
+
+/* ---- pills / tags / chips ---------------------------------------------- */
+.pill { font-size:11px; padding:2px 8px; border-radius:10px; border:1px solid var(--line);
+        background:#222b36; color:var(--muted); }
+.pill.ok { color:var(--ok); border-color:#2c5a3a; }
+.pill.warn { color:var(--warn); border-color:#5a4a1c; }
+.pill.err { color:var(--err); border-color:#5a2a2a; }
+.tag { font-size:11px; padding:2px 8px; border-radius:10px; background:#222b36;
+       border:1px solid var(--line); color:var(--ink); }
+.tag.prot { background:#3a2a12; color:var(--accent); border-color:#5a431c; }
+
+/* verdict chip (readiness summary) */
+.verdict { display:inline-flex; align-items:center; gap:6px; font-size:12.5px; font-weight:600;
+           padding:3px 10px; border-radius:8px; border:1px solid var(--line); text-decoration:none; }
+.verdict.ready { background:#16301d; color:var(--ok); border-color:#2c5a3a; }
+.verdict.warn { background:#3a2f12; color:var(--warn); border-color:#5a4a1c; }
+.verdict.notready { background:#3a1818; color:var(--err); border-color:#5a2a2a; }
+
+/* ---- card + disclosure ------------------------------------------------- */
+.card { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius-lg); padding:14px; }
+h2.sec { font-size:12px; text-transform:uppercase; letter-spacing:.5px; color:var(--muted);
+         border-bottom:1px solid var(--line); padding-bottom:6px; margin:22px 0 12px; }
+
+.disc { border-top:1px solid var(--line); margin-top:10px; padding-top:2px; }
+.disc > summary { cursor:pointer; list-style:none; color:var(--muted); font-size:11.5px;
+                  text-transform:uppercase; letter-spacing:.5px; padding:7px 0; user-select:none; }
+.disc > summary::-webkit-details-marker { display:none; }
+.disc > summary::before { content:"\25B8"; color:var(--accent); margin-right:6px; display:inline-block; }
+.disc[open] > summary::before { content:"\25BE"; }
+
+/* ---- spinner + misc ---------------------------------------------------- */
+.spin { width:13px; height:13px; border:2px solid var(--line); border-top-color:var(--accent);
+        border-radius:50%; display:inline-block; animation:spin .7s linear infinite; vertical-align:-2px; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.muted { color:var(--muted); }
+.err-msg { color:var(--err); white-space:pre-wrap; }
+
+/* ---- shared help button + overlay -------------------------------------- */
+.helpbtn { position:fixed; right:16px; bottom:16px; z-index:20; width:34px; height:34px;
+           border-radius:50%; border:1px solid var(--line); background:#222b36; color:var(--muted);
+           font-size:16px; font-weight:700; cursor:pointer; }
+.helpbtn:hover { color:var(--accent); border-color:var(--accent); }
+.help-overlay { position:fixed; inset:0; z-index:30; display:none; align-items:center;
+                justify-content:center; background:rgba(0,0,0,.55); }
+.help-overlay.open { display:flex; }
+.help-card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:18px 20px;
+             min-width:320px; box-shadow:0 20px 60px rgba(0,0,0,.6); }
+.help-card h3 { margin:0 0 12px; font-size:14px; }
+.help-card table { border-collapse:collapse; font-size:13px; }
+.help-card td { padding:3px 10px 3px 0; color:var(--ink); }
+.help-card kbd { display:inline-block; min-width:16px; text-align:center; padding:1px 6px; border-radius:5px;
+                 background:#222b36; border:1px solid var(--line); font:12px ui-monospace,Menlo,monospace; }
+.help-card .hc-close { color:var(--muted); font-size:11px; margin-top:12px; }

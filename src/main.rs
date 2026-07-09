@@ -225,18 +225,10 @@ struct CoverArgs {
     /// limit to a language (es|en|all)
     #[arg(long)]
     lang: Option<String>,
-    /// only emit the cover HTML (skip headless Chrome rasterization);
-    /// useful to verify the template/config without touching image assets
-    /// (chrome engine only)
-    #[arg(long)]
-    html_only: bool,
     /// override the spine page count (else read from the built -kdp.pdf);
     /// lets covers render before the print interior exists
     #[arg(long)]
     pages: Option<u32>,
-    /// rasterization engine: resvg (default, pure Rust, no Chrome) | chrome
-    #[arg(long)]
-    engine: Option<String>,
 }
 
 #[derive(Args)]
@@ -333,13 +325,13 @@ fn main() -> Result<()> {
                         };
                         let jobs = tui::jobs_for_req(&repo, &all)?;
                         tui::run_queue_ui(&repo, &jobs, &cmd)?;
-                        covers::run(&repo, Some(req.book.clone()), lang, false, None, covers::Engine::Resvg)?;
+                        covers::run(&repo, Some(req.book.clone()), lang, None)?;
                         deep::run(&repo, Some(req.book), false)?;
                     }
                     tui::Action::Validate { book } => deep::run(&repo, Some(book), false)?,
                     tui::Action::Covers { book, lang } => {
                         let lang = (lang != "all").then_some(lang);
-                        covers::run(&repo, Some(book), lang, false, None, covers::Engine::Resvg)?;
+                        covers::run(&repo, Some(book), lang, None)?;
                     }
                     tui::Action::Audiobook { book, lang } => {
                         let lang = (lang != "all").then_some(lang);
@@ -376,10 +368,7 @@ fn main() -> Result<()> {
                         build::run_editions(&repo, a.book, a.lang, a.edition)?;
                     }
                 }
-                BuildSub::Cover(a) => {
-                    let engine = covers::Engine::parse(a.engine.as_deref())?;
-                    covers::run(&repo, a.book, a.lang, a.html_only, a.pages, engine)?
-                }
+                BuildSub::Cover(a) => covers::run(&repo, a.book, a.lang, a.pages)?,
                 BuildSub::Shrink(a) => {
                     let (before, after) = epub_shrink::shrink_epub(&a.epub, a.px)?;
                     println!(

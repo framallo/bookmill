@@ -55,13 +55,14 @@ pub fn run(
     chaps: &[PathBuf],
     openright: bool,
     plate_framed: bool,
+    captions: bool,
     retail: bool,
     cover: Option<&Path>,
     geometry: Option<PageGeometry>,
     lang: &str,
     out: &Path,
 ) -> Result<()> {
-    let doc = build_doc(repo, meta, cpdf, chaps, openright, plate_framed, retail, cover, geometry, lang)?;
+    let doc = build_doc(repo, meta, cpdf, chaps, openright, plate_framed, captions, retail, cover, geometry, lang)?;
     let odir = out.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(odir)?;
     // Keep the generated markup on disk for debugging only — it is NOT handed to
@@ -206,6 +207,7 @@ fn build_doc(
     chaps: &[PathBuf],
     openright: bool,
     plate_framed: bool,
+    captions: bool,
     retail: bool,
     cover: Option<&Path>,
     geometry: Option<PageGeometry>,
@@ -267,16 +269,23 @@ bottom: {bottom:.4}in, inside: {inside:.4}in, outside: {outside:.4}in))\n",
     //   * framed: centered within the page margins, contained (never cropped),
     //     with a thin terracotta keyline border — no bleed.
     if plate_framed {
+        // framed plate: contained image + optional italic caption (from the image
+        // alt text) below it, constrained to the image width so long captions wrap.
         s.push_str(
-            "#let plate(p) = [\n  #pagebreak(to: \"even\", weak: true)\n  \
+            "#let plate(p, c: none) = [\n  #pagebreak(to: \"even\", weak: true)\n  \
 #v(1fr)\n  \
 #align(center, box(stroke: 0.75pt + islatitle, inset: 0pt, \
 image(p, width: 78%, fit: \"contain\")))\n  \
+#if c != none [\n    #v(0.85em)\n    \
+#align(center, block(width: 78%, \
+text(size: 9.5pt, style: \"italic\", fill: luma(70))[#c]))\n  ]\n  \
 #v(1fr)\n  #pagebreak()\n]\n",
         );
     } else {
+        // full-bleed plate: image fills the page, so there is no room for a caption
+        // (the alt still ships as EPUB accessibility text). `c` is accepted + ignored.
         s.push_str(
-            "#let plate(p) = [\n  #pagebreak(to: \"even\", weak: true)\n  \
+            "#let plate(p, c: none) = [\n  #pagebreak(to: \"even\", weak: true)\n  \
 #set page(margin: 0pt, header: none, footer: none)\n  \
 #image(p, width: 100%, height: 100%, fit: \"cover\")\n  #pagebreak()\n]\n",
         );
@@ -367,7 +376,7 @@ text(weight: \"bold\", size: 13pt, it.body))\n",
         let txt = std::fs::read_to_string(ch)
             .with_context(|| format!("reading {}", ch.display()))?;
         let blocks = parse_blocks(&txt);
-        emit_blocks(&mut s, &blocks, &repo.root);
+        emit_blocks(&mut s, &blocks, &repo.root, captions);
         s.push('\n');
     }
 
@@ -377,15 +386,20 @@ text(weight: \"bold\", size: 13pt, it.body))\n",
 /// Emit a chapter's blocks, applying the heading+plate reorder: a chapter that
 /// opens with a standalone (non-spot) image renders the image as a full-page
 /// verso plate BEFORE its heading, so heading+body open together on the recto.
-fn emit_blocks(s: &mut String, blocks: &[Block], root: &Path) {
+fn emit_blocks(s: &mut String, blocks: &[Block], root: &Path, captions: bool) {
     let mut i = 0;
     while i < blocks.len() {
         match &blocks[i] {
             Block::Heading { level, text, unnumbered } if *level == 1 => {
                 // look ahead for an opening plate image
-                if let Some(Block::Image { src, spot: false, .. }) = blocks.get(i + 1) {
+                if let Some(Block::Image { src, spot: false, alt, .. }) = blocks.get(i + 1) {
                     let p = typst_img_path(root, src);
-                    s.push_str(&format!("#plate({})\n", ty_str(&p)));
+                    let cap = if !captions || alt.trim().is_empty() {
+                        "none".to_string()
+                    } else {
+                        ty_str(alt)
+                    };
+                    s.push_str(&format!("#plate({}, c: {})\n", ty_str(&p), cap));
                     emit_heading(s, *level, text, *unnumbered);
                     i += 2;
                     continue;
@@ -397,7 +411,7 @@ fn emit_blocks(s: &mut String, blocks: &[Block], root: &Path) {
                 emit_heading(s, *level, text, *unnumbered);
                 i += 1;
             }
-            Block::Image { src, spot, width } => {
+            Block::Image { src, spot, width, .. } => {
                 let p = typst_img_path(root, src);
                 if *spot {
                     s.push_str(&format!("#spot({})\n", ty_str(&p)));
@@ -469,7 +483,7 @@ fn emit_heading(s: &mut String, level: usize, text: &str, unnumbered: bool) {
 enum Block {
     Heading { level: usize, text: String, unnumbered: bool },
     Para(String),
-    Image { src: String, spot: bool, width: Option<f64> },
+    Image { src: String, spot: bool, width: Option<f64>, alt: String },
     Rule,
     /// GFM pipe table: a header row plus body rows, each a vector of raw cell
     /// strings (inline markdown, converted at emit time).
@@ -662,10 +676,11 @@ fn parse_image(s: &str) -> Option<Block> {
     if !tail.is_empty() && !tail.starts_with('{') {
         return None;
     }
+    let alt = s[2..close_alt].trim().to_string();
     let (_, attrs) = split_attrs(s);
     let spot = attrs.contains(".spot");
     let width = parse_width(&attrs);
-    Some(Block::Image { src, spot, width })
+    Some(Block::Image { src, spot, width, alt })
 }
 
 /// Split a trailing `{ ... }` pandoc attribute block off the end of a line.
@@ -894,7 +909,7 @@ mod tests {
             _ => panic!("not a table"),
         }
         let mut s = String::new();
-        emit_blocks(&mut s, &blocks, Path::new("/repo"));
+        emit_blocks(&mut s, &blocks, Path::new("/repo"), true);
         assert!(s.contains("#table("));
         assert!(s.contains("columns: 2"));
         assert!(s.contains("table.header([*A*], [*B*])"));

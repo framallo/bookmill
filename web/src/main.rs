@@ -12,13 +12,13 @@ mod cover;
 mod render;
 
 use axum::{
-    extract::{Path as AxPath, State},
-    http::StatusCode,
+    extract::{Path as AxPath, Query, State},
+    http::{header, StatusCode},
     response::{IntoResponse, Json},
     routing::get,
     Router,
 };
-use cover::{Element, Elements, Repo};
+use cover::{Element, Elements, Repo, WrapElements};
 use serde::Deserialize;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -55,6 +55,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/", get(|| async { axum::response::Redirect::to("/home.html") }))
         .route("/api/books", get(api_books))
         .route("/api/cover/{book}/{lang}", get(api_cover).post(api_save))
+        .route("/api/cover/{book}/{lang}/svg", get(api_cover_svg))
         .route("/api/asset/{book}/{lang}/{kind}", get(api_asset))
         .fallback_service(ServeDir::new(&static_dir).append_index_html_on_directories(true))
         .layer(CorsLayer::permissive())
@@ -151,12 +152,44 @@ async fn api_cover(
 }
 
 #[derive(Deserialize)]
+struct SvgQuery {
+    #[serde(default)]
+    wrap: u8,
+}
+
+/// `GET /api/cover/{book}/{lang}/svg?wrap=0|1` — the authoritative cover SVG the
+/// build rasterizes (front, or the full paperback wrap), served straight to the
+/// editor so its canvas *is* the real output.
+async fn api_cover_svg(
+    State(st): State<Shared>,
+    AxPath((book, lang)): AxPath<(String, String)>,
+    Query(q): Query<SvgQuery>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let b = st.repo.find_book(&book).map_err(err)?;
+    let svg = bookmill::editor_cover_svg(&st.repo.root, &b.dir, &lang, q.wrap != 0, st.default_pages)
+        .map_err(err)?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "image/svg+xml"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        svg,
+    ))
+}
+
+#[derive(Deserialize)]
 struct SaveBody {
     title: Element,
     subtitle: Element,
     author: Element,
     #[serde(default)]
     bgcolor: String,
+    /// Optional back-cover blurb (paperback wrap) → `[cover.<lang>].blurb`.
+    #[serde(default)]
+    blurb: Option<String>,
+    /// Optional back-panel drag layout (paperback wrap) → `[cover.<lang>.wrap]`.
+    #[serde(default)]
+    wrap: Option<WrapElements>,
 }
 
 async fn api_save(
@@ -169,6 +202,14 @@ async fn api_save(
     let bgcolor = if body.bgcolor.trim().is_empty() { "#000000".to_string() } else { body.bgcolor };
 
     let path = cover::save_cover(&b, &lang, &els, &bgcolor).map_err(err)?;
+    // Back-cover blurb (wrap): persist to `[cover.<lang>].blurb` when supplied.
+    if let Some(blurb) = &body.blurb {
+        cover::save_blurb(&b, &lang, blurb).map_err(err)?;
+    }
+    // Back-panel drag layout (wrap): persist to `[cover.<lang>.wrap]` when supplied.
+    if let Some(wrap) = &body.wrap {
+        cover::save_wrap_layout(&b, &lang, wrap).map_err(err)?;
+    }
 
     // Re-render authoritatively. Pass --pages only if the print interior is absent.
     let kdp_pdf = st
