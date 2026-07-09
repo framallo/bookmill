@@ -1,8 +1,7 @@
-// Book detail (v2). A compact hub: the two language variants sit side by side as
-// cards — cover + title + primary actions (Edit cover / Preview) above the fold —
-// with Build & outputs and Publish readiness tucked behind disclosures so the page
-// no longer scrolls forever. ←/→ move to the prev/next book. The library-wide
-// "check all books" sweep now lives on the home page, not here.
+// Book detail (v3) — editorial "record" layout. A large cover + book identity
+// hero, one language at a time via a prominent ES|EN toggle; the pipeline, stats,
+// and Build/Readiness/KDP sections all reflect the active language. ←/→ move to
+// the prev/next book. The library-wide "check all books" sweep lives on home.
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -89,79 +88,115 @@ function wireNav() {
 }
 
 // --- page render ------------------------------------------------------------
+// Editorial "record" layout: a large cover + book identity, one language at a
+// time via a prominent ES|EN toggle. The pipeline, stats, and Build/Readiness/
+// KDP sections all reflect the active language.
+
+let LANG = null; // active language (set on first render, changed by the toggle)
 
 function render(d) {
   const langs = d.languages || [];
-  const firstTitle = (d.langs[langs[0]] && d.langs[langs[0]].title) || d.slug;
-  const firstSub = (d.langs[langs[0]] && d.langs[langs[0]].subtitle) || '';
-  $('bookTitle').textContent = firstTitle;
+  LANG = langs[0] || 'es';
+  renderActive(d);
+}
 
-  const firstLang = langs[0] || 'es';
-  const q0 = `book=${encodeURIComponent(d.slug)}&lang=${encodeURIComponent(firstLang)}`;
+function renderActive(d) {
+  const langs = d.languages || [];
+  const L = d.langs[LANG] || {};
+  const q = `book=${encodeURIComponent(d.slug)}&lang=${encodeURIComponent(LANG)}`;
+  const coverUrl = `/api/asset/${encodeURIComponent(d.slug)}/${encodeURIComponent(LANG)}/rendered`;
+  const wrapUrl = `/api/output/${encodeURIComponent(d.slug)}/${encodeURIComponent(LANG)}/wrap-cover`;
+  $('bookTitle').textContent = L.title || d.slug;
 
-  // ---- hero: editorial title + kicker + pipeline + actions ----
-  const editions = (d.editions || []).map((e) => `<span class="tag">${esc(e)}</span>`).join('');
+  // ---- hero: language toggle + cover-forward record + per-language pipeline ----
   let hero = '<div class="pagehero"><div class="inner">';
+  hero += `<div class="langbar">`;
+  if (langs.length > 1) {
+    hero += `<span class="seg" id="langSeg" role="tablist" aria-label="Language">`;
+    langs.forEach((l) => {
+      hero += `<button role="tab" data-lang="${l}" aria-selected="${l === LANG}" class="${l === LANG ? 'on' : ''}">${l.toUpperCase()}</button>`;
+    });
+    hero += `</span>`;
+  }
+  hero += `</div>`;
+
+  hero += `<div class="record">`;
+  hero += `<div class="rec-cover">`;
+  hero += `<img src="${coverUrl}" alt="${escAttr(L.title || d.slug)} — ${LANG.toUpperCase()} cover" loading="lazy" onerror="this.outerHTML='<div class=&quot;fakecover&quot;>${escAttr(L.title || d.slug)}</div>'" />`;
+  hero += `<a class="wraplink" href="${wrapUrl}" target="_blank" rel="noopener">wrap PDF ↗</a>`;
+  hero += `</div>`;
+  hero += `<div class="rec-id">`;
   hero += `<div class="kicker">`;
+  hero += `<span class="rec-langtag">${LANG.toUpperCase()}</span>`;
   if (d.author) hero += `<span>by <b>${esc(d.author)}</b></span>`;
   if (d.series) hero += `<span>·</span><span>${esc(d.series)}</span>`;
   hero += `<span>·</span><span class="slug">${esc(d.slug)}</span>`;
   if (d.protected) hero += `<span class="tag prot">protected</span>`;
+  if (d.status) hero += statusBadge(d.status);
   hero += `</div>`;
-  hero += `<h1 class="title">${esc(firstTitle)}</h1>`;
-  if (firstSub) hero += `<p class="subtitle">${esc(firstSub)}</p>`;
-  hero += pipelineStrip(d);
-  hero += `<div class="hero-actions">`;
-  hero += `<a class="btn primary" href="/cover.html?${q0}">Edit cover</a>`;
-  hero += `<a class="btn" href="/preview.html?${q0}">Preview interior</a>`;
-  hero += `<span style="flex:1"></span>`;
-  hero += `<span class="kicker" style="margin:0">editions: ${editions || '<span class="muted">—</span>'}</span>`;
+  hero += `<h1 class="title">${esc(L.title || '(untitled)')}</h1>`;
+  if (L.subtitle) hero += `<p class="subtitle">${esc(L.subtitle)}</p>`;
+  hero += `<div class="rec-actions">`;
+  hero += `<a class="btn primary" href="/cover.html?${q}">Edit cover</a>`;
+  hero += `<a class="btn" href="/preview.html?${q}">Preview interior</a>`;
   hero += `</div>`;
+  hero += `</div>`; // .rec-id
+  hero += `</div>`; // .record
+  hero += pipelineStrip(d, LANG);
   hero += `</div></div>`;
   $('hero').innerHTML = hero;
 
-  // ---- edition cards ----
-  let html = `<div class="langgrid">`;
-  langs.forEach((lang) => { html += langCard(d, lang); });
+  // ---- body: stats + Build/Readiness/KDP sections for the active language ----
+  const rid = `rd-${LANG}`;
+  let html = statStrip(L);
+  html += `<div class="sections">`;
+  html += `<details class="disc" open>`;
+  html += `<summary class="discsum"><span>Build &amp; outputs</span><button class="iconbtn genall" data-genall="${LANG}" title="Generate all ${LANG.toUpperCase()} outputs" aria-label="Generate all ${LANG.toUpperCase()} outputs">${GEN_ICON}</button></summary>`;
+  html += `<div id="out-${LANG}"><p class="muted"><span class="spin"></span> loading…</p></div>`;
+  html += `<div class="outlog" id="outlog-${LANG}"></div>`;
+  html += `</details>`;
+  html += `<details class="disc"><summary>Publish readiness</summary>`;
+  html += `<div class="rhead"><button class="btn sm" id="${rid}-btn">Check readiness</button>`;
+  html += `<span class="pills" id="${rid}-pills"></span>`;
+  html += `<span class="verdict" id="${rid}-verdict" style="display:none"></span></div>`;
+  html += `<div id="${rid}-body"><p class="muted">Runs epubcheck + geometry + DPI + cover + house rules.</p></div>`;
+  html += `</details>`;
+  html += `<details class="disc"><summary>KDP listing details</summary>${kdpBlock(L)}</details>`;
   html += `</div>`;
   $('main').innerHTML = html;
 
-  // Wire per-language controls + lazy-load the outputs list.
-  langs.forEach((lang) => {
-    const ga = document.querySelector(`[data-genall="${lang}"]`);
-    if (ga) ga.onclick = (e) => { e.preventDefault(); e.stopPropagation(); generateAll(d.slug, lang); };
-    const rb = $(`rd-${lang}-btn`);
-    if (rb) rb.onclick = () => checkReadiness(d.slug, lang);
-    loadOutputs(d.slug, lang);
-  });
+  // ---- wire the active language's controls ----
+  const ga = document.querySelector(`[data-genall="${LANG}"]`);
+  if (ga) ga.onclick = (e) => { e.preventDefault(); e.stopPropagation(); generateAll(d.slug, LANG); };
+  const rb = $(`${rid}-btn`);
+  if (rb) rb.onclick = () => checkReadiness(d.slug, LANG);
+  loadOutputs(d.slug, LANG);
+
+  const seg = $('langSeg');
+  if (seg) {
+    seg.querySelectorAll('button[data-lang]').forEach((b) => {
+      b.onclick = () => {
+        if (b.dataset.lang === LANG) return;
+        LANG = b.dataset.lang;
+        renderActive(d);
+        a11y.announce(`${LANG.toUpperCase()} edition`);
+      };
+    });
+  }
 }
 
-// The publishing pipeline as an at-a-glance strip: each step aggregates both
-// languages so you see the book's overall state without scrolling.
-// Interior (KDP PDF built) → Cover (front rendered) → Listing (KDP fields) →
-// Published (the [status] ribbon).
-function pipelineStrip(d) {
-  const langs = d.languages || [];
-  const L = (l) => d.langs[l] || {};
+// The publishing pipeline for the active language: Interior (KDP PDF built) →
+// Cover (front rendered) → Listing (KDP fields) → Published (the [status] ribbon).
+function pipelineStrip(d, lang) {
+  const L = d.langs[lang] || {};
+  const st = (b) => (b ? 'done' : 'idle');
+  const interior = st(L.kdpPdfExists);
+  const cover = st(L.coverExists);
+  const listing = listingComplete(L.listing, L.title) ? 'done' : L.listing ? 'warn' : 'idle';
 
-  // roll up a boolean predicate across languages into a step state
-  const roll = (pred) => {
-    const vals = langs.map(pred);
-    const done = vals.filter(Boolean).length;
-    if (!langs.length) return 'idle';
-    if (done === langs.length) return 'done';
-    if (done === 0) return 'idle';
-    return 'warn';
-  };
-
-  const interior = roll((l) => L(l).kdpPdfExists);
-  const cover = roll((l) => L(l).coverExists);
-  const listing = roll((l) => listingComplete(L(l).listing, L(l).title));
-
-  const pagesMeta = langs.map((l) => L(l).pages).filter((p) => p != null);
-  const interiorMeta = pagesMeta.length ? pagesMeta.join(' · ') + ' pp' : 'not built';
-  const coverMeta = cover === 'done' ? 'rendered' : cover === 'warn' ? 'partial' : 'not rendered';
-  const listingMeta = listing === 'done' ? 'complete' : listing === 'warn' ? 'partial' : 'incomplete';
+  const interiorMeta = L.pages != null ? `${L.pages} pp` : 'not built';
+  const coverMeta = L.coverExists ? 'rendered' : 'not rendered';
+  const listingMeta = listing === 'done' ? 'complete' : listing === 'warn' ? 'partial' : 'no listing';
 
   const pub = d.status || 'draft';
   const pubMap = { live: ['done', 'Live on KDP'], 'in-review': ['warn', 'In review'],
@@ -192,54 +227,7 @@ function listingComplete(li, title) {
   return kw === 7 && bc >= 2 && bc <= 3 && !!li.readingAge && blurbOk;
 }
 
-// One language column: cover + title + primary actions, then two disclosures
-// (Build & outputs, Publish readiness) so depth is one click away, not a scroll.
-function langCard(d, lang) {
-  const L = d.langs[lang] || {};
-  const rid = `rd-${lang}`;
-  const q = `book=${encodeURIComponent(d.slug)}&lang=${encodeURIComponent(lang)}`;
-  const coverUrl = `/api/asset/${encodeURIComponent(d.slug)}/${encodeURIComponent(lang)}/rendered`;
-  const wrapUrl = `/api/output/${encodeURIComponent(d.slug)}/${encodeURIComponent(lang)}/wrap-cover`;
-
-  let h = `<div class="card langcard">`;
-  h += `<div class="lgrid">`;
-  h += `<div class="lcover">`;
-  h += `<img src="${coverUrl}" alt="${escAttr(L.title || d.slug)} — ${lang.toUpperCase()} cover" loading="lazy" onerror="this.outerHTML='<div class=&quot;fakecover&quot;>${escAttr(L.title || d.slug)}</div>'" />`;
-  h += `<a class="wraplink" href="${wrapUrl}" target="_blank" rel="noopener">wrap PDF ↗</a>`;
-  h += `</div>`;
-  h += `<div class="lmain">`;
-  h += `<div class="lh"><span class="code">${lang.toUpperCase()}</span><span class="title">${esc(L.title || '(untitled)')}</span></div>`;
-  if (L.subtitle) h += `<div class="lsub">${esc(L.subtitle)}</div>`;
-  h += statStrip(L);
-  h += `</div>`; // .lmain
-  h += `</div>`; // .lgrid
-
-  // Build & outputs disclosure — "Generate all" is an icon button on the summary row.
-  h += `<details class="disc">`;
-  h += `<summary class="discsum"><span>Build &amp; outputs</span><button class="iconbtn genall" data-genall="${lang}" title="Generate all">${GEN_ICON}</button></summary>`;
-  h += `<div id="out-${lang}"><p class="muted"><span class="spin"></span> loading…</p></div>`;
-  h += `<div class="outlog" id="outlog-${lang}"></div>`;
-  h += `</details>`;
-
-  // Publish readiness disclosure
-  h += `<details class="disc">`;
-  h += `<summary>Publish readiness</summary>`;
-  h += `<div class="rhead">`;
-  h += `<button class="btn sm" id="${rid}-btn">Check readiness</button>`;
-  h += `<span class="pills" id="${rid}-pills"></span>`;
-  h += `<span class="verdict" id="${rid}-verdict" style="display:none"></span>`;
-  h += `</div>`;
-  h += `<div id="${rid}-body"><p class="muted">Runs epubcheck + geometry + DPI + cover + house rules.</p></div>`;
-  h += `</details>`;
-
-  // KDP listing details (headline facts already live in the stat strip above)
-  h += `<details class="disc"><summary>KDP listing details</summary>${kdpBlock(L)}</details>`;
-
-  h += `</div>`; // .card
-  return h;
-}
-
-// Always-visible headline stats for an edition: the four numbers you check most.
+// Always-visible headline stats for the active language: the four numbers you check most.
 function statStrip(L) {
   const li = L.listing || null;
   const kw = li ? (li.keywords || []).length : 0;
