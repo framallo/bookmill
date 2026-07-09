@@ -55,6 +55,7 @@ const APP_JS: &str = include_str!("../../web/static/app.js");
 const PREVIEW_HTML: &str = include_str!("../../web/static/preview.html");
 const PREVIEW_JS: &str = include_str!("../../web/static/preview.js");
 const APP_CSS: &str = include_str!("../../web/static/app.css");
+const A11Y_JS: &str = include_str!("../../web/static/a11y.js");
 
 /// The currently-open books repo, in both models the server needs:
 ///   * `repo` — the cover/IO model (`toml_edit`-based, used by the cover editor).
@@ -112,6 +113,7 @@ async fn serve(repo_root: PathBuf, port: u16, pages: u32) -> Result<()> {
         .route("/cover.html", get(cover_html))
         .route("/app.js", get(app_js))
         .route("/app.css", get(app_css))
+        .route("/a11y.js", get(a11y_js))
         .route("/preview.html", get(preview_html))
         .route("/preview.js", get(preview_js))
         // projects (Open Folder / Open Recent)
@@ -206,6 +208,9 @@ async fn app_js() -> impl IntoResponse {
 }
 async fn app_css() -> impl IntoResponse {
     ([(header::CONTENT_TYPE, "text/css")], APP_CSS)
+}
+async fn a11y_js() -> impl IntoResponse {
+    js(A11Y_JS)
 }
 async fn preview_js() -> impl IntoResponse {
     js(PREVIEW_JS)

@@ -204,7 +204,7 @@ function langCard(d, lang) {
   let h = `<div class="card langcard">`;
   h += `<div class="lgrid">`;
   h += `<div class="lcover">`;
-  h += `<img src="${coverUrl}" alt="cover" onerror="this.outerHTML='<div class=&quot;fakecover&quot;>${escAttr(L.title || d.slug)}</div>'" />`;
+  h += `<img src="${coverUrl}" alt="${escAttr(L.title || d.slug)} — ${lang.toUpperCase()} cover" loading="lazy" onerror="this.outerHTML='<div class=&quot;fakecover&quot;>${escAttr(L.title || d.slug)}</div>'" />`;
   h += `<a class="wraplink" href="${wrapUrl}" target="_blank" rel="noopener">wrap PDF ↗</a>`;
   h += `</div>`;
   h += `<div class="lmain">`;
@@ -338,8 +338,10 @@ async function generateOutput(bslug, lang, kind, label) {
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
     log.textContent = (data.ok ? '✓ ' : '✗ ') + `${label}\n\n` + (data.log || '');
+    a11y.announce(data.ok ? `${label} built` : `${label} build failed`);
   } catch (e) {
     log.textContent = `✗ ${label}\n\n` + ((e && e.message) || e);
+    a11y.announce(`${label} build failed`);
   } finally {
     if (genBtn) { genBtn.disabled = false; genBtn.innerHTML = GEN_ICON + '<span>Generate</span>'; }
     await loadOutputs(bslug, lang);
@@ -352,6 +354,7 @@ async function generateAll(bslug, lang) {
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin"></span>'; }
   log.style.display = '';
   log.textContent = `Building everything for ${bslug} · ${lang.toUpperCase()}…\n`;
+  a11y.announce(`Building all ${lang.toUpperCase()} outputs…`);
   try {
     const res = await fetch(`/api/build/${encodeURIComponent(bslug)}/${encodeURIComponent(lang)}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'all' }),
@@ -359,8 +362,10 @@ async function generateAll(bslug, lang) {
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
     log.textContent = (data.ok ? '✓ ' : '✗ ') + `all outputs\n\n` + (data.log || '');
+    a11y.announce(data.ok ? `All ${lang.toUpperCase()} outputs built` : `Build failed for ${lang.toUpperCase()}`);
   } catch (e) {
     log.textContent = '✗ generate all\n\n' + ((e && e.message) || e);
+    a11y.announce(`Build failed for ${lang.toUpperCase()}`);
   } finally {
     if (btn) { btn.disabled = false; btn.innerHTML = GEN_ICON; }
     await loadOutputs(bslug, lang);
@@ -437,6 +442,7 @@ function renderReadiness(bslug, lang, data) {
   vd.className = `verdict ${vcls}`;
   vd.innerHTML = `${VICON[vcls]} ${esc(vtext)}`;
   vd.style.display = '';
+  a11y.announce(`${lang.toUpperCase()} readiness: ${vtext}. ${oks} ok, ${warns} warnings, ${errs} errors.`);
 
   const groups = new Map();
   KINDS.forEach((k) => groups.set(k.key, { label: k.label, items: [] }));

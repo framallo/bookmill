@@ -101,15 +101,15 @@
 <div class="layout">
   <div class="stagewrap">
     <div class="navbar">
-      <button id="first">⏮</button>
+      <button id="first" aria-label="First spread">⏮</button>
       <button id="prev">◀ prev</button>
-      <span class="pglabel" id="pglabel">—</span>
+      <span class="pglabel tnum" id="pglabel" aria-live="polite">—</span>
       <button id="next">next ▶</button>
-      <button id="last">⏭</button>
+      <button id="last" aria-label="Last spread">⏭</button>
       <span style="width:14px"></span>
-      <span class="muted">page</span>
+      <label class="muted" for="jump">page</label>
       <input id="jump" type="number" min="1" style="width:70px" />
-      <button id="go">go</button>
+      <button id="go" aria-label="Go to page">go</button>
     </div>
     <div id="stage"></div>
     <div class="legend">
@@ -134,6 +134,7 @@
     <div class="hc-close">Press <kbd>Esc</kbd> or <kbd>?</kbd> to close</div>
   </div>
 </div>
+<script src="/a11y.js"></script>
 <script src="/preview.js"></script>
 </body>
 </html>

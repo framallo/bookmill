@@ -11,9 +11,11 @@
   html, body { height:100%; }
   body { display:flex; flex-direction:column; }
 
-  /* ---- top bar: title left, search center, icons right ---- */
-  header { height:56px; flex:0 0 auto; display:flex; align-items:center; gap:18px;
-           padding:0 18px; background:var(--panel); border-bottom:1px solid var(--line); }
+  /* ---- top bar: title left, search center, icons right (shares the .appbar
+         surface tokens used by the other pages so all four read as one system) ---- */
+  header { height:var(--appbar-h); flex:0 0 auto; display:flex; align-items:center; gap:18px;
+           padding:0 18px; background:linear-gradient(180deg,#1b222c,#171d26);
+           border-bottom:1px solid var(--line); box-shadow:0 1px 0 rgba(255,255,255,.02) inset; }
   .brand { display:flex; align-items:center; gap:9px; min-width:150px; }
   .brand .logo { width:22px; height:22px; color:var(--accent); }
   .brand h1 { font-size:17px; margin:0; font-weight:600; letter-spacing:.2px; }
@@ -35,7 +37,7 @@
   .iconbtn svg { width:18px; height:18px; }
   .iconbtn:hover { color:var(--ink); background:var(--panel2); }
   .iconbtn.active { color:var(--accent); border-color:var(--line); }
-  .count { color:var(--muted); font-size:12px; margin-left:6px; white-space:nowrap; }
+  .count { color:var(--muted); font-size:12px; margin-left:6px; white-space:nowrap; font-variant-numeric:tabular-nums; }
 
   /* ---- sort/filter drop sheet ---- */
   .sheet { position:absolute; right:14px; top:52px; z-index:10; background:var(--panel);
@@ -140,9 +142,13 @@
   .ca-head h3 { margin:0; }
   .carow { display:flex; align-items:center; gap:10px; padding:6px 9px; border-radius:7px; background:var(--panel2);
            border:1px solid var(--line); margin-bottom:5px; font-size:12.5px; }
-  .carow .caslug { font-family:ui-monospace,Menlo,monospace; color:var(--ink); flex:1;
+  .carow .caslug { font-family:var(--font-mono); color:var(--ink); flex:1;
                    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .carow .calang { color:var(--muted); font-size:11px; }
+  /* determinate sweep progress */
+  .cabar { display:block; height:4px; border-radius:2px; background:var(--panel3); overflow:hidden; margin-top:7px; }
+  .cabar-fill { display:block; height:100%; background:linear-gradient(90deg,var(--accent-2),var(--accent));
+                border-radius:2px; transition:width .2s var(--ease); }
 </style>
 </head>
 <body>
@@ -162,6 +168,7 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
     </svg>
+    <label for="q" class="sr-only">Search books by title or slug</label>
     <input id="q" type="search" placeholder="Search Book Titles" autocomplete="off" />
   </div>
 
@@ -191,9 +198,10 @@
 
   <!-- projects drop sheet: Open Folder (path field) + Open Recent list -->
   <div class="sheet projsheet" id="projSheet">
-    <div class="lbl">Open folder</div>
+    <div class="lbl" id="projPathLbl">Open folder</div>
     <div class="openrow">
-      <input id="projPath" type="text" spellcheck="false" placeholder="/absolute/path/to/books-repo" autocomplete="off" />
+      <input id="projPath" type="text" spellcheck="false" placeholder="/absolute/path/to/books-repo"
+             autocomplete="off" aria-labelledby="projPathLbl" />
       <button id="projOpen">Open</button>
     </div>
     <div class="projerr" id="projErr" style="display:none"></div>
@@ -244,6 +252,7 @@
     <div class="hc-close">Press <kbd>Esc</kbd> or <kbd>?</kbd> to close</div>
   </div>
 </div>
+<script src="/a11y.js"></script>
 <script src="/home.js"></script>
 </body>
 </html>

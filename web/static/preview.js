@@ -85,13 +85,16 @@ function switchLang(l) {
 // box, t/b/s toggle guides, `?` toggles help. Ignored while typing in a field.
 function wireShortcuts() {
   const overlay = $('helpOverlay');
-  const toggleHelp = () => overlay.classList.toggle('open');
+  let helpClose = null;
+  const openHelp = () => { overlay.classList.add('open'); helpClose = a11y.openDialog(overlay); };
+  const shutHelp = () => { overlay.classList.remove('open'); if (helpClose) { helpClose(); helpClose = null; } };
+  const toggleHelp = () => (overlay.classList.contains('open') ? shutHelp() : openHelp());
   $('helpBtn').addEventListener('click', toggleHelp);
-  overlay.addEventListener('click', () => overlay.classList.remove('open'));
+  overlay.addEventListener('click', shutHelp);
   const toggle = (id) => { const el = $(id); el.checked = !el.checked; draw(); };
 
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { overlay.classList.remove('open'); return; }
+    if (e.key === 'Escape') { shutHelp(); return; }
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable;
     if (typing) return;
@@ -362,6 +365,7 @@ function renderWarnings(data) {
     `<span class="pill ok">${s.ok || 0} ok</span>` +
     `<span class="pill warn">${s.warn || 0} warn</span>` +
     `<span class="pill err">${s.error || 0} error</span>`;
+  a11y.announce(`Validation complete: ${s.ok || 0} ok, ${s.warn || 0} warnings, ${s.error || 0} errors`);
 
   $('resultsPanel').classList.add('open');
   warnPages = new Set();

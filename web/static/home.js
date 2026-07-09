@@ -35,8 +35,10 @@ async function init() {
 // a verdict per target that links to that book/lang.
 function wireCheckAll() {
   const overlay = $('caOverlay');
-  const close = () => overlay.classList.remove('open');
-  $('checkAllBtn').addEventListener('click', () => overlay.classList.add('open'));
+  let dlgClose = null;
+  const open = () => { overlay.classList.add('open'); dlgClose = a11y.openDialog(overlay, { focus: '#caRun' }); };
+  const close = () => { overlay.classList.remove('open'); if (dlgClose) { dlgClose(); dlgClose = null; } };
+  $('checkAllBtn').addEventListener('click', open);
   $('caClose').addEventListener('click', close);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   $('caRun').addEventListener('click', runCheckAll);
@@ -50,6 +52,7 @@ async function runCheckAll() {
   btn.disabled = true;
   const jobs = [];
   BOOKS.forEach((b) => (b.languages || []).forEach((l) => jobs.push({ slug: b.slug, lang: l })));
+  a11y.announce(`Checking ${jobs.length} targets for publish readiness`);
   rows.innerHTML = '';
   const rowEls = {};
   jobs.forEach((j) => {
@@ -77,10 +80,13 @@ async function runCheckAll() {
       row.innerHTML = caLabel(j) + `<span class="err-msg">${esc((e && e.message) || e)}</span>`;
     }
     done++;
+    const pct = Math.round((done / jobs.length) * 100);
     status.innerHTML = done < jobs.length
-      ? `<span class="spin"></span> checked ${done}/${jobs.length}…`
+      ? `<span class="spin"></span> checked ${done}/${jobs.length}…` +
+        `<span class="cabar"><span class="cabar-fill" style="width:${pct}%"></span></span>`
       : `Done — ${jobs.length} target${jobs.length === 1 ? '' : 's'} checked.`;
   }
+  a11y.announce(`Publish-readiness check complete for ${jobs.length} targets`);
   btn.disabled = false;
   btn.textContent = 'Re-run check';
 }
@@ -225,14 +231,17 @@ function showProjErr(msg) {
 function wireShortcuts() {
   const q = $('q');
   const overlay = $('helpOverlay');
-  const toggleHelp = () => overlay.classList.toggle('open');
+  let helpClose = null;
+  const openHelp = () => { overlay.classList.add('open'); helpClose = a11y.openDialog(overlay); };
+  const shutHelp = () => { overlay.classList.remove('open'); if (helpClose) { helpClose(); helpClose = null; } };
+  const toggleHelp = () => (overlay.classList.contains('open') ? shutHelp() : openHelp());
   $('helpBtn').addEventListener('click', toggleHelp);
-  overlay.addEventListener('click', () => overlay.classList.remove('open'));
+  overlay.addEventListener('click', shutHelp);
 
   document.addEventListener('keydown', (e) => {
     const typing = e.target === q || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable;
     if (e.key === 'Escape') {
-      if (overlay.classList.contains('open')) { overlay.classList.remove('open'); return; }
+      if (overlay.classList.contains('open')) { shutHelp(); return; }
       if (e.target === q) { q.value = ''; state.q = ''; render(); q.blur(); }
       else if (sel >= 0) { sel = -1; applySel(false); }
       return;

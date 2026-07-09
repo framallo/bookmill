@@ -318,15 +318,18 @@ function bindStyleInputs() {
 
 function wireShortcuts() {
   const overlay = $('helpOverlay');
-  const toggleHelp = () => overlay.classList.toggle('open');
+  let helpClose = null;
+  const openHelp = () => { overlay.classList.add('open'); helpClose = a11y.openDialog(overlay); };
+  const shutHelp = () => { overlay.classList.remove('open'); if (helpClose) { helpClose(); helpClose = null; } };
+  const toggleHelp = () => (overlay.classList.contains('open') ? shutHelp() : openHelp());
   $('helpBtn').addEventListener('click', toggleHelp);
-  overlay.addEventListener('click', () => overlay.classList.remove('open'));
+  overlay.addEventListener('click', shutHelp);
   document.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S')) {
       e.preventDefault(); if (!$('saveBtn').disabled) save(); return;
     }
     if (e.key === 'Escape') {
-      if (overlay.classList.contains('open')) { overlay.classList.remove('open'); return; }
+      if (overlay.classList.contains('open')) { shutHelp(); return; }
       if (current) select(null);
       return;
     }
@@ -391,8 +394,10 @@ async function save() {
     data.layout_saved = true;
     await renderStage();                    // reload the authoritative SVG
     status(r.ok ? 'saved + rendered' : 'saved (render failed)');
+    a11y.announce(r.ok ? 'Cover saved and re-rendered' : 'Cover saved, but render failed');
   } catch (e) {
     status('error: ' + e);
+    a11y.announce('Cover save failed');
   } finally {
     $('saveBtn').disabled = false;
   }

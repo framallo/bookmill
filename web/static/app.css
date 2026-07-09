@@ -133,6 +133,14 @@ h2.sec { font-size:11.5px; text-transform:uppercase; letter-spacing:.08em; color
 @keyframes spin { to { transform:rotate(360deg); } }
 .muted { color:var(--muted); }
 .err-msg { color:var(--err); white-space:pre-wrap; }
+/* tabular figures for data columns / counters — stop width jitter as they change */
+.tnum { font-variant-numeric:tabular-nums; font-feature-settings:"tnum" 1; }
+
+/* visually-hidden but screen-reader-available (live regions, off-screen labels) */
+.sr-only {
+  position:absolute !important; width:1px; height:1px; padding:0; margin:-1px;
+  overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0;
+}
 
 /* ---- shared help button + overlay -------------------------------------- */
 .helpbtn { position:fixed; right:16px; bottom:16px; z-index:20; width:36px; height:36px;

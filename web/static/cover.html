@@ -68,36 +68,36 @@
     <div id="blockPane" style="display:none">
       <h3 id="selName">Title</h3>
       <div class="field">
-        <label>Text</label>
+        <label for="selText">Text</label>
         <textarea id="selText"></textarea>
       </div>
       <div class="field">
-        <label>Fill color</label>
+        <label for="selFill">Fill color</label>
         <div class="row">
           <input type="color" id="selFill" />
-          <input type="text" id="selFillHex" />
+          <input type="text" id="selFillHex" aria-label="Fill color hex value" />
         </div>
       </div>
       <div class="field">
-        <label>Font size</label>
+        <label for="selSize">Font size</label>
         <input type="text" id="selSize" />
       </div>
     </div>
 
     <!-- Contextual: the background is clicked (front view). -->
     <div id="bgPane" style="display:none">
-      <h3>Background color</h3>
+      <h3 id="bgPaneH">Background color</h3>
       <div class="row">
-        <input type="color" id="bgcolor" />
-        <input type="text" id="bgcolorHex" />
+        <input type="color" id="bgcolor" aria-labelledby="bgPaneH" />
+        <input type="text" id="bgcolorHex" aria-label="Background color hex value" />
       </div>
     </div>
 
     <!-- Wrap default: the back-cover blurb. -->
     <div id="wrapPane" style="display:none">
-      <h3>Back-cover blurb</h3>
+      <h3 id="blurbH">Back-cover blurb</h3>
       <div class="field">
-        <textarea id="blurbText" style="min-height:150px"></textarea>
+        <textarea id="blurbText" style="min-height:150px" aria-labelledby="blurbH"></textarea>
       </div>
       <div class="hint">Drag the blurb / badge / author boxes on the back panel; click a box to edit it. Keep the bottom-right barcode zone clear.</div>
       <a class="navlink" id="openWrap" href="#" target="_blank" rel="noopener"
@@ -137,6 +137,7 @@
     <div class="hc-close">Press <kbd>Esc</kbd> or <kbd>?</kbd> to close</div>
   </div>
 </div>
+<script src="/a11y.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>
