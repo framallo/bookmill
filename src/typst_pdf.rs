@@ -60,6 +60,7 @@ pub fn run(
     captions: bool,
     retail: bool,
     grayscale: bool,
+    auto_grayscale: bool,
     cover: Option<&Path>,
     geometry: Option<PageGeometry>,
     lang: &str,
@@ -75,7 +76,7 @@ pub fn run(
 
     // Compile natively. The World resolves images under the repo root, exactly
     // as the CLI's `--root <repo.root>` did.
-    let world = BookWorld::new(repo.root.clone(), doc, grayscale)?;
+    let world = BookWorld::new(repo.root.clone(), doc, grayscale, auto_grayscale)?;
     let result = typst::compile::<PagedDocument>(&world);
     let document = result.output.map_err(|diags| {
         anyhow!(
@@ -179,13 +180,17 @@ struct BookWorld {
     fonts: &'static FontStore,
     main_id: FileId,
     main: Source,
-    /// Convert raster image files to grayscale as they are read (KDP/POD print
-    /// interiors, so the paperback prints B&W while EPUB/retail keep color).
+    /// This is a B&W (black-ink) print interior: apply the print grayscale split
+    /// (EPUB/retail pass false and keep color). Enables `{bw=…}` variant reads.
     grayscale: bool,
+    /// When grayscale, also naively luma-convert images that have NO `{bw=…}`
+    /// variant. Off by default (config `[pdf].auto_grayscale`); when off, non-bw
+    /// images are left untouched (KDP still prints black-ink interiors in gray).
+    auto_grayscale: bool,
 }
 
 impl BookWorld {
-    fn new(root: PathBuf, markup: String, grayscale: bool) -> Result<Self> {
+    fn new(root: PathBuf, markup: String, grayscale: bool, auto_grayscale: bool) -> Result<Self> {
         // Main source lives at a fixed project-rooted vpath; image paths in the
         // markup are absolute (`/images/…`) so they resolve from `root`.
         let vpath = VirtualPath::new("/.typst-build.typ")
@@ -199,6 +204,7 @@ impl BookWorld {
             main_id,
             main,
             grayscale,
+            auto_grayscale,
         })
     }
 
@@ -243,8 +249,11 @@ impl World for BookWorld {
         //   1. The markdown `{bw=…}` attribute already swapped in a pre-made
         //      grayscale variant (see emit_blocks; print build only). That path
         //      lives in a `bw/` directory and is read verbatim — no re-encode, so
-        //      a hand-tuned print variant survives untouched.
-        //   2. Otherwise bookmill converts the color image to grayscale on the fly.
+        //      a hand-tuned print variant survives untouched. Always applied.
+        //   2. On-the-fly luma conversion of an image WITHOUT a `{bw=…}` variant —
+        //      only when `auto_grayscale` is enabled (config `[pdf].auto_grayscale`,
+        //      default off). When off, non-bw images are read as-is (color); KDP
+        //      still prints a black-ink interior in grayscale at press time.
         // On any read/decode failure it falls back to the original bytes so the
         // build never breaks over the split.
         if self.grayscale && is_raster_image(&path) {
@@ -252,8 +261,10 @@ impl World for BookWorld {
                 let data = std::fs::read(&path).map_err(|e| FileError::from_io(e, &path))?;
                 return Ok(Bytes::new(data));
             }
-            let data = std::fs::read(&path).map_err(|e| FileError::from_io(e, &path))?;
-            return Ok(Bytes::new(to_grayscale(&data).unwrap_or(data)));
+            if self.auto_grayscale {
+                let data = std::fs::read(&path).map_err(|e| FileError::from_io(e, &path))?;
+                return Ok(Bytes::new(to_grayscale(&data).unwrap_or(data)));
+            }
         }
         let data = std::fs::read(&path).map_err(|e| FileError::from_io(e, &path))?;
         Ok(Bytes::new(data))

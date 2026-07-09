@@ -75,6 +75,9 @@ pub struct Defaults {
     pub fonts: Option<Fonts>,
     /// repo-wide default print margins (inches); books override via [pdf.margins]
     pub margins: Option<Margins>,
+    /// repo-wide default for auto-grayscaling non-`{bw=…}` print images (default
+    /// false); a book overrides via `[pdf].auto_grayscale`. See resolve_auto_grayscale.
+    pub auto_grayscale: Option<bool>,
 }
 
 /// Print page margins, in inches. Resolved per field: book [pdf.margins] wins,
@@ -456,6 +459,13 @@ pub struct PdfOpts {
     /// plates caption-free (the alt still ships as EPUB accessibility text). A
     /// per-edition `[editions.<name>].captions` overrides this (e.g. hide on KDP).
     pub plate_captions: Option<bool>,
+    /// auto-convert color interior images to grayscale on the fly for the B&W
+    /// (black-ink) print PDF. **Default false** — off unless a book opts in.
+    /// When off, only images that declare an explicit `{bw=…}` variant become
+    /// grayscale in the print interior; everything else stays as-is (KDP still
+    /// prints a black-ink interior in grayscale at press time). When true,
+    /// bookmill also naively luma-converts any image lacking a `{bw=…}` variant.
+    pub auto_grayscale: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
@@ -638,6 +648,16 @@ pub fn resolve_captions(edition: Option<&Edition>, book: &BookConfig) -> bool {
         .and_then(|e| e.captions)
         .or(book.pdf.plate_captions)
         .unwrap_or(true)
+}
+
+/// Resolve whether bookmill auto-grayscales non-`{bw=…}` interior images for the
+/// black-ink print PDF: book `[pdf].auto_grayscale` → repo `[defaults].auto_grayscale`
+/// → default `false` (off). Explicit `{bw=…}` variants are always used regardless.
+pub fn resolve_auto_grayscale(book: &BookConfig, repo: &RepoConfig) -> bool {
+    book.pdf
+        .auto_grayscale
+        .or(repo.defaults.auto_grayscale)
+        .unwrap_or(false)
 }
 
 /// Validate an ISBN-13 (checksum + 13 digits). Hyphens/spaces are ignored.

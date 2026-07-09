@@ -630,6 +630,10 @@ fn build_one(
     // grayscale for the KDP/POD print interior only (matches what KDP physically
     // prints). The retail digital PDF and the Kindle EPUB keep the images in color.
     let print_grayscale = crate::config::resolve_ink(ed_cfg, book, &repo.config) == "black";
+    // Auto-grayscale of non-`{bw=…}` images is opt-in (default off): explicit bw=
+    // variants are always used, but naive luma conversion only runs if the book
+    // enables `[pdf].auto_grayscale`.
+    let auto_grayscale = crate::config::resolve_auto_grayscale(book, &repo.config);
 
     match out {
         Out::RetailEpub => {
@@ -661,6 +665,7 @@ fn build_one(
                 captions,
                 true,
                 false,
+                false,
                 cover.as_deref(),
                 geometry,
                 lang,
@@ -687,6 +692,7 @@ fn build_one(
                 captions,
                 false,
                 print_grayscale,
+                auto_grayscale,
                 None,
                 geometry,
                 lang,
