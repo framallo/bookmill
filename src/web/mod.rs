@@ -401,11 +401,17 @@ async fn api_book(
     let act = st.active.read().unwrap();
     let (cfg, _dir) = act.disco.find_book(&slug).map_err(err)?;
     let author = cfg.meta.author.clone().unwrap_or_else(|| act.repo.author.clone());
+    // Repo-level Book (for cover asset lookup); may be absent if discovery differs.
+    let book = act.repo.find_book(&slug).ok();
 
     let mut langs = serde_json::Map::new();
     for lang in &cfg.languages {
         let pdf = kdp_pdf_path(&act.disco.root, &slug, lang);
         let pages = if pdf.exists() { pdf_pages(&pdf) } else { None };
+        let cover_exists = book
+            .as_ref()
+            .map(|b| cover::best_rendered_path(&act.repo, b, lang).is_some())
+            .unwrap_or(false);
         let listing = cfg.listing.get(lang).map(|l| {
             serde_json::json!({
                 "keywords": l.keywords,
@@ -420,6 +426,7 @@ async fn api_book(
                 "title": cfg.title.get(lang),
                 "subtitle": cfg.subtitle.get(lang),
                 "kdpPdfExists": pdf.exists(),
+                "coverExists": cover_exists,
                 "pages": pages,
                 "listing": listing,
             }),

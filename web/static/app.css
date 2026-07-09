@@ -24,12 +24,24 @@
   /* --- spacing scale (4·n) --- */
   --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px; --s7:48px;
   --appbar-h:56px;
+  /* --- type families --- an editorial serif for display headings (ui-serif is
+     New York on macOS, Georgia elsewhere — no web font, no network), a clean
+     system sans for UI chrome, and a mono for slugs/logs. */
+  --font-display:ui-serif,"New York","Iowan Old Style",Georgia,"Times New Roman",serif;
+  --font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;
+  --font-mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  /* --- warm accent glow, for hero art + focus states --- */
+  --accent-soft:rgba(224,182,74,.12); --accent-line:rgba(224,182,74,.32);
 }
 * { box-sizing:border-box; }
 body { margin:0; background:var(--bg); color:var(--ink);
-       font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;
+       font:14px/1.5 var(--font-sans);
        -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; }
 ::selection { background:rgba(224,182,74,.28); }
+
+/* editorial display heading — book titles, page heros */
+.display { font-family:var(--font-display); font-weight:600; letter-spacing:-.015em;
+           line-height:1.08; }
 
 /* consistent, subtle focus ring for keyboard users */
 :focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:6px; }
@@ -137,5 +149,39 @@ h2.sec { font-size:11.5px; text-transform:uppercase; letter-spacing:.08em; color
 .help-card table { border-collapse:collapse; font-size:13px; }
 .help-card td { padding:3px 10px 3px 0; color:var(--ink-2); }
 .help-card kbd { display:inline-block; min-width:16px; text-align:center; padding:1px 6px; border-radius:5px;
-                 background:var(--panel3); border:1px solid var(--line-strong); font:12px ui-monospace,Menlo,monospace; }
+                 background:var(--panel3); border:1px solid var(--line-strong); font:12px var(--font-mono); }
 .help-card .hc-close { color:var(--muted); font-size:11px; margin-top:14px; }
+
+/* ---- page hero (book / detail pages) ----------------------------------- */
+.pagehero { position:relative; overflow:hidden; border-bottom:1px solid var(--line);
+            background:radial-gradient(120% 140% at 0% 0%, #1c232e 0%, var(--bg) 62%); }
+.pagehero .inner { max-width:1120px; margin:0 auto; padding:var(--s6) var(--s5) var(--s5); }
+.pagehero h1.title { font-family:var(--font-display); font-weight:600; letter-spacing:-.02em;
+                     line-height:1.05; margin:0; font-size:clamp(26px,3.4vw,40px); }
+.pagehero .subtitle { font-family:var(--font-display); font-style:italic; color:var(--ink-2);
+                      font-size:clamp(15px,1.6vw,19px); margin:6px 0 0; }
+.pagehero .kicker { display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+                    color:var(--muted); font-size:12.5px; margin-bottom:12px; }
+.pagehero .kicker .slug { font-family:var(--font-mono); font-size:11.5px; }
+.pagehero .kicker b { color:var(--ink-2); font-weight:600; }
+
+/* ---- publishing pipeline strip (at-a-glance readiness) ----------------- */
+.pipeline { display:flex; gap:var(--s2); flex-wrap:wrap; margin-top:var(--s4); }
+.pstep { flex:1 1 130px; min-width:120px; position:relative; display:flex; flex-direction:column;
+         gap:5px; padding:11px 13px; border-radius:var(--radius); border:1px solid var(--line);
+         background:var(--panel); transition:border-color .12s var(--ease); }
+.pstep .pnum { display:inline-flex; align-items:center; gap:7px; font-size:10.5px; font-weight:700;
+               text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+.pstep .pdot { width:8px; height:8px; border-radius:50%; background:var(--faint); flex:0 0 auto; }
+.pstep .plabel { font-size:13px; font-weight:600; color:var(--ink); }
+.pstep .pmeta { font-size:11.5px; color:var(--muted); }
+.pstep.done { border-color:rgba(111,210,139,.28); } .pstep.done .pdot { background:var(--ok); }
+.pstep.warn { border-color:rgba(230,189,85,.28); } .pstep.warn .pdot { background:var(--warn); }
+.pstep.err  { border-color:rgba(236,125,124,.3); } .pstep.err  .pdot { background:var(--err); }
+.pstep.done .pnum { color:var(--ok); } .pstep.warn .pnum { color:var(--warn); } .pstep.err .pnum { color:var(--err); }
+
+/* ---- stat block (compact labelled figure) ------------------------------ */
+.stat { display:flex; flex-direction:column; gap:1px; }
+.stat .k { font-size:10.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); font-weight:600; }
+.stat .v { font-size:14px; color:var(--ink); font-weight:600; }
+.stat .v.mono { font-family:var(--font-mono); font-size:12.5px; font-weight:500; }

@@ -83,45 +83,105 @@ function wireNav() {
 // --- page render ------------------------------------------------------------
 
 function render(d) {
-  const firstTitle = (d.langs[d.languages[0]] && d.langs[d.languages[0]].title) || d.slug;
+  const langs = d.languages || [];
+  const firstTitle = (d.langs[langs[0]] && d.langs[langs[0]].title) || d.slug;
+  const firstSub = (d.langs[langs[0]] && d.langs[langs[0]].subtitle) || '';
   $('bookTitle').textContent = firstTitle;
 
-  const editions = (d.editions || []).map((e) => `<span class="tag">${esc(e)}</span>`).join('') || '<span class="muted">—</span>';
-
-  const firstLang = (d.languages || [])[0] || 'es';
+  const firstLang = langs[0] || 'es';
   const q0 = `book=${encodeURIComponent(d.slug)}&lang=${encodeURIComponent(firstLang)}`;
 
-  let html = '<div class="hero">';
-  html += `<div class="herotop"><h1>${esc(firstTitle)}</h1>${d.status ? statusBadge(d.status) : ''}</div>`;
-  html += `<div class="slug">${esc(d.slug)}</div>`;
-  html += `<div class="meta">`;
-  if (d.author) html += `<span>by <b>${esc(d.author)}</b></span>`;
-  if (d.series) html += `<span>${esc(d.series)}</span>`;
-  html += `<span>${(d.languages || []).map((l) => l.toUpperCase()).join(' · ')}</span>`;
-  if (d.protected) html += `<span class="tag prot">protected</span>`;
-  html += `<span style="display:inline-flex;gap:6px;align-items:center">editions: ${editions}</span>`;
-  html += `</div>`;
-  // One Edit / one Preview — the editor and previewer carry their own language
-  // tabs, so per-language buttons on the cards are redundant.
-  html += `<div class="hero-actions">`;
-  html += `<a class="btn primary" href="/cover.html?${q0}">Edit cover</a>`;
-  html += `<a class="btn" href="/preview.html?${q0}">Preview</a>`;
-  html += `</div></div>`;
+  // ---- hero: editorial title + kicker + pipeline + actions ----
+  const editions = (d.editions || []).map((e) => `<span class="tag">${esc(e)}</span>`).join('');
+  let hero = '<div class="pagehero"><div class="inner">';
+  hero += `<div class="kicker">`;
+  if (d.author) hero += `<span>by <b>${esc(d.author)}</b></span>`;
+  if (d.series) hero += `<span>·</span><span>${esc(d.series)}</span>`;
+  hero += `<span>·</span><span class="slug">${esc(d.slug)}</span>`;
+  if (d.protected) hero += `<span class="tag prot">protected</span>`;
+  hero += `</div>`;
+  hero += `<h1 class="title">${esc(firstTitle)}</h1>`;
+  if (firstSub) hero += `<p class="subtitle">${esc(firstSub)}</p>`;
+  hero += pipelineStrip(d);
+  hero += `<div class="hero-actions">`;
+  hero += `<a class="btn primary" href="/cover.html?${q0}">Edit cover</a>`;
+  hero += `<a class="btn" href="/preview.html?${q0}">Preview interior</a>`;
+  hero += `<span style="flex:1"></span>`;
+  hero += `<span class="kicker" style="margin:0">editions: ${editions || '<span class="muted">—</span>'}</span>`;
+  hero += `</div>`;
+  hero += `</div></div>`;
+  $('hero').innerHTML = hero;
 
-  html += `<div class="langgrid">`;
-  (d.languages || []).forEach((lang) => { html += langCard(d, lang); });
+  // ---- edition cards ----
+  let html = `<div class="langgrid">`;
+  langs.forEach((lang) => { html += langCard(d, lang); });
   html += `</div>`;
-
   $('main').innerHTML = html;
 
   // Wire per-language controls + lazy-load the outputs list.
-  (d.languages || []).forEach((lang) => {
+  langs.forEach((lang) => {
     const ga = document.querySelector(`[data-genall="${lang}"]`);
     if (ga) ga.onclick = (e) => { e.preventDefault(); e.stopPropagation(); generateAll(d.slug, lang); };
     const rb = $(`rd-${lang}-btn`);
     if (rb) rb.onclick = () => checkReadiness(d.slug, lang);
     loadOutputs(d.slug, lang);
   });
+}
+
+// The publishing pipeline as an at-a-glance strip: each step aggregates both
+// languages so you see the book's overall state without scrolling.
+// Interior (KDP PDF built) → Cover (front rendered) → Listing (KDP fields) →
+// Published (the [status] ribbon).
+function pipelineStrip(d) {
+  const langs = d.languages || [];
+  const L = (l) => d.langs[l] || {};
+
+  // roll up a boolean predicate across languages into a step state
+  const roll = (pred) => {
+    const vals = langs.map(pred);
+    const done = vals.filter(Boolean).length;
+    if (!langs.length) return 'idle';
+    if (done === langs.length) return 'done';
+    if (done === 0) return 'idle';
+    return 'warn';
+  };
+
+  const interior = roll((l) => L(l).kdpPdfExists);
+  const cover = roll((l) => L(l).coverExists);
+  const listing = roll((l) => listingComplete(L(l).listing, L(l).title));
+
+  const pagesMeta = langs.map((l) => L(l).pages).filter((p) => p != null);
+  const interiorMeta = pagesMeta.length ? pagesMeta.join(' · ') + ' pp' : 'not built';
+  const coverMeta = cover === 'done' ? 'rendered' : cover === 'warn' ? 'partial' : 'not rendered';
+  const listingMeta = listing === 'done' ? 'complete' : listing === 'warn' ? 'partial' : 'incomplete';
+
+  const pub = d.status || 'draft';
+  const pubMap = { live: ['done', 'Live on KDP'], 'in-review': ['warn', 'In review'],
+    blocked: ['err', 'Blocked'], draft: ['idle', 'Draft'] };
+  const [pubState, pubMeta] = pubMap[pub] || pubMap.draft;
+
+  const step = (n, label, state, meta) =>
+    `<div class="pstep ${state === 'idle' ? '' : state}">` +
+    `<span class="pnum"><span class="pdot"></span>${esc(n)}</span>` +
+    `<span class="plabel">${esc(label)}</span>` +
+    `<span class="pmeta">${esc(meta)}</span></div>`;
+
+  return `<div class="pipeline">` +
+    step('1', 'Interior', interior, interiorMeta) +
+    step('2', 'Cover', cover, coverMeta) +
+    step('3', 'Listing', listing, listingMeta) +
+    step('4', 'Published', pubState, pubMeta) +
+    `</div>`;
+}
+
+// A KDP listing counts as complete when it has a title, exactly 7 keywords,
+// 2–3 BISAC codes, a reading age, and a blurb within the 4000-char limit.
+function listingComplete(li, title) {
+  if (!li || !title) return false;
+  const kw = (li.keywords || []).length;
+  const bc = (li.bisac || []).length;
+  const blurbOk = li.blurbChars != null && li.blurbChars <= 4000;
+  return kw === 7 && bc >= 2 && bc <= 3 && !!li.readingAge && blurbOk;
 }
 
 // One language column: cover + title + primary actions, then two disclosures
@@ -142,6 +202,7 @@ function langCard(d, lang) {
   h += `<div class="lmain">`;
   h += `<div class="lh"><span class="code">${lang.toUpperCase()}</span><span class="title">${esc(L.title || '(untitled)')}</span></div>`;
   if (L.subtitle) h += `<div class="lsub">${esc(L.subtitle)}</div>`;
+  h += statStrip(L);
   h += `</div>`; // .lmain
   h += `</div>`; // .lgrid
 
@@ -163,10 +224,26 @@ function langCard(d, lang) {
   h += `<div id="${rid}-body"><p class="muted">Runs epubcheck + geometry + DPI + cover + house rules.</p></div>`;
   h += `</details>`;
 
-  // KDP listing facts (cheap; expanded by default)
-  h += `<details class="disc" open><summary>KDP listing</summary>${kdpBlock(L)}</details>`;
+  // KDP listing details (headline facts already live in the stat strip above)
+  h += `<details class="disc"><summary>KDP listing details</summary>${kdpBlock(L)}</details>`;
 
   h += `</div>`; // .card
+  return h;
+}
+
+// Always-visible headline stats for an edition: the four numbers you check most.
+function statStrip(L) {
+  const li = L.listing || null;
+  const kw = li ? (li.keywords || []).length : 0;
+  const val = (k, v, cls) => `<div class="stat"><span class="k">${esc(k)}</span>` +
+    `<span class="v"${cls ? ` style="color:var(--${cls})"` : ''}>${v}</span></div>`;
+  let h = `<div class="statstrip">`;
+  h += val('Pages', L.pages != null ? L.pages : '—', L.pages != null ? null : 'muted');
+  h += val('KDP PDF', L.kdpPdfExists ? 'Built' : 'Not built', L.kdpPdfExists ? 'ok' : 'muted');
+  h += val('Keywords', li ? `${kw}/7` : '—', li ? (kw === 7 ? 'ok' : 'warn') : 'muted');
+  const blurb = li && li.blurbChars != null ? li.blurbChars : null;
+  h += val('Blurb', blurb != null ? `${blurb}` : '—', blurb != null ? (blurb <= 4000 ? 'ok' : 'err') : 'muted');
+  h += `</div>`;
   return h;
 }
 

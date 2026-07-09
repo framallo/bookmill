@@ -263,7 +263,17 @@ function render() {
   list.sort((a, b) => key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0);
   if (state.dir === 'desc') list.reverse();
 
-  $('count').textContent = `${list.length} book${list.length === 1 ? '' : 's'}`;
+  // Library summary: total plus a status breakdown (only the meaningful states).
+  const nLive = list.filter((b) => b.status === 'live').length;
+  const nRev = list.filter((b) => b.status === 'in-review').length;
+  const nBlk = list.filter((b) => b.status === 'blocked').length;
+  let summary = `${list.length} book${list.length === 1 ? '' : 's'}`;
+  const bits = [];
+  if (nLive) bits.push(`<span style="color:var(--ok)">${nLive} live</span>`);
+  if (nRev) bits.push(`<span style="color:var(--warn)">${nRev} in review</span>`);
+  if (nBlk) bits.push(`<span style="color:var(--err)">${nBlk} blocked</span>`);
+  if (bits.length) summary += ` · ${bits.join(' · ')}`;
+  $('count').innerHTML = summary;
   const shelf = $('shelf');
   shelf.innerHTML = '';
   $('empty').style.display = list.length ? 'none' : '';
