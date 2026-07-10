@@ -115,8 +115,11 @@ Then `cover_svg.rs::wrap_svg` uses `r.paper_mult` (override) else
 Add to `config::validate_book` / deep checks (surfaced in the publish checklist):
 
 1. **Page range per paper/ink** (from kdp-requirements §1): e.g. standard-color
-   min 72 / max 600; hardcover min 75 / max 550. Needs the built page count
-   (deep) — `warn` pre-build, `fail` post-build when out of range.
+   min 72 / max 600; hardcover min 75 / max 550. Needs the built page count. When
+   a built interior is out of range, `bookmill build` **warns and skips that print
+   edition for that language** (the other editions and every other book still
+   build) — one too-short companion never blocks the whole run. `validate --deep`
+   still reports it. (Was previously a hard error that failed the entire plan.)
 2. **Color trim/ink compatibility:** standard color is white-paper + paperback
    only; flag standard-color on cream or hardcover.
 3. **ISBN format:** if `isbn` is not `"free"`, validate ISBN-13 checksum and warn
