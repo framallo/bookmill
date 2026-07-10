@@ -102,7 +102,7 @@ bookmill build my-book --format all  # retail + KDP EPUB and PDF
 | `bookmill validate [book] [--deep]` | Config / listing / house-rule check (+ epubcheck, PDF geometry, cover resolution with `--deep`) |
 | `bookmill build [book] [--format\|--edition] [--lang]` | Build interiors (EPUB / PDF / KDP / print / docx / all) |
 | `bookmill build cover [book] [--lang]` | Render front PNG + paperback wrap PDF + eBook JPG |
-| `bookmill build shrink <epub> [--px]` | Shrink EPUB images in place (native) |
+| `bookmill build shrink <file> [--px\|--dpi]` | Shrink images in place — EPUB (native, `--px`) or PDF (Ghostscript, `--dpi`) |
 | `bookmill audiobook [book] [--lang] [--voice] [--speed]` | Render a chaptered `.m4b` (kab engine) |
 | `bookmill words [book] [--lang]` | Word counts (native, over the resolved content) + page counts (from the built interior PDF) |
 | `bookmill lint [book] [--lang]` | Prose lint — grammar + Spanish tildes (LanguageTool via `scripts/lint-prose.py`) |
@@ -111,7 +111,9 @@ bookmill build my-book --format all  # retail + KDP EPUB and PDF
 | `bookmill tui` | Interactive terminal UI |
 
 `build` is the umbrella for produced artifacts: bare `build` builds **interiors**,
-`build cover` renders covers, `build shrink` shrinks an EPUB. `--format` is
+`build cover` renders covers, `build shrink` shrinks an EPUB or PDF in place
+(dispatched by extension: `.epub` → native image shrink `--px`; `.pdf` →
+Ghostscript downsample `--dpi`, default 150). `--format` is
 `epub | pdf | kdp | print | docx | all` (`docx` = an editor review doc);
 `--edition` builds by distribution channel instead; `--lang` is a language code
 or `all`.
@@ -190,6 +192,13 @@ is a config edit, not a code change.
 | `gumroad` | Retail EPUB + standalone PDF (full cover page) |
 | `bubok-{us,ar,mx}` | POD print interior + cover, per region (trim / paper / ISBN) |
 
+The **retail PDF** (`gumroad`) can be auto-downsampled so the paid download stays
+small while the print interior keeps full-res images. Set `[pdf].digital_pdf_dpi`
+(or `[editions.<name>].digital_pdf_dpi` to override) — e.g. `digital_pdf_dpi = 150`
+turns a full-bleed color picture book from ~200 MB into a few MB. It runs
+Ghostscript on `Out::RetailPdf` only; a missing `gs` warns and keeps the full-res
+PDF (it never fails the build). Off (`None`) by default.
+
 ### Audiobooks
 
 `bookmill audiobook <book> --lang <lang>` renders a chaptered `.m4b` via **kab**.
@@ -244,6 +253,7 @@ src/
   audiobook.rs   TtsEngine trait + kab adapter
   covers.rs / cover_svg.rs / cover_tmpl.rs   cover rendering (resvg default)
   epub_shrink.rs native EPUB image shrinker
+  pdf_shrink.rs  digital-PDF image downsampler (Ghostscript)
   deep.rs        validate --deep (epubcheck + geometry + cover res)
   tui.rs         Ratatui terminal UI
 templates/       archetypes for `create`, scaffold assets, cover templates
