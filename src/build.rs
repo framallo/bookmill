@@ -341,9 +341,13 @@ pub fn plan_editions(
             }
 
             for lang in langs_for(&book, lang_filter) {
-                // Page-range / hardcover eligibility gate. Needs the built interior:
-                // warn pre-build, fail post-build when out of range. The hardcover
-                // ≥75pp minimum is the activation gate (e.g. la-riqueza at 60pp).
+                // Page-range / hardcover eligibility gate. Needs the built interior.
+                // When a built interior is out of range for a print target, **skip
+                // that edition for this language with a warning** rather than
+                // failing the whole build — one too-short book (e.g. a 17pp
+                // companion) must not block every other book's build. The other
+                // editions (kdp-epub, gumroad) and every other book still build.
+                // The hardcover ≥75pp minimum is the activation gate (la-riqueza=60pp).
                 if matches!(target.as_str(), "kdp-paperback" | "kdp-hardcover") {
                     let (min, max) = crate::config::page_range(&target, &ink);
                     let kdp_pdf = repo
@@ -353,10 +357,13 @@ pub fn plan_editions(
                         .join(&lang)
                         .join(format!("{}-{}-kdp.pdf", book.slug, lang));
                     match pdf_page_count(&kdp_pdf) {
-                        Some(pp) if pp < min || pp > max => errors.push(format!(
-                            "{}/{ed_name} [{lang}]: interior is {pp}pp, outside {target} range {min}–{max}pp",
-                            book.slug
-                        )),
+                        Some(pp) if pp < min || pp > max => {
+                            eprintln!(
+                                "  ! {}/{ed_name} [{lang}]: interior is {pp}pp, outside {target} range {min}–{max}pp — skipping this edition",
+                                book.slug
+                            );
+                            continue;
+                        }
                         Some(_) => {}
                         None if target == "kdp-hardcover" => eprintln!(
                             "  ! {}/{ed_name} [{lang}]: hardcover needs ≥{min}pp — build the interior to verify (missing {})",

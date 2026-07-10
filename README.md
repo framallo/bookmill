@@ -199,6 +199,12 @@ turns a full-bleed color picture book from ~200 MB into a few MB. It runs
 Ghostscript on `Out::RetailPdf` only; a missing `gs` warns and keeps the full-res
 PDF (it never fails the build). Off (`None`) by default.
 
+If a built print interior is **out of a target's page range** (e.g. a 17pp
+companion under KDP paperback's 24pp minimum), `bookmill build` **warns and skips
+that print edition for that language** — the digital editions and every other
+book still build, so one too-short book never blocks the whole run. `validate
+--deep` still surfaces it.
+
 ### Post-build documents (markdown, free sample, README)
 
 Every interior build also drops three documents into `output/` for each book +
