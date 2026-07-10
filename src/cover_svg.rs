@@ -605,6 +605,34 @@ impl CoverRenderer {
         h: f64,
         x0: f64,
     ) -> (f64, f64, f64) {
+        self.emit_abs_element_emph(
+            out, defs, el, def, def_text, def_fill, def_family, def_style, shadow_css,
+            shadow_id, w, h, x0, None,
+        )
+    }
+
+    /// Like [`Self::emit_abs_element`], but when `emph` names phrases present in the
+    /// block's text, those word-runs are re-styled (color/style/family) via inline
+    /// `<tspan>`s. `emph = None` (every other caller) is byte-identical to the plain
+    /// path — the emphasis machinery only engages for the back-cover blurb.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_abs_element_emph(
+        &self,
+        out: &mut String,
+        defs: &mut String,
+        el: Option<&CoverElement>,
+        def: (f64, f64, f64, f64),
+        def_text: &str,
+        def_fill: &str,
+        def_family: &str,
+        def_style: &str,
+        shadow_css: &str,
+        shadow_id: &str,
+        w: f64,
+        h: f64,
+        x0: f64,
+        emph: Option<&EmphSpec>,
+    ) -> (f64, f64, f64) {
         let (def_x, def_y, def_w, def_font) = def;
         let x_pct = el.map(|e| e.x_pct).unwrap_or(def_x);
         let y_pct = el.map(|e| e.y_pct).unwrap_or(def_y);
@@ -628,12 +656,48 @@ impl CoverRenderer {
         let italic = style.contains("italic");
         let weight: u16 = if style.contains("bold") { 700 } else { 400 };
         let lh = 1.0_f64; // Konva default line-height.
+        let vm = self.vmetrics(&family, weight, italic);
+        let shadow = shadow_def(defs, shadow_css, shadow_id);
+
+        // Emphasis path: wrap into styled runs and emit each line as tspans.
+        if let Some(e) = emph.filter(|e| !e.phrases.is_empty()) {
+            let ew: u16 = if e.style.contains("bold") { 700 } else { 400 };
+            let ei = e.style.contains("italic");
+            let elines = self.wrap_emph(
+                &content, e.phrases, &family, weight, italic, e.family, ew, ei, size, box_w,
+            );
+            let total_h = elines.len() as f64 * line_box(size, lh);
+            let block_top = y_pct * h - total_h / 2.0;
+            for (i, ln) in elines.iter().enumerate() {
+                self.emit_emph_line(
+                    out,
+                    ln,
+                    block_cx,
+                    block_top + baseline(size, lh, vm) + i as f64 * line_box(size, lh),
+                    &TextStyle {
+                        family: &family,
+                        weight,
+                        size,
+                        italic,
+                        letter_spacing: 0.0,
+                        fill: &fill,
+                        opacity: 1.0,
+                        stroke: "0px transparent",
+                        shadow_id: &shadow,
+                        anchor: "middle",
+                    },
+                    e.color,
+                    e.family,
+                    ew,
+                    ei,
+                );
+            }
+            return (block_top, total_h, block_cx);
+        }
 
         let lines = self.wrap(&content, &family, weight, italic, size, box_w);
         let total_h = lines.len() as f64 * line_box(size, lh);
         let block_top = y_pct * h - total_h / 2.0;
-        let vm = self.vmetrics(&family, weight, italic);
-        let shadow = shadow_def(defs, shadow_css, shadow_id);
         for (i, ln) in lines.iter().enumerate() {
             self.emit_line(
                 out,
@@ -657,6 +721,136 @@ impl CoverRenderer {
         (block_top, total_h, block_cx)
     }
 
+    /// Word-wrap `content` to `max_w`, tagging each word with whether it falls inside
+    /// any `phrases` entry (matched as a consecutive run of words, compared
+    /// punctuation/accent-insensitively via [`fold`]). Emphasized words are measured
+    /// with the emphasis face so wrapping accounts for their (italic) advance.
+    #[allow(clippy::too_many_arguments)]
+    fn wrap_emph(
+        &self,
+        content: &str,
+        phrases: &[String],
+        base_family: &str,
+        base_weight: u16,
+        base_italic: bool,
+        emph_family: &str,
+        emph_weight: u16,
+        emph_italic: bool,
+        size: f64,
+        max_w: f64,
+    ) -> Vec<Vec<(String, bool)>> {
+        let words: Vec<&str> = content.split_whitespace().collect();
+        if words.is_empty() {
+            return vec![vec![]];
+        }
+        let norm: Vec<String> = words.iter().map(|w| fold(w)).collect();
+        let mut emph = vec![false; words.len()];
+        for p in phrases {
+            let pw: Vec<String> =
+                p.split_whitespace().map(fold).filter(|s| !s.is_empty()).collect();
+            if pw.is_empty() || pw.len() > norm.len() {
+                continue;
+            }
+            for start in 0..=(norm.len() - pw.len()) {
+                if (0..pw.len()).all(|j| norm[start + j] == pw[j]) {
+                    for j in 0..pw.len() {
+                        emph[start + j] = true;
+                    }
+                }
+            }
+        }
+        let space_w = self.text_width(" ", base_family, base_weight, base_italic, size);
+        let mut lines: Vec<Vec<(String, bool)>> = Vec::new();
+        let mut cur: Vec<(String, bool)> = Vec::new();
+        let mut cur_w = 0.0;
+        for (i, wd) in words.iter().enumerate() {
+            let e = emph[i];
+            let (fam, wt, it) = if e {
+                (emph_family, emph_weight, emph_italic)
+            } else {
+                (base_family, base_weight, base_italic)
+            };
+            let ww = self.text_width(wd, fam, wt, it, size);
+            let add = if cur.is_empty() { ww } else { space_w + ww };
+            if !cur.is_empty() && cur_w + add > max_w {
+                lines.push(std::mem::take(&mut cur));
+                cur.push((wd.to_string(), e));
+                cur_w = ww;
+            } else {
+                cur.push((wd.to_string(), e));
+                cur_w += add;
+            }
+        }
+        if !cur.is_empty() {
+            lines.push(cur);
+        }
+        lines
+    }
+
+    /// Emit one wrapped line as a centered `<text>` whose emphasized runs become
+    /// `<tspan>`s carrying the emphasis fill/family/style. `xml:space="preserve"`
+    /// keeps the single spaces that separate runs.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_emph_line(
+        &self,
+        out: &mut String,
+        line: &[(String, bool)],
+        cx: f64,
+        baseline_y: f64,
+        base: &TextStyle,
+        emph_color: &str,
+        emph_family: &str,
+        emph_weight: u16,
+        emph_italic: bool,
+    ) {
+        let base_fam = self.svg_family(base.family, base.weight, base.italic);
+        let emph_fam = self.svg_family(emph_family, emph_weight, emph_italic);
+        let mut attrs = format!(
+            "x=\"{}\" y=\"{}\" text-anchor=\"{}\" xml:space=\"preserve\" font-family=\"'{}'\" font-size=\"{}\" fill=\"{}\"",
+            fmt(cx),
+            fmt(baseline_y),
+            base.anchor,
+            xml_attr(base_fam),
+            fmt(base.size),
+            xml_attr(base.fill),
+        );
+        if base.italic {
+            attrs.push_str(" font-style=\"italic\"");
+        }
+        if !base.shadow_id.is_empty() {
+            attrs.push_str(&format!(" filter=\"url(#{})\"", base.shadow_id));
+        }
+        let mut inner = String::new();
+        let mut i = 0;
+        let mut first = true;
+        while i < line.len() {
+            let e = line[i].1;
+            let mut j = i;
+            let mut words: Vec<&str> = Vec::new();
+            while j < line.len() && line[j].1 == e {
+                words.push(line[j].0.as_str());
+                j += 1;
+            }
+            let mut seg = words.join(" ");
+            if !first {
+                seg = format!(" {seg}");
+            }
+            first = false;
+            if e {
+                let mut t = format!(" font-family=\"'{}'\"", xml_attr(emph_fam));
+                if emph_italic {
+                    t.push_str(" font-style=\"italic\"");
+                }
+                t.push_str(&format!(" fill=\"{}\"", xml_attr(emph_color)));
+                inner.push_str(&format!("<tspan{t}>{}</tspan>", esc(&seg)));
+            } else {
+                inner.push_str(&format!("<tspan>{}</tspan>", esc(&seg)));
+            }
+            i = j;
+        }
+        out.push_str(&format!("<text {attrs}>{inner}</text>"));
+    }
+
     /// Absolute back-panel text layout from `[cover.<lang>.wrap]` (web wrap editor).
     /// Places badge/blurb/author at their saved back-panel-fraction centers/sizes
     /// via `emit_abs_element`, mapped into the back panel's absolute wrap rectangle
@@ -677,6 +871,12 @@ impl CoverRenderer {
         let wl = r.wrap_layout.as_ref();
         let bcontent_w = back_w - 2.0 * bpad_x;
         let w_frac = bcontent_w / back_w;
+        let emspec = EmphSpec {
+            phrases: &r.blurb_emph,
+            color: &r.blurb_emph_color,
+            family: &r.blurb_emph_family,
+            style: &r.blurb_emph_style,
+        };
 
         // Badge (absolute; default: top-center, small caps like the flex badge).
         self.emit_abs_element(
@@ -695,8 +895,9 @@ impl CoverRenderer {
             0.0,
         );
 
-        // Blurb (absolute; default: upper-middle of the back panel).
-        self.emit_abs_element(
+        // Blurb (absolute; default: upper-middle of the back panel). The only block
+        // that takes an emphasis spec — highlighted phrases become inline tspans.
+        self.emit_abs_element_emph(
             body,
             defs,
             wl.and_then(|w| w.blurb.as_ref()),
@@ -710,6 +911,7 @@ impl CoverRenderer {
             back_w,
             fh,
             0.0,
+            Some(&emspec),
         );
 
         // Author (absolute; default: near the bottom, kept off the bottom-right
@@ -804,26 +1006,59 @@ impl CoverRenderer {
         // bblurb
         let blvm = self.vmetrics(&r.serif, 400, false);
         let bshadow = shadow_def(&mut defs, &r.blurb_shadow, "bbsh");
-        let blurb_lines = self.wrap(&r.blurb, &r.serif, 400, false, 21.0, bcontent_w);
-        for (i, ln) in blurb_lines.iter().enumerate() {
-            self.emit_line(
-                &mut body,
-                &esc(ln),
-                bcx,
-                by + baseline(21.0, 1.55, blvm) + i as f64 * line_box(21.0, 1.55),
-                &TextStyle {
-                    family: &r.serif,
-                    weight: 400,
-                    size: 21.0,
-                    italic: false,
-                    letter_spacing: 0.0,
-                    fill: &r.blurb_color,
-                    opacity: 1.0,
-                    stroke: &r.blurb_stroke,
-                    shadow_id: &bshadow,
-                    anchor: "middle",
-                },
+        if r.blurb_emph.is_empty() {
+            let blurb_lines = self.wrap(&r.blurb, &r.serif, 400, false, 21.0, bcontent_w);
+            for (i, ln) in blurb_lines.iter().enumerate() {
+                self.emit_line(
+                    &mut body,
+                    &esc(ln),
+                    bcx,
+                    by + baseline(21.0, 1.55, blvm) + i as f64 * line_box(21.0, 1.55),
+                    &TextStyle {
+                        family: &r.serif,
+                        weight: 400,
+                        size: 21.0,
+                        italic: false,
+                        letter_spacing: 0.0,
+                        fill: &r.blurb_color,
+                        opacity: 1.0,
+                        stroke: &r.blurb_stroke,
+                        shadow_id: &bshadow,
+                        anchor: "middle",
+                    },
+                );
+            }
+        } else {
+            let ew: u16 = if r.blurb_emph_style.contains("bold") { 700 } else { 400 };
+            let ei = r.blurb_emph_style.contains("italic");
+            let elines = self.wrap_emph(
+                &r.blurb, &r.blurb_emph, &r.serif, 400, false, &r.blurb_emph_family, ew, ei,
+                21.0, bcontent_w,
             );
+            for (i, ln) in elines.iter().enumerate() {
+                self.emit_emph_line(
+                    &mut body,
+                    ln,
+                    bcx,
+                    by + baseline(21.0, 1.55, blvm) + i as f64 * line_box(21.0, 1.55),
+                    &TextStyle {
+                        family: &r.serif,
+                        weight: 400,
+                        size: 21.0,
+                        italic: false,
+                        letter_spacing: 0.0,
+                        fill: &r.blurb_color,
+                        opacity: 1.0,
+                        stroke: &r.blurb_stroke,
+                        shadow_id: &bshadow,
+                        anchor: "middle",
+                    },
+                    &r.blurb_emph_color,
+                    &r.blurb_emph_family,
+                    ew,
+                    ei,
+                );
+            }
         }
         // bfoot: author, bottom-left (margin-bottom auto on blurb pushes it down)
         self.emit_line(
@@ -1150,6 +1385,16 @@ struct TextStyle<'a> {
     anchor: &'a str,
 }
 
+/// Inline emphasis for a wrapped text block: which phrases to highlight and the
+/// style (color/font-style/family) applied to their word-runs. Used only for the
+/// back-cover blurb; every other text block passes `None`.
+struct EmphSpec<'a> {
+    phrases: &'a [String],
+    color: &'a str,
+    family: &'a str,
+    style: &'a str,
+}
+
 
 // ---------------------------------------------------------------------------
 // CSS-ish parsing: strokes, shadows, filters, colors
@@ -1389,6 +1634,26 @@ fn xml_attr(s: &str) -> String {
 /// Unicode uppercase, then XML-escape (for badge/author text-transform).
 fn up(s: &str) -> String {
     esc(&s.to_uppercase())
+}
+
+/// Fold a word for phrase matching: keep alphanumerics only (so surrounding
+/// punctuation like « » , . ; is ignored), lowercase, and strip common Spanish
+/// accents — so "«Donde" and "derecho.»" match "donde" and "derecho".
+fn fold(w: &str) -> String {
+    w.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .map(|c| match c {
+            'á' => 'a',
+            'é' => 'e',
+            'í' => 'i',
+            'ó' => 'o',
+            'ú' => 'u',
+            'ü' => 'u',
+            'ñ' => 'n',
+            other => other,
+        })
+        .collect()
 }
 
 /// Read the (weight-specific) family name from a font's `name` table (ID 1).

@@ -227,7 +227,14 @@ function positionHandles() {
   activeKeys().forEach(k => {
     const el = set[k], hd = handles[k];
     if (!hd || !el) return;
-    const bw = el.w_pct * space.w, bh = Math.max(el.font_pct * space.h, 26);
+    // Height = the actual wrapped block, not one line — a multi-line blurb must
+    // be grabbable/selectable across its whole visible extent (mirrors the
+    // renderer's word-wrap; see cover_svg.rs::emit_abs_element). One-line blocks
+    // (title/badge/author) fall back to a single line box.
+    const size = el.font_pct * space.h;
+    const bw = el.w_pct * space.w;
+    const lines = wrapCount(el.text, size, el.font_style, el.font_family, bw);
+    const bh = Math.max(lines * size, 26);
     const cx = space.x0 + el.x_pct * space.w, cy = el.y_pct * space.h;
     hd.style.left = ((cx - bw / 2) * sx) + 'px';
     hd.style.top = ((cy - bh / 2) * sy) + 'px';
@@ -412,7 +419,7 @@ function applyFlexDefaults(data, els) {
   const titleLines = twoLineParts(els.title.text).length;
   const titleH = titleLines * (titleSize * 1.05);
   const ruleBlock = RULE_GAP + RULE_H;
-  const subLines = wrapCount(els.subtitle.text, subSize, els.subtitle.font_style, CONTENT_W);
+  const subLines = wrapCount(els.subtitle.text, subSize, els.subtitle.font_style, els.subtitle.font_family, CONTENT_W);
   const subBlockH = subLines * (subSize * 1.3);
   const subH = 40 + subBlockH;
   const titleBlockH = titleH + ruleBlock + subH;
@@ -456,11 +463,13 @@ function twoLineParts(s) {
 }
 
 const _measureCtx = document.createElement('canvas').getContext('2d');
-function wrapCount(text, size, style, maxW) {
+function wrapCount(text, size, style, family, maxW) {
   const words = (text || '').split(/\s+/).filter(Boolean);
   if (!words.length) return 1;
   const italic = (style || '').includes('italic') ? 'italic ' : '';
-  _measureCtx.font = `${italic}500 ${size}px Montserrat, sans-serif`;
+  const weight = (style || '').includes('bold') ? 700 : 500;
+  const fam = family ? `'${family}', ` : '';
+  _measureCtx.font = `${italic}${weight} ${size}px ${fam}Montserrat, sans-serif`;
   let lines = 1, cur = '';
   for (const w of words) {
     const trial = cur ? cur + ' ' + w : w;

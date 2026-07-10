@@ -261,6 +261,12 @@ pub struct CoverConfig {
     pub blurb_color: Option<String>,
     pub blurb_shadow: Option<String>,
     pub blurb_stroke: Option<String>,
+    // back-cover blurb emphasis: phrases (per language, in `[cover.<lang>]`) rendered
+    // in a standout style. Color/style/family default to the title color, italic,
+    // and the blurb serif; override at book or repo level.
+    pub blurb_emph_color: Option<String>,
+    pub blurb_emph_style: Option<String>,
+    pub blurb_emph_family: Option<String>,
     pub author_stroke: Option<String>,
     pub badge_color: Option<String>,
     pub badge_stroke: Option<String>,
@@ -299,6 +305,9 @@ pub struct CoverLang {
     pub title_size: Option<f64>,
     /// cover back-blurb override (else falls back to [listing.<lang>].blurb)
     pub blurb: Option<String>,
+    /// phrases within the back-cover blurb to render in the emphasis style
+    /// (matched as consecutive words, punctuation/accent-insensitive).
+    pub blurb_emph: Option<Vec<String>>,
     /// cover title override (else book [title.<lang>])
     pub title: Option<String>,
     /// cover subtitle override (else book [subtitle.<lang>])
