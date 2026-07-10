@@ -132,6 +132,11 @@ pub struct Edition {
     /// show chapter-plate alt text as a visible caption for this edition; overrides
     /// the book `[pdf].plate_captions`. Set false to hide captions on e.g. KDP.
     pub captions: Option<bool>,
+    /// image downsample resolution (DPI) for this edition's *digital* (retail) PDF;
+    /// lower = smaller download. Overrides the book `[pdf].digital_pdf_dpi`. Only the
+    /// retail PDF is compressed (via Ghostscript); the KDP/POD print interior keeps
+    /// full-res images. None = no compression (default).
+    pub digital_pdf_dpi: Option<u32>,
 }
 
 // ---------- book level (book.toml) ----------
@@ -466,6 +471,12 @@ pub struct PdfOpts {
     /// prints a black-ink interior in grayscale at press time). When true,
     /// bookmill also naively luma-converts any image lacking a `{bw=…}` variant.
     pub auto_grayscale: Option<bool>,
+    /// downsample images in the *digital* (retail/gumroad) PDF to this DPI so the
+    /// download stays small — e.g. `digital_pdf_dpi = 150` turns a full-res color
+    /// picture book from ~190 MB into a few MB. Runs Ghostscript on the retail PDF
+    /// only; the KDP/POD print interior keeps its full-res images. An edition may
+    /// override via `[editions.<name>].digital_pdf_dpi`. None = off (default).
+    pub digital_pdf_dpi: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
@@ -660,6 +671,17 @@ pub fn resolve_auto_grayscale(book: &BookConfig, repo: &RepoConfig) -> bool {
         .unwrap_or(false)
 }
 
+/// Resolve the digital-PDF downsample DPI for one (edition, book):
+/// edition `[editions.<name>].digital_pdf_dpi` → book `[pdf].digital_pdf_dpi` → None.
+/// `Some(dpi)` means the retail (gumroad) PDF's images are downsampled to `dpi` via
+/// Ghostscript (the print interior keeps full-res); `None`/0 = no compression.
+pub fn resolve_digital_pdf_dpi(edition: Option<&Edition>, book: &BookConfig) -> Option<u32> {
+    edition
+        .and_then(|e| e.digital_pdf_dpi)
+        .or(book.pdf.digital_pdf_dpi)
+        .filter(|&d| d > 0)
+}
+
 /// Validate an ISBN-13 (checksum + 13 digits). Hyphens/spaces are ignored.
 pub fn isbn13_valid(s: &str) -> bool {
     let digits: Vec<u32> = s.chars().filter_map(|c| c.to_digit(10)).collect();
@@ -827,6 +849,24 @@ mod tests {
         // an edition present but WITHOUT paper falls through to book/repo
         let ed_noink = Edition::default();
         assert_eq!(resolve_paper(Some(&ed_noink), &book, &repo), "groundwood");
+    }
+
+    #[test]
+    fn resolve_digital_pdf_dpi_precedence() {
+        let book = book_cfg("slug = 's'\n[pdf]\ndigital_pdf_dpi = 150\n");
+        let ed = Edition { digital_pdf_dpi: Some(120), ..Default::default() };
+        // edition wins over book [pdf]
+        assert_eq!(resolve_digital_pdf_dpi(Some(&ed), &book), Some(120));
+        // book [pdf] applies when the edition sets nothing
+        let ed_bare = Edition::default();
+        assert_eq!(resolve_digital_pdf_dpi(Some(&ed_bare), &book), Some(150));
+        assert_eq!(resolve_digital_pdf_dpi(None, &book), Some(150));
+        // unset anywhere → None (no compression)
+        let bare = book_cfg("slug = 's'\n");
+        assert_eq!(resolve_digital_pdf_dpi(None, &bare), None);
+        // an explicit 0 is treated as "off"
+        let zero = book_cfg("slug = 's'\n[pdf]\ndigital_pdf_dpi = 0\n");
+        assert_eq!(resolve_digital_pdf_dpi(None, &zero), None);
     }
 
     #[test]
