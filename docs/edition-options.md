@@ -18,6 +18,7 @@
 | ISBN | free KDP / own | `edition.isbn` (`Option<String>`) | stored, not validated/used |
 | Spine paper multiplier | 0.002252 / 0.0025 / 0.002347 | `[cover].paper_mult` (single value) | **not derived from paper/ink** |
 | Marketplace | US / UK / DE / … | `edition.market` | ok (informational) |
+| Digital PDF size | full-res / downsampled | `pdf.digital_pdf_dpi` / `edition.digital_pdf_dpi` (Ghostscript) | ok (implemented) |
 
 The big gaps: **paper type doesn't change anything**, **ink/color doesn't
 exist**, and the **spine multiplier is a hand-set constant** instead of being
@@ -93,6 +94,7 @@ Then `cover_svg.rs::wrap_svg` uses `r.paper_mult` (override) else
 | `finish` | none on geometry; recorded for the listing + (optional) a note in the wrap export filename |
 | `isbn` | `"free"` → omit ISBN/barcode area note (KDP prints barcode); explicit ISBN → can render a barcode/leave keep-out; validated as 13-digit if not `"free"` |
 | `market` | informational; future per-market trim/ISBN/pricing |
+| `digital_pdf_dpi` | `RetailPdf` only: downsample embedded images to N DPI via Ghostscript so the retail/gumroad download stays small; the print interior (`KdpPdf`) keeps full-res. **Implemented** — `pdf_shrink.rs`, resolved edition → book `[pdf]` (`resolve_digital_pdf_dpi`); a missing `gs` warns and keeps the full-res PDF (never fails the build). Also exposed manually as `bookmill build shrink <file.pdf> --dpi N`. |
 
 ## 4. Hardcover specifics
 
