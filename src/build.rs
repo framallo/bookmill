@@ -672,6 +672,26 @@ fn build_one(
                 &pdf,
             )?;
             crate::pages::write_sidecar(&pdf, &chaps);
+            // Digital-PDF compression (opt-in): downsample images in the retail PDF
+            // so the download stays small. Print interiors (KdpPdf) are untouched.
+            // A missing Ghostscript warns and keeps the full-res PDF (doesn't fail
+            // the build — the epub shrink is native and always runs, but gs is an
+            // external dep). Page count is unchanged, so the sidecar stays valid.
+            if let Some(dpi) = crate::config::resolve_digital_pdf_dpi(ed_cfg, book) {
+                match crate::pdf_shrink::shrink_pdf(&pdf, dpi) {
+                    Ok((b, a)) if a < b => println!(
+                        "  shrank {} {:.1}MB -> {:.1}MB (digital PDF @ {dpi}dpi)",
+                        pdf.display(),
+                        b as f64 / 1e6,
+                        a as f64 / 1e6
+                    ),
+                    Ok(_) => {}
+                    Err(e) => eprintln!(
+                        "  warning: digital PDF compression skipped for {}: {e:#}",
+                        pdf.display()
+                    ),
+                }
+            }
         }
         Out::KdpPdf => {
             // Default KDP print interior is "{base}-kdp.pdf". Regional POD print

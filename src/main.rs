@@ -10,6 +10,7 @@ mod cover_svg;
 mod docx_native;
 mod epub_native;
 mod epub_shrink;
+mod pdf_shrink;
 mod pages;
 mod pdfmeta;
 mod cover_tmpl;
@@ -128,7 +129,7 @@ enum Cmd {
     },
     /// Interactive terminal UI
     Tui,
-    /// Build outputs: interiors (default), covers, or shrink an EPUB
+    /// Build outputs: interiors (default), covers, or shrink an EPUB/PDF
     #[command(args_conflicts_with_subcommands = true)]
     Build {
         /// cover / shrink subcommand; omit to build interiors (epub/pdf)
@@ -200,7 +201,7 @@ enum BuildSub {
     Interior(InteriorArgs),
     /// Render covers (front PNG + paperback wrap PDF + eBook JPG)
     Cover(CoverArgs),
-    /// Shrink images inside an EPUB in place (native; Python-free)
+    /// Shrink images inside an EPUB (native) or a PDF (Ghostscript) in place
     Shrink(ShrinkArgs),
 }
 
@@ -233,11 +234,14 @@ struct CoverArgs {
 
 #[derive(Args)]
 struct ShrinkArgs {
-    /// path to the .epub
-    epub: PathBuf,
-    /// max image width in px (default 1200)
+    /// path to the .epub or .pdf to shrink in place
+    path: PathBuf,
+    /// EPUB: max image width in px (default 1200)
     #[arg(long, default_value_t = 1200)]
     px: u32,
+    /// PDF: image downsample resolution in DPI (default 150)
+    #[arg(long, default_value_t = 150)]
+    dpi: u32,
 }
 
 fn main() -> Result<()> {
@@ -370,10 +374,23 @@ fn main() -> Result<()> {
                 }
                 BuildSub::Cover(a) => covers::run(&repo, a.book, a.lang, a.pages)?,
                 BuildSub::Shrink(a) => {
-                    let (before, after) = epub_shrink::shrink_epub(&a.epub, a.px)?;
+                    let ext = a
+                        .path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("")
+                        .to_ascii_lowercase();
+                    let (before, after) = match ext.as_str() {
+                        "epub" => epub_shrink::shrink_epub(&a.path, a.px)?,
+                        "pdf" => pdf_shrink::shrink_pdf(&a.path, a.dpi)?,
+                        _ => anyhow::bail!(
+                            "shrink: unsupported file type for {} (expected .epub or .pdf)",
+                            a.path.display()
+                        ),
+                    };
                     println!(
                         "{}: {:.1}MB -> {:.1}MB",
-                        a.epub.display(),
+                        a.path.display(),
                         before as f64 / 1e6,
                         after as f64 / 1e6
                     );
