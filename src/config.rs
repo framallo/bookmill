@@ -169,6 +169,22 @@ pub struct BookConfig {
     /// per-book publishing status ([status]); drives the TUI ribbon (LIVE/REVIEW/…).
     #[serde(default)]
     pub status: Status,
+    /// per-book free-sample options ([sample]); controls the opening-chapters
+    /// preview EPUB/PDF generated into output/. Defaults: enabled, ~first 15%.
+    #[serde(default)]
+    pub sample: Sample,
+}
+
+// ---------- free sample ([sample]) ----------
+/// Free-sample options: the opening chapters exported as a shareable preview
+/// (EPUB + PDF) next to the interiors. Defaults keep it on at ~the first 15%.
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct Sample {
+    /// number of leading content files (chapters, after any front matter) to
+    /// include; explicit value wins over the default heuristic.
+    pub chapters: Option<usize>,
+    /// set false to skip generating the free sample for this book (default true).
+    pub enabled: Option<bool>,
 }
 
 // ---------- publishing status ([status]) ----------
@@ -682,6 +698,28 @@ pub fn resolve_digital_pdf_dpi(edition: Option<&Edition>, book: &BookConfig) -> 
         .filter(|&d| d > 0)
 }
 
+/// Whether to generate the free sample for a book ([sample].enabled, default true).
+pub fn sample_enabled(book: &BookConfig) -> bool {
+    book.sample.enabled.unwrap_or(true)
+}
+
+/// How many leading content files the free sample includes. Explicit
+/// `[sample].chapters` wins (clamped to the book length); otherwise the first
+/// ~15% (min 1), capped at half the book so a short book doesn't give itself away.
+pub fn sample_count(book: &BookConfig, total: usize) -> usize {
+    if total == 0 {
+        return 0;
+    }
+    match book.sample.chapters {
+        Some(n) => n.clamp(1, total),
+        None => {
+            let half = (total / 2).max(1);
+            let fifteen = ((total as f64) * 0.15).ceil() as usize;
+            fifteen.clamp(1, half)
+        }
+    }
+}
+
 /// Validate an ISBN-13 (checksum + 13 digits). Hyphens/spaces are ignored.
 pub fn isbn13_valid(s: &str) -> bool {
     let digits: Vec<u32> = s.chars().filter_map(|c| c.to_digit(10)).collect();
@@ -849,6 +887,24 @@ mod tests {
         // an edition present but WITHOUT paper falls through to book/repo
         let ed_noink = Edition::default();
         assert_eq!(resolve_paper(Some(&ed_noink), &book, &repo), "groundwood");
+    }
+
+    #[test]
+    fn sample_count_default_and_override() {
+        // default heuristic: ~15% (ceil), min 1, capped at half the book
+        let bare = book_cfg("slug = 's'\n");
+        assert_eq!(sample_count(&bare, 0), 0);
+        assert_eq!(sample_count(&bare, 1), 1);
+        assert_eq!(sample_count(&bare, 12), 2); // ceil(1.8)=2
+        assert_eq!(sample_count(&bare, 3), 1); // ceil(0.45)=1
+        assert_eq!(sample_count(&bare, 2), 1); // capped at half
+        // explicit override wins, clamped to [1, total]
+        let five = book_cfg("slug = 's'\n[sample]\nchapters = 5\n");
+        assert_eq!(sample_count(&five, 12), 5);
+        assert_eq!(sample_count(&five, 3), 3); // clamped to total
+        assert!(sample_enabled(&bare));
+        let off = book_cfg("slug = 's'\n[sample]\nenabled = false\n");
+        assert!(!sample_enabled(&off));
     }
 
     #[test]

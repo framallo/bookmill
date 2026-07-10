@@ -199,6 +199,22 @@ turns a full-bleed color picture book from ~200 MB into a few MB. It runs
 Ghostscript on `Out::RetailPdf` only; a missing `gs` warns and keeps the full-res
 PDF (it never fails the build). Off (`None`) by default.
 
+### Post-build documents (markdown, free sample, README)
+
+Every interior build also drops three documents into `output/` for each book +
+language it touched (best-effort — a failure warns but never fails the build):
+
+| File | What |
+|---|---|
+| `output/<slug>/<lang>/<slug>-<lang>.md` | The **combined manuscript** — YAML front matter (title/subtitle/author/rights) + all chapters concatenated in reading order |
+| `output/<slug>/<lang>/<slug>-<lang>-sample.{epub,pdf}` | A **free sample** — the opening chapters + a localized "end of the sample" note, as a shareable EPUB + PDF (title marked *(Sample)* / *(Muestra)*) |
+| `output/<slug>/README.md` | A **README** describing the book: author/series/date, editions, status/ASINs, and per language the title, word & page counts, reading age, keywords, BISAC, blurb, and the files built |
+
+The sample size is `[sample].chapters` (leading content files); unset defaults to
+~the first 15% (min 1, capped at half the book). `[sample].enabled = false` skips
+it. The sample EPUB is image-shrunk like the retail EPUB, and the sample PDF
+honors `[pdf].digital_pdf_dpi`, so a picture-book preview stays a couple of MB.
+
 ### Audiobooks
 
 `bookmill audiobook <book> --lang <lang>` renders a chaptered `.m4b` via **kab**.
@@ -254,6 +270,7 @@ src/
   covers.rs / cover_svg.rs / cover_tmpl.rs   cover rendering (resvg default)
   epub_shrink.rs native EPUB image shrinker
   pdf_shrink.rs  digital-PDF image downsampler (Ghostscript)
+  book_docs.rs   post-build markdown + free sample + per-book README
   deep.rs        validate --deep (epubcheck + geometry + cover res)
   tui.rs         Ratatui terminal UI
 templates/       archetypes for `create`, scaffold assets, cover templates
