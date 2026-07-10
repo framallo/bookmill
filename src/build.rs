@@ -177,7 +177,7 @@ fn resolve_paper_dims(
 /// Resolve the FULL page geometry (paper size + margins) for a PDF output.
 /// Returns None for EPUB outputs. Margins resolve per field:
 /// book `[pdf.margins]` -> repo `[defaults.margins]` -> 6x9 text fallback.
-fn resolve_geometry(
+pub(crate) fn resolve_geometry(
     repo: &Repo,
     book: &BookConfig,
     edition: Option<&crate::config::Edition>,
@@ -405,7 +405,10 @@ pub fn run(
     lang_filter: Option<String>,
 ) -> Result<()> {
     let jobs = plan_format(repo, &book_slug, &format, &lang_filter)?;
-    run_queue_stdout(repo, &jobs)
+    run_queue_stdout(repo, &jobs)?;
+    // Post-build docs: combined markdown, free sample, and README into output/.
+    crate::book_docs::generate_from_jobs(repo, &jobs);
+    Ok(())
 }
 
 /// Edition/target driven build.
@@ -416,7 +419,10 @@ pub fn run_editions(
     edition_filter: Option<String>,
 ) -> Result<()> {
     let jobs = plan_editions(repo, &book_slug, &lang_filter, &edition_filter)?;
-    run_queue_stdout(repo, &jobs)
+    run_queue_stdout(repo, &jobs)?;
+    // Post-build docs: combined markdown, free sample, and README into output/.
+    crate::book_docs::generate_from_jobs(repo, &jobs);
+    Ok(())
 }
 
 // ---------- queue runner ----------

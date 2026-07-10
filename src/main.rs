@@ -9,6 +9,7 @@ mod create;
 mod cover_svg;
 mod docx_native;
 mod epub_native;
+mod book_docs;
 mod epub_shrink;
 mod pdf_shrink;
 mod pages;
