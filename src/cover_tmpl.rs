@@ -39,6 +39,11 @@ pub(crate) struct Resolved {
     pub(crate) blurb_color: String,
     pub(crate) blurb_shadow: String,
     pub(crate) blurb_stroke: String,
+    /// back-cover blurb phrases to emphasize + their style (color/style/family).
+    pub(crate) blurb_emph: Vec<String>,
+    pub(crate) blurb_emph_color: String,
+    pub(crate) blurb_emph_style: String,
+    pub(crate) blurb_emph_family: String,
     pub(crate) author_stroke: String,
     pub(crate) badge_color: String,
     pub(crate) badge_stroke: String,
@@ -169,10 +174,20 @@ pub(crate) fn resolve(repo: &RepoConfig, book: &BookConfig, lang: &str) -> Resol
     let base_title_size = pick_f(bc, rc, |c| c.title_size, 120.0);
     let title_size = ml.and_then(|m| m.title_size).unwrap_or(base_title_size);
 
+    // shared locals so the blurb-emphasis defaults can borrow them.
+    let serif = pick(bc, rc, |c| c.serif.clone(), "Playfair Display");
+    let title_color = pick(bc, rc, |c| c.title_color.clone(), "#FFFFFF");
+    // Back-cover blurb emphasis: phrases per language; color/style/family default
+    // to the title color (gold), italic, and the blurb serif.
+    let blurb_emph = ml.and_then(|m| m.blurb_emph.clone()).unwrap_or_default();
+    let blurb_emph_color = pick(bc, rc, |c| c.blurb_emph_color.clone(), &title_color);
+    let blurb_emph_style = pick(bc, rc, |c| c.blurb_emph_style.clone(), "italic");
+    let blurb_emph_family = pick(bc, rc, |c| c.blurb_emph_family.clone(), &serif);
+
     Resolved {
         author,
         badge,
-        serif: pick(bc, rc, |c| c.serif.clone(), "Playfair Display"),
+        serif: serif.clone(),
         sub_italic: if has_subfont { "normal".into() } else { "italic".into() },
         sub_font,
         title_size,
@@ -181,7 +196,7 @@ pub(crate) fn resolve(repo: &RepoConfig, book: &BookConfig, lang: &str) -> Resol
         bgcolor: pick(bc, rc, |c| c.bgcolor.clone(), "#000000"),
         filt: pick(bc, rc, |c| c.filt.clone(), "none"),
         accent: accent.clone(),
-        title_color: pick(bc, rc, |c| c.title_color.clone(), "#FFFFFF"),
+        title_color: title_color.clone(),
         sub_color: sub_color.clone(),
         author_color: pick(bc, rc, |c| c.author_color.clone(), "#FFFFFF"),
         title_shadow: pick(bc, rc, |c| c.title_shadow.clone(), &heavy),
@@ -191,6 +206,10 @@ pub(crate) fn resolve(repo: &RepoConfig, book: &BookConfig, lang: &str) -> Resol
         blurb_color: pick_opt(bc, rc, |c| c.blurb_color.clone()).unwrap_or(sub_color),
         blurb_shadow: pick(bc, rc, |c| c.blurb_shadow.clone(), "none"),
         blurb_stroke: pick(bc, rc, |c| c.blurb_stroke.clone(), "0px transparent"),
+        blurb_emph,
+        blurb_emph_color,
+        blurb_emph_style,
+        blurb_emph_family,
         author_stroke: pick(bc, rc, |c| c.author_stroke.clone(), "0px transparent"),
         badge_color: pick(bc, rc, |c| c.badge_color.clone(), &accent),
         badge_stroke: pick(bc, rc, |c| c.badge_stroke.clone(), "0px transparent"),
