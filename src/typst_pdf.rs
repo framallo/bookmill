@@ -60,13 +60,14 @@ pub fn run(
     captions: bool,
     retail: bool,
     grayscale: bool,
+    proof: bool,
     auto_grayscale: bool,
     cover: Option<&Path>,
     geometry: Option<PageGeometry>,
     lang: &str,
     out: &Path,
 ) -> Result<()> {
-    let doc = build_doc(repo, meta, cpdf, chaps, openright, plate_framed, plate_width, captions, retail, grayscale, cover, geometry, lang)?;
+    let doc = build_doc(repo, meta, cpdf, chaps, openright, plate_framed, plate_width, captions, retail, grayscale, proof, cover, geometry, lang)?;
     let odir = out.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(odir)?;
     // Keep the generated markup on disk for debugging only — it is NOT handed to
@@ -294,6 +295,7 @@ fn build_doc(
     captions: bool,
     retail: bool,
     grayscale: bool,
+    proof: bool,
     cover: Option<&Path>,
     geometry: Option<PageGeometry>,
     lang: &str,
@@ -472,7 +474,7 @@ text(weight: \"bold\", size: 13pt, it.body))\n",
         let txt = std::fs::read_to_string(ch)
             .with_context(|| format!("reading {}", ch.display()))?;
         let blocks = parse_blocks(&txt);
-        emit_blocks(&mut s, &blocks, &repo.root, captions, grayscale);
+        emit_blocks(&mut s, &blocks, &repo.root, captions, grayscale, proof);
         s.push('\n');
     }
 
@@ -482,7 +484,7 @@ text(weight: \"bold\", size: 13pt, it.body))\n",
 /// Emit a chapter's blocks, applying the heading+plate reorder: a chapter that
 /// opens with a standalone (non-spot) image renders the image as a full-page
 /// verso plate BEFORE its heading, so heading+body open together on the recto.
-fn emit_blocks(s: &mut String, blocks: &[Block], root: &Path, captions: bool, grayscale: bool) {
+fn emit_blocks(s: &mut String, blocks: &[Block], root: &Path, captions: bool, grayscale: bool, proof: bool) {
     // On a grayscale (print) build, an image's `{bw=…}` variant replaces `src`;
     // otherwise (EPUB/retail) `src` is used and its color is kept.
     let eff_src = |src: &str, bw: &Option<String>| -> String {
@@ -500,6 +502,19 @@ fn emit_blocks(s: &mut String, blocks: &[Block], root: &Path, captions: bool, gr
                     src, spot: false, alt, width, height, fit, border, bw, ..
                 }) = blocks.get(i + 1)
                 {
+                    // Proof build: drop the full-page chapter plate, keep the heading
+                    // (and the plate's alt as a light placeholder).
+                    if proof {
+                        emit_heading(s, *level, text, *unnumbered);
+                        if !alt.trim().is_empty() {
+                            s.push_str(&format!(
+                                "#align(center, text(fill: luma(45%), style: \"italic\")[[{}]])\n\n",
+                                inline(alt.trim())
+                            ));
+                        }
+                        i += 2;
+                        continue;
+                    }
                     let p = typst_img_path(root, &eff_src(src, bw));
                     let cap = if !captions || alt.trim().is_empty() {
                         "none".to_string()
@@ -525,7 +540,22 @@ fn emit_blocks(s: &mut String, blocks: &[Block], root: &Path, captions: bool, gr
                 emit_heading(s, *level, text, *unnumbered);
                 i += 1;
             }
-            Block::Image { src, spot, width, height, fit, align, bw, .. } => {
+            Block::Image { src, spot, width, height, fit, align, bw, alt, .. } => {
+                // Proof (proofreading) build: no images, just the alt text — a light
+                // italic placeholder where the figure would go, so the reviewer reads
+                // clean prose without waiting on image-heavy PDFs. Decorative spot
+                // vignettes (usually alt-less) simply drop out.
+                if proof {
+                    let alt = alt.trim();
+                    if !alt.is_empty() {
+                        s.push_str(&format!(
+                            "#align(center, text(fill: luma(45%), style: \"italic\")[[{}]])\n\n",
+                            inline(alt)
+                        ));
+                    }
+                    i += 1;
+                    continue;
+                }
                 let p = typst_img_path(root, &eff_src(src, bw));
                 if *spot {
                     s.push_str(&format!("#spot({})\n", ty_str(&p)));
@@ -550,6 +580,24 @@ fn emit_blocks(s: &mut String, blocks: &[Block], root: &Path, captions: bool, gr
             Block::Para(t) => {
                 s.push_str(&inline(t));
                 s.push_str("\n\n");
+                i += 1;
+            }
+            Block::Code { lang, code } => {
+                // Typst `raw` highlights syntax natively from `lang` (Ruby/ERB/
+                // YAML/Bash/SQL all ship). A tinted, breakable panel wraps it. On a
+                // grayscale (B&W print) build we drop the theme so code prints as
+                // plain black monospace instead of shipping color into a KDP
+                // black-ink interior. The literal fence uses 4 backticks so any
+                // 3-backtick run inside the code survives.
+                let lang = lang.as_deref().unwrap_or("txt");
+                s.push_str(
+                    "#block(width: 100%, fill: luma(245), inset: 8pt, radius: 3pt, breakable: true)[\n",
+                );
+                if grayscale {
+                    s.push_str("#set raw(theme: none); #set text(fill: black)\n");
+                }
+                s.push_str(&format!("````{lang}\n{code}````\n"));
+                s.push_str("]\n\n");
                 i += 1;
             }
         }
@@ -598,6 +646,9 @@ fn emit_heading(s: &mut String, level: usize, text: &str, unnumbered: bool) {
 enum Block {
     Heading { level: usize, text: String, unnumbered: bool },
     Para(String),
+    /// A fenced code block. `lang` is the info-string language (```ruby → "ruby"),
+    /// driving Typst's built-in syntax highlighting; `None` renders plain mono.
+    Code { lang: Option<String>, code: String },
     /// A standalone image with its pandoc `{…}` attributes. `width`/`height` are
     /// raw Typst dimensions (`"80%"`, `"3in"`); `fit` ∈ cover/contain/stretch;
     /// `align` ∈ left/center/right; `border` toggles the framed-plate keyline
@@ -653,7 +704,6 @@ fn parse_blocks(md: &str) -> Vec<Block> {
     let md = md.as_str();
     let mut out = Vec::new();
     let mut para: Vec<String> = Vec::new();
-    let mut in_fence = false;
 
     let flush = |para: &mut Vec<String>, out: &mut Vec<Block>| {
         if !para.is_empty() {
@@ -668,15 +718,31 @@ fn parse_blocks(md: &str) -> Vec<Block> {
         let line = lines[i].trim_end();
         let trimmed = line.trim();
 
-        // fenced code block: drop everything inside (and the fences)
-        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+        // Fenced code block. A pandoc raw-attribute fence (```{=latex}) is dropped
+        // entirely (the copyright pages embed raw LaTeX Typst must never render);
+        // any other fence is captured as a Code block, its info-string language
+        // driving Typst's syntax highlighting.
+        if let Some(rest) = trimmed.strip_prefix("```").or_else(|| trimmed.strip_prefix("~~~")) {
             flush(&mut para, &mut out);
-            in_fence = !in_fence;
+            let info = rest.trim();
+            let is_raw = info.starts_with('{'); // ```{=latex} / ```{.foo}
+            let lang = (!is_raw && !info.is_empty())
+                .then(|| info.split_whitespace().next().unwrap().to_string());
+            let mut code = String::new();
             i += 1;
-            continue;
-        }
-        if in_fence {
-            i += 1;
+            while i < lines.len() {
+                let lt = lines[i].trim();
+                if lt.starts_with("```") || lt.starts_with("~~~") {
+                    i += 1;
+                    break;
+                }
+                code.push_str(lines[i]); // keep raw indentation
+                code.push('\n');
+                i += 1;
+            }
+            if !is_raw {
+                out.push(Block::Code { lang, code });
+            }
             continue;
         }
 
@@ -1173,7 +1239,7 @@ mod tests {
             _ => panic!("not a table"),
         }
         let mut s = String::new();
-        emit_blocks(&mut s, &blocks, Path::new("/repo"), true, false);
+        emit_blocks(&mut s, &blocks, Path::new("/repo"), true, false, false);
         assert!(s.contains("#table("));
         assert!(s.contains("columns: 2"));
         assert!(s.contains("table.header([#strong[A]], [#strong[B]])"));
@@ -1208,12 +1274,12 @@ mod tests {
         ));
         // color build (grayscale=false) keeps the color src
         let mut color = String::new();
-        emit_blocks(&mut color, &blocks, Path::new("/repo"), true, false);
+        emit_blocks(&mut color, &blocks, Path::new("/repo"), true, false, false);
         assert!(color.contains("/libros/x/images/ch.jpg"));
         assert!(!color.contains("/libros/x/images/bw/ch.jpg"));
         // print build (grayscale=true) swaps in the bw variant
         let mut print = String::new();
-        emit_blocks(&mut print, &blocks, Path::new("/repo"), true, true);
+        emit_blocks(&mut print, &blocks, Path::new("/repo"), true, true, false);
         assert!(print.contains("/libros/x/images/bw/ch.jpg"));
     }
 }

@@ -182,7 +182,7 @@ pub struct Elements {
 }
 
 /// One draggable text block, persisted as canvas fractions (resolution-free).
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub struct Element {
     pub text: String,
     /// center X as fraction of canvas width
@@ -196,6 +196,22 @@ pub struct Element {
     pub fill: String,
     pub font_family: String,
     pub font_style: String,
+    // Optional formatting (default = renderer's prior behavior). snake_case JSON,
+    // matching what app.js reads/writes on each element.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub align: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_height: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub letter_spacing: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_transform: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<f64>,
 }
 
 /// Build the editor payload for (book, lang).
@@ -242,6 +258,7 @@ pub fn load_cover(repo: &Repo, book: &BookSummary, lang: &str) -> Result<CoverRe
         fill: d.title_color,
         font_family: d.serif,
         font_style: "bold".into(),
+        ..Default::default()
     });
     let sub_el = saved.as_ref().map(|e| e.subtitle.clone()).unwrap_or(Element {
         text: d.sub,
@@ -252,6 +269,7 @@ pub fn load_cover(repo: &Repo, book: &BookSummary, lang: &str) -> Result<CoverRe
         fill: d.sub_color,
         font_family: d.sub_font,
         font_style: d.sub_style,
+        ..Default::default()
     });
     let author_el = saved.as_ref().map(|e| e.author.clone()).unwrap_or(Element {
         text: d.author,
@@ -262,6 +280,7 @@ pub fn load_cover(repo: &Repo, book: &BookSummary, lang: &str) -> Result<CoverRe
         fill: d.author_color,
         font_family: "Montserrat".into(),
         font_style: "normal".into(),
+        ..Default::default()
     });
     // Wrap back-panel layout: seed the editor's drag handles from the saved
     // `[cover.<lang>.wrap]` when present, else from defaults matching the renderer's
@@ -283,6 +302,7 @@ pub fn load_cover(repo: &Repo, book: &BookSummary, lang: &str) -> Result<CoverRe
         fill: wrap_blurb_color.clone(),
         font_family: wrap_serif.clone(),
         font_style: "normal".into(),
+        ..Default::default()
     });
     let wrap_badge = saved_wrap.as_ref().and_then(|w| w.badge.clone()).unwrap_or(Element {
         text: badge.clone(),
@@ -293,6 +313,7 @@ pub fn load_cover(repo: &Repo, book: &BookSummary, lang: &str) -> Result<CoverRe
         fill: badge_color.clone(),
         font_family: "Montserrat".into(),
         font_style: "normal".into(),
+        ..Default::default()
     });
     let wrap_author = saved_wrap.as_ref().and_then(|w| w.author.clone()).unwrap_or(Element {
         text: author_el.text.clone(),
@@ -303,6 +324,7 @@ pub fn load_cover(repo: &Repo, book: &BookSummary, lang: &str) -> Result<CoverRe
         fill: author_el.fill.clone(),
         font_family: "Montserrat".into(),
         font_style: "normal".into(),
+        ..Default::default()
     });
 
     let bgcolor = d.bgcolor;
@@ -512,6 +534,28 @@ fn element_inline(e: &Element) -> Value {
     t.insert("fontFamily", e.font_family.clone().into());
     t.insert("fontStyle", e.font_style.clone().into());
     t.insert("text", e.text.clone().into());
+    // Optional formatting — only written when set, so untouched blocks stay terse.
+    if let Some(v) = &e.align {
+        t.insert("align", v.clone().into());
+    }
+    if let Some(v) = e.line_height {
+        t.insert("lineHeight", round4(v).into());
+    }
+    if let Some(v) = e.letter_spacing {
+        t.insert("letterSpacing", round4(v).into());
+    }
+    if let Some(v) = &e.text_transform {
+        t.insert("textTransform", v.clone().into());
+    }
+    if let Some(v) = &e.stroke {
+        t.insert("stroke", v.clone().into());
+    }
+    if let Some(v) = e.shadow {
+        t.insert("shadow", v.into());
+    }
+    if let Some(v) = e.opacity {
+        t.insert("opacity", round4(v).into());
+    }
     Value::InlineTable(t)
 }
 
@@ -545,6 +589,7 @@ fn read_element(item: &Item) -> Option<Element> {
     let t = item.as_inline_table()?;
     let f = |k: &str| t.get(k).and_then(|v| v.as_float());
     let s = |k: &str| t.get(k).and_then(|v| v.as_str()).map(str::to_string);
+    let b = |k: &str| t.get(k).and_then(|v| v.as_bool());
     Some(Element {
         text: s("text").unwrap_or_default(),
         x_pct: f("xPct")?,
@@ -554,6 +599,13 @@ fn read_element(item: &Item) -> Option<Element> {
         fill: s("fill").unwrap_or_else(|| "#FFFFFF".into()),
         font_family: s("fontFamily").unwrap_or_else(|| "Playfair Display".into()),
         font_style: s("fontStyle").unwrap_or_else(|| "normal".into()),
+        align: s("align"),
+        line_height: f("lineHeight"),
+        letter_spacing: f("letterSpacing"),
+        text_transform: s("textTransform"),
+        stroke: s("stroke"),
+        shadow: b("shadow"),
+        opacity: f("opacity"),
     })
 }
 

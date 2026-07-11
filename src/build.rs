@@ -568,6 +568,9 @@ pub fn job_output_path(repo: &Repo, job: &Job) -> PathBuf {
         Out::RetailPdf => format!("{base}.pdf"),
         Out::KdpPdf => match (job.target.as_str(), job.edition.as_deref()) {
             ("bubok", Some(ed)) => format!("{base}-{ed}.pdf"),
+            // `--format print` writes a distinct `-print.pdf` (same bleed interior,
+            // just not the KDP-named artifact) so it never clobbers `-kdp.pdf`.
+            ("print", _) => format!("{base}-print.pdf"),
             _ => format!("{base}-kdp.pdf"),
         },
         Out::Docx => format!("{base}.docx"),
@@ -679,6 +682,7 @@ fn build_one(
                 true,
                 false,
                 false,
+                false,
                 cover.as_deref(),
                 geometry,
                 lang,
@@ -708,12 +712,17 @@ fn build_one(
         }
         Out::KdpPdf => {
             // Default KDP print interior is "{base}-kdp.pdf". Regional POD print
-            // editions (bubok) get their own filename so they don't clobber it.
+            // editions (bubok) get their own filename so they don't clobber it, and
+            // `--format print` writes "{base}-print.pdf".
             let fname = match (target, edition) {
                 ("bubok", Some(ed)) => format!("{base}-{ed}.pdf"),
+                ("print", _) => format!("{base}-print.pdf"),
                 _ => format!("{base}-kdp.pdf"),
             };
             let pdf = odir.join(fname);
+            // `--format print` is a stripped proofreading interior: no images, just
+            // their alt text (see typst_pdf proof mode).
+            let proof = target == "print";
             crate::typst_pdf::run(
                 repo,
                 &m,
@@ -725,6 +734,7 @@ fn build_one(
                 captions,
                 false,
                 print_grayscale,
+                proof,
                 auto_grayscale,
                 None,
                 geometry,

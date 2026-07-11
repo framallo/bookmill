@@ -20,8 +20,13 @@
 
 use crate::build::BookMeta;
 use crate::discover::Repo;
+
+/// Bundled code-highlight stylesheet appended to every EPUB (styles fenced code +
+/// the syntect class-mode token spans). See `templates/epub-code.css`.
+const CODE_CSS: &str = include_str!("../templates/epub-code.css");
 use anyhow::{Context, Result};
-use comrak::{markdown_to_html, Options};
+use comrak::plugins::syntect::SyntectAdapter;
+use comrak::{markdown_to_html, markdown_to_html_with_plugins, Options, Plugins};
 use epub_builder::{EpubBuilder, EpubContent, EpubVersion, ReferenceType, ZipLibrary};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -50,13 +55,21 @@ pub fn run(
     b.metadata("toc_name", if lang == "es" { "Índice" } else { "Contents" })
         .map_err(anyhow::Error::msg)?;
 
-    // Shared stylesheet (css/epub.css). Optional — books without it still build.
+    // Stylesheet: the repo's css/epub.css (optional) followed by the bundled
+    // code-highlight CSS, so fenced code is styled in every book with no per-repo
+    // setup. Always emitted (even absent a repo stylesheet) so the linked
+    // `stylesheet.css` always resolves.
+    let mut css = String::new();
     let css_path = repo.root.join("css/epub.css");
     if css_path.exists() {
-        let css = std::fs::read(&css_path)
-            .with_context(|| format!("reading {}", css_path.display()))?;
-        b.stylesheet(&css[..]).map_err(anyhow::Error::msg)?;
+        css.push_str(
+            &std::fs::read_to_string(&css_path)
+                .with_context(|| format!("reading {}", css_path.display()))?,
+        );
+        css.push('\n');
     }
+    css.push_str(CODE_CSS);
+    b.stylesheet(css.as_bytes()).map_err(anyhow::Error::msg)?;
 
     // Cover image: embed front-<lang>.png as the EPUB cover.
     if let Some(cv) = cover {
@@ -69,6 +82,9 @@ pub fn run(
         }
     }
 
+    // Syntax highlighter for fenced code blocks (```ruby …). Built once per EPUB.
+    let hl = highlighter();
+
     // Generated title page (not listed in the nav).
     let title_xhtml = title_page(meta, lang);
     b.add_content(EpubContent::new("title.xhtml", title_xhtml.as_bytes()))
@@ -79,7 +95,7 @@ pub fn run(
         let md = std::fs::read_to_string(cp)
             .with_context(|| format!("reading {}", cp.display()))?;
         let (clean, _) = clean_chapter(&md);
-        let body = markdown_to_html(&clean, &comrak_opts());
+        let body = render_md(&clean, &hl);
         let doc = xhtml_doc(lang, &meta.title, &body);
         b.add_content(
             EpubContent::new("copyright.xhtml", doc.as_bytes())
@@ -117,7 +133,7 @@ pub fn run(
             }
         }
 
-        let html = markdown_to_html(&clean, &comrak_opts());
+        let html = render_md(&clean, &hl);
         // per-image width/alignment from the markdown `{…}` attributes (stripped
         // before comrak) re-applied to the rendered <img> by matching src.
         let html = apply_img_styles(&html, &img_styles(&md));
@@ -154,6 +170,25 @@ fn comrak_opts() -> Options<'static> {
     // render.unsafe_ stays false: raw HTML is escaped/omitted, never injected, so
     // every content document is valid XML.
     o
+}
+
+/// Build the fenced-code syntax highlighter in **CSS-class mode**: comrak emits
+/// `<pre class="syntax-highlighting"><code>…<span class="keyword …">` scope-class
+/// spans (no inline colors), styled by `css/epub.css`. This keeps the EPUB
+/// self-contained and lets one stylesheet theme both light and dark readers.
+/// A fenced block's info string (```ruby) selects the syntect syntax; an unknown
+/// or missing language falls back to plain, escaped text (never an error).
+fn highlighter() -> SyntectAdapter {
+    comrak::plugins::syntect::SyntectAdapterBuilder::new().css().build()
+}
+
+/// Markdown → XHTML with fenced-code highlighting via `hl`. Same GFM options as
+/// [`comrak_opts`]; the plugin output is written pre-escaped so `unsafe_` stays
+/// false and the document remains epubcheck-valid.
+fn render_md(md: &str, hl: &SyntectAdapter) -> String {
+    let mut plugins = Plugins::default();
+    plugins.render.codefence_syntax_highlighter = Some(hl);
+    markdown_to_html_with_plugins(md, &comrak_opts(), &plugins)
 }
 
 /// Strip pandoc attribute blocks and drop `{.spot}` images from a chapter's

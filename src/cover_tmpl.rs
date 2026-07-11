@@ -29,6 +29,8 @@ pub(crate) struct Resolved {
     pub(crate) bgcolor: String,
     pub(crate) filt: String,
     pub(crate) accent: String,
+    /// draw the accent rule under the title (default true).
+    pub(crate) rule: bool,
     pub(crate) title_color: String,
     pub(crate) sub_color: String,
     pub(crate) author_color: String,
@@ -196,6 +198,7 @@ pub(crate) fn resolve(repo: &RepoConfig, book: &BookConfig, lang: &str) -> Resol
         bgcolor: pick(bc, rc, |c| c.bgcolor.clone(), "#000000"),
         filt: pick(bc, rc, |c| c.filt.clone(), "none"),
         accent: accent.clone(),
+        rule: bc.and_then(|c| c.rule).or_else(|| rc.and_then(|c| c.rule)).unwrap_or(true),
         title_color: title_color.clone(),
         sub_color: sub_color.clone(),
         author_color: pick(bc, rc, |c| c.author_color.clone(), "#FFFFFF"),

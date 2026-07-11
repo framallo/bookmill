@@ -253,6 +253,9 @@ pub struct CoverConfig {
     pub sub_color: Option<String>,
     pub author_color: Option<String>,
     pub accent: Option<String>,
+    /// draw the accent rule under the title (default true). Set `rule = false` to
+    /// remove the horizontal line on both the eBook front and the paperback front.
+    pub rule: Option<bool>,
     // strokes / shadows
     pub title_shadow: Option<String>,
     pub title_stroke: Option<String>,
@@ -376,6 +379,25 @@ pub struct CoverElement {
     #[serde(rename = "fontStyle")]
     pub font_style: Option<String>,
     pub text: Option<String>,
+    // ---- optional formatting (web editor). All default to the renderer's prior
+    // behavior when absent, so existing layouts render unchanged. ----
+    /// horizontal alignment within the block box: "left" | "center" | "right".
+    pub align: Option<String>,
+    /// line-height multiplier for multi-line blocks (default 1.0).
+    #[serde(rename = "lineHeight")]
+    pub line_height: Option<f64>,
+    /// letter-spacing (tracking) in px at the block's font size (default 0).
+    #[serde(rename = "letterSpacing")]
+    pub letter_spacing: Option<f64>,
+    /// case transform: "upper" | "lower" | "none" (default none).
+    #[serde(rename = "textTransform")]
+    pub text_transform: Option<String>,
+    /// text outline, CSS-ish "<width>px <color>" (e.g. "2px #000000"); default none.
+    pub stroke: Option<String>,
+    /// draw the block's drop shadow (default true — prior behavior).
+    pub shadow: Option<bool>,
+    /// block opacity 0..1 (default 1).
+    pub opacity: Option<f64>,
 }
 
 fn half() -> f64 {

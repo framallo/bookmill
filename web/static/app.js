@@ -186,21 +186,33 @@ async function loadCover() {
   status('');
 }
 
-// Fetch + inject the authoritative SVG for the current view, then lay the drag
-// handle groups over it. Cache-busted so a re-render is reflected.
+// Render the current WORKING state to the canvas: POST the in-memory layout to the
+// authoritative renderer (no disk write) so size/style/font/text/markdown edits all
+// preview live — then lay the drag-handle groups over the fresh SVG. Because the
+// SVG is baked at the working fractions, snapshot `baked` right before mounting so
+// live-drag deltas reset to zero.
 async function renderStage() {
   const wrap = VIEW === 'wrap' ? 1 : 0;
   const stage = $('stage');
   status('rendering…');
   let svg;
   try {
-    svg = await fetch(`/api/cover/${SLUG}/${LANG}/svg?wrap=${wrap}&t=${Date.now()}`)
-      .then(r => r.ok ? r.text() : r.text().then(t => { throw new Error(t); }));
+    svg = await fetch(`/api/cover/${SLUG}/${LANG}/svg?wrap=${wrap}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(currentBody()),
+    }).then(r => r.ok ? r.text() : r.text().then(t => { throw new Error(t); }));
   } catch (e) {
     stage.innerHTML = `<div style="color:#c66;padding:40px;line-height:1.5;max-width:520px">Cover render failed:<br><code>${escapeHtml((e && e.message) || e)}</code></div>`;
     status('render failed');
     return;
   }
+  snapshotBaked();
+  mountSvg(svg);
+  status('');
+}
+
+// Inject an SVG string as the editing surface and (re)build the drag overlay.
+function mountSvg(svg) {
+  const stage = $('stage');
   stage.innerHTML = svg;
   const svgEl = stage.querySelector('svg');
   if (svgEl) {
@@ -209,13 +221,30 @@ async function renderStage() {
     // deselects otherwise.
     svgEl.addEventListener('click', () => select(VIEW === 'front' ? '__bg__' : null));
   }
-
   handles = {};
   groups = buildGroups(svgEl);
   groups.forEach(g => g.keys.forEach(k => makeHandle(g, k)));
   applyAllLive();   // restore any unsaved drags onto the fresh SVG
   positionHandles();
-  status('');
+}
+
+// Debounced live re-render used while editing style/text in the sidebar, so the
+// canvas reflects size/font/color/markdown changes without a full Save. Coalesces
+// bursts and never overlaps two in-flight renders.
+let _previewTimer = null, _previewBusy = false, _previewAgain = false;
+function scheduleLivePreview() {
+  clearTimeout(_previewTimer);
+  _previewTimer = setTimeout(runLivePreview, 160);
+}
+async function runLivePreview() {
+  if (VIEW === 'audiobook') return;
+  if (_previewBusy) { _previewAgain = true; return; }
+  _previewBusy = true;
+  try { await renderStage(); }
+  finally {
+    _previewBusy = false;
+    if (_previewAgain) { _previewAgain = false; scheduleLivePreview(); }
+  }
 }
 
 // The draggable groups for the current view.
@@ -375,9 +404,38 @@ function select(sel) {
     $('selBold').classList.toggle('on', st.includes('bold'));
     $('selItalic').classList.toggle('on', st.includes('italic'));
     setFamilySelect(el.font_family || '');
+    // formatting controls
+    setSeg('selAlign', 'align', el.align || 'center');
+    setSeg('selCase', 'case', el.text_transform || 'none');
+    $('selLineHeight').value = el.line_height != null ? el.line_height : '';
+    $('selLetterSpacing').value = el.letter_spacing != null ? el.letter_spacing : '';
+    const op = el.opacity != null ? el.opacity : 1;
+    $('selOpacity').value = op; $('selOpacityVal').textContent = Math.round(op * 100) + '%';
+    const s = parseStroke(el.stroke);
+    $('selStrokeColor').value = s.color;
+    $('selStrokeWidth').value = s.w || '';
+    $('selShadow').checked = el.shadow !== false; // default on
   }
   renderPane();
   positionHandles();
+}
+
+// Reflect the active button in a segmented control keyed by a data-<attr>.
+function setSeg(segId, attr, val) {
+  const seg = $(segId); if (!seg) return;
+  seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset[attr] === val));
+}
+// Parse an SVG-ish stroke "2px #rrggbb" into {w, color}; empty/none → no stroke.
+function parseStroke(s) {
+  s = (s || '').trim();
+  const m = s.match(/^([\d.]+)px\s+(#[0-9a-fA-F]{3,8}|[a-zA-Z]+)/);
+  if (m && parseFloat(m[1]) > 0) return { w: parseFloat(m[1]), color: toHex6(m[2]) };
+  return { w: 0, color: '#000000' };
+}
+// Build the stroke string, or undefined when width is 0 (no outline).
+function composeStroke(w, color) {
+  w = parseFloat(w);
+  return w > 0 ? `${w}px ${color || '#000000'}` : undefined;
 }
 
 // The font-style string bookmill expects: "normal" | "bold" | "italic" | "bold italic".
@@ -406,31 +464,49 @@ function bindStyleInputs() {
     if (!e) return;
     e.text = $('selText').value;
     if (VIEW === 'wrap' && current === 'back:blurb') $('blurbText').value = $('selText').value;
+    scheduleLivePreview();
   };
-  const setFill = (v) => { const e = sel(); if (e) e.fill = v; };
+  const setFill = (v) => { const e = sel(); if (e) e.fill = v; scheduleLivePreview(); };
   $('selFill').oninput = () => { $('selFillHex').value = $('selFill').value; setFill($('selFill').value); };
   $('selFillHex').oninput = () => { $('selFill').value = toHex6($('selFillHex').value); setFill($('selFillHex').value); };
-  $('selSize').onchange = () => {
+  $('selSize').oninput = () => {
     const i = selInfo();
     if (!i) return;
     const v = parseFloat($('selSize').value);
-    if (v > 0) { i.el.font_pct = v / i.g.sizeRef; positionHandles(); }
+    if (v > 0) { i.el.font_pct = v / i.g.sizeRef; positionHandles(); scheduleLivePreview(); }
   };
-  $('selFamily').onchange = () => { const e = sel(); if (e) { e.font_family = $('selFamily').value; positionHandles(); } };
+  $('selFamily').onchange = () => { const e = sel(); if (e) { e.font_family = $('selFamily').value; positionHandles(); scheduleLivePreview(); } };
   const applyStyle = () => {
     const e = sel();
     if (!e) return;
     e.font_style = styleStr($('selBold').classList.contains('on'), $('selItalic').classList.contains('on'));
     positionHandles();
+    scheduleLivePreview();
   };
   $('selBold').onclick = () => { $('selBold').classList.toggle('on'); applyStyle(); };
   $('selItalic').onclick = () => { $('selItalic').classList.toggle('on'); applyStyle(); };
-  $('bgcolor').oninput = () => { $('bgcolorHex').value = $('bgcolor').value; };
-  $('bgcolorHex').oninput = () => { $('bgcolor').value = toHex6($('bgcolorHex').value); };
+  // formatting: alignment, case, line height, letter spacing, opacity, stroke, shadow
+  const segClick = (segId, attr, apply) => {
+    $(segId).querySelectorAll('button').forEach(b => {
+      b.onclick = () => { const e = sel(); if (!e) return; apply(e, b.dataset[attr]); setSeg(segId, attr, b.dataset[attr]); positionHandles(); scheduleLivePreview(); };
+    });
+  };
+  segClick('selAlign', 'align', (e, v) => { e.align = v; });
+  segClick('selCase', 'case', (e, v) => { e.text_transform = v === 'none' ? undefined : v; });
+  $('selLineHeight').oninput = () => { const e = sel(); if (!e) return; const v = parseFloat($('selLineHeight').value); e.line_height = v > 0 ? v : undefined; positionHandles(); scheduleLivePreview(); };
+  $('selLetterSpacing').oninput = () => { const e = sel(); if (!e) return; const v = parseFloat($('selLetterSpacing').value); e.letter_spacing = isNaN(v) ? undefined : v; scheduleLivePreview(); };
+  $('selOpacity').oninput = () => { const e = sel(); if (!e) return; const v = parseFloat($('selOpacity').value); e.opacity = v; $('selOpacityVal').textContent = Math.round(v * 100) + '%'; scheduleLivePreview(); };
+  const applyStroke = () => { const e = sel(); if (!e) return; e.stroke = composeStroke($('selStrokeWidth').value, $('selStrokeColor').value); scheduleLivePreview(); };
+  $('selStrokeColor').oninput = applyStroke;
+  $('selStrokeWidth').oninput = applyStroke;
+  $('selShadow').onchange = () => { const e = sel(); if (!e) return; e.shadow = $('selShadow').checked; scheduleLivePreview(); };
+  $('bgcolor').oninput = () => { $('bgcolorHex').value = $('bgcolor').value; scheduleLivePreview(); };
+  $('bgcolorHex').oninput = () => { $('bgcolor').value = toHex6($('bgcolorHex').value); scheduleLivePreview(); };
   // Back-cover blurb textarea (wrap view) → the wrap blurb element's text.
   $('blurbText').oninput = () => {
     if (wrapEls && wrapEls.blurb) wrapEls.blurb.text = $('blurbText').value;
     if (VIEW === 'wrap' && current === 'back:blurb') $('selText').value = $('blurbText').value;
+    scheduleLivePreview();
   };
 }
 
@@ -484,10 +560,10 @@ async function genAudiobookCover() {
   } finally { btn.disabled = false; }
 }
 
-async function save() {
-  // The front layout (title/subtitle/author) is always persisted; the wrap view also
-  // persists the back panel. So dragging front blocks while in the wrap view saves
-  // them to [cover.<lang>.layout] just as the front view does.
+// The editor's working layout, in the shape both the live-preview POST and the
+// Save POST expect. The front layout (title/subtitle/author) is always included;
+// the wrap view also carries the back panel (blurb/badge/author).
+function currentBody() {
   const body = {
     title: els.title,
     subtitle: els.subtitle,
@@ -503,6 +579,11 @@ async function save() {
       author: wrapEls.author || undefined,
     };
   }
+  return body;
+}
+
+async function save() {
+  const body = currentBody();
   $('saveBtn').disabled = true; status('saving + rendering…');
   try {
     const r = await fetch(`/api/cover/${SLUG}/${LANG}`, {

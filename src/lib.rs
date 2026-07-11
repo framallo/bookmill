@@ -44,6 +44,45 @@ pub fn editor_cover_svg(
     }
 }
 
+/// Like [`editor_cover_svg`], but renders from the editor's **working** (unsaved)
+/// state instead of the on-disk TOML. The web editor POSTs its current layout so
+/// every style/size/text/markdown change previews live on the canvas — the same
+/// authoritative renderer, just with the front `[cover.<lang>.layout]`, back
+/// `[cover.<lang>.wrap]`, and front `bgcolor` overridden in-memory. Nothing is
+/// written to disk (that's the explicit Save & re-render).
+#[allow(clippy::too_many_arguments)]
+pub fn editor_cover_svg_preview(
+    repo_root: &Path,
+    book_dir: &Path,
+    lang: &str,
+    wrap: bool,
+    pages: u32,
+    layout: config::CoverLayout,
+    wrap_layout: Option<config::CoverWrapLayout>,
+    bgcolor: Option<String>,
+) -> Result<String> {
+    let repo = config::load_repo(&repo_root.join("bookmill.toml"))?;
+    let mut book = config::load_book(&book_dir.join("bookmill.toml"))?;
+    {
+        let cover = book.cover.get_or_insert_with(Default::default);
+        if let Some(bg) = bgcolor {
+            cover.bgcolor = Some(bg);
+        }
+        let cl = cover.lang.entry(lang.to_string()).or_default();
+        cl.layout = Some(layout);
+        if wrap_layout.is_some() {
+            cl.wrap = wrap_layout;
+        }
+    }
+    let cover_dir = book_dir.join("cover");
+    let r = cover_svg::CoverRenderer::new();
+    if wrap {
+        r.wrap_svg_string(&repo, &book, lang, &cover_dir, pages)
+    } else {
+        r.front_svg_string(&repo, &book, lang, &cover_dir)
+    }
+}
+
 /// The subset of resolved cover values the web editor needs to seed its canvas
 /// (text, colors, fonts, title size) — produced by the same layered resolver
 /// (`cover_tmpl::resolve`) the build uses.

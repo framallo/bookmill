@@ -421,14 +421,16 @@ impl CoverRenderer {
             );
         }
         y += title_h;
-        // rule
+        // rule (skip drawing when disabled, but keep the spacing so nothing reflows)
         y += 46.0;
-        text.push_str(&format!(
-            "<rect x=\"{}\" y=\"{}\" width=\"220\" height=\"3\" fill=\"{}\" opacity=\"0.85\"/>",
-            cx - 110.0,
-            y,
-            r.accent
-        ));
+        if r.rule {
+            text.push_str(&format!(
+                "<rect x=\"{}\" y=\"{}\" width=\"220\" height=\"3\" fill=\"{}\" opacity=\"0.85\"/>",
+                cx - 110.0,
+                y,
+                r.accent
+            ));
+        }
         y += 3.0;
         // subtitle
         let svm = self.vmetrics(&r.sub_font, 500, r.sub_italic == "italic");
@@ -541,13 +543,15 @@ impl CoverRenderer {
         );
 
         // Accent rule, centered under the title block (default 46px gap, 220x3).
-        let rule_y = t_top + t_h + 46.0;
-        text.push_str(&format!(
-            "<rect x=\"{}\" y=\"{}\" width=\"220\" height=\"3\" fill=\"{}\" opacity=\"0.85\"/>",
-            fmt(t_cx - 110.0),
-            fmt(rule_y),
-            r.accent
-        ));
+        if r.rule {
+            let rule_y = t_top + t_h + 46.0;
+            text.push_str(&format!(
+                "<rect x=\"{}\" y=\"{}\" width=\"220\" height=\"3\" fill=\"{}\" opacity=\"0.85\"/>",
+                fmt(t_cx - 110.0),
+                fmt(rule_y),
+                r.accent
+            ));
+        }
 
         // Subtitle (absolute).
         let sub_style = if r.sub_italic == "italic" { "italic" } else { "normal" };
@@ -651,19 +655,46 @@ impl CoverRenderer {
         let style = el
             .and_then(|e| e.font_style.clone())
             .unwrap_or_else(|| def_style.to_string());
-        let content = el
+        let mut content = el
             .and_then(|e| e.text.clone())
             .filter(|t| !t.trim().is_empty())
             .unwrap_or_else(|| def_text.to_string());
 
+        // Optional per-element formatting (web editor). Each falls back to the
+        // renderer's prior default so untouched layouts are byte-identical.
+        match el.and_then(|e| e.text_transform.as_deref()) {
+            Some("upper") => content = content.to_uppercase(),
+            Some("lower") => content = content.to_lowercase(),
+            _ => {}
+        }
+        let lh = el.and_then(|e| e.line_height).filter(|v| *v > 0.0).unwrap_or(1.0);
+        let ls = el.and_then(|e| e.letter_spacing).unwrap_or(0.0);
+        let opacity = el.and_then(|e| e.opacity).unwrap_or(1.0).clamp(0.0, 1.0);
+        let el_stroke = el.and_then(|e| e.stroke.clone());
+        let draw_shadow = el.and_then(|e| e.shadow).unwrap_or(true);
+        let anchor = match el.and_then(|e| e.align.as_deref()) {
+            Some("left") => "start",
+            Some("right") => "end",
+            _ => "middle",
+        };
+
         let size = font_pct * h;
         let block_cx = x0 + x_pct * w;
         let box_w = (w_pct * w).max(1.0);
+        // Alignment shifts the text anchor point to the box's left/right edge; the
+        // returned center_x stays `block_cx` so decoration (the title rule) still
+        // centers on the block.
+        let tx = match anchor {
+            "start" => block_cx - box_w / 2.0,
+            "end" => block_cx + box_w / 2.0,
+            _ => block_cx,
+        };
         let italic = style.contains("italic");
         let weight: u16 = if style.contains("bold") { 700 } else { 400 };
-        let lh = 1.0_f64; // Konva default line-height.
         let vm = self.vmetrics(&family, weight, italic);
-        let shadow = shadow_def(defs, shadow_css, shadow_id);
+        let block_shadow = shadow_def(defs, shadow_css, shadow_id);
+        let shadow = if draw_shadow { block_shadow } else { String::new() };
+        let stroke_str = el_stroke.as_deref().unwrap_or("0px transparent");
 
         // Editor layer: wrap this block's lines in a labeled `<g>` so the web
         // editor can translate the whole block live (real-time drag) without
@@ -686,19 +717,19 @@ impl CoverRenderer {
                 self.emit_emph_line(
                     out,
                     ln,
-                    block_cx,
+                    tx,
                     block_top + baseline(size, lh, vm) + i as f64 * line_box(size, lh),
                     &TextStyle {
                         family: &family,
                         weight,
                         size,
                         italic,
-                        letter_spacing: 0.0,
+                        letter_spacing: ls,
                         fill: &fill,
-                        opacity: 1.0,
-                        stroke: "0px transparent",
+                        opacity,
+                        stroke: &stroke_str,
                         shadow_id: &shadow,
-                        anchor: "middle",
+                        anchor,
                     },
                     e.color,
                     e.family,
@@ -719,19 +750,19 @@ impl CoverRenderer {
             self.emit_line(
                 out,
                 &esc(ln),
-                block_cx,
+                tx,
                 block_top + baseline(size, lh, vm) + i as f64 * line_box(size, lh),
                 &TextStyle {
                     family: &family,
                     weight,
                     size,
                     italic,
-                    letter_spacing: 0.0,
+                    letter_spacing: ls,
                     fill: &fill,
-                    opacity: 1.0,
-                    stroke: "0px transparent",
+                    opacity,
+                    stroke: &stroke_str,
                     shadow_id: &shadow,
-                    anchor: "middle",
+                    anchor,
                 },
             );
         }
@@ -1218,14 +1249,16 @@ impl CoverRenderer {
                 front_x,
                 Some("front:title"),
             );
-            let rule_y = t_top + t_h + 0.18 * DPI;
-            body.push_str(&format!(
-                "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"2\" fill=\"{}\" opacity=\"0.85\"/>",
-                fmt(t_cx - 0.6 * DPI),
-                fmt(rule_y),
-                fmt(1.2 * DPI),
-                r.accent
-            ));
+            if r.rule {
+                let rule_y = t_top + t_h + 0.18 * DPI;
+                body.push_str(&format!(
+                    "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"2\" fill=\"{}\" opacity=\"0.85\"/>",
+                    fmt(t_cx - 0.6 * DPI),
+                    fmt(rule_y),
+                    fmt(1.2 * DPI),
+                    r.accent
+                ));
+            }
             let fsub_style = if r.sub_italic == "italic" { "italic" } else { "normal" };
             self.emit_abs_element(
                 &mut body,
@@ -1284,13 +1317,15 @@ impl CoverRenderer {
             );
         }
         fy += ftitle_h + 0.18 * DPI;
-        body.push_str(&format!(
-            "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"2\" fill=\"{}\" opacity=\"0.85\"/>",
-            fcx - 0.6 * DPI,
-            fy,
-            1.2 * DPI,
-            r.accent
-        ));
+        if r.rule {
+            body.push_str(&format!(
+                "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"2\" fill=\"{}\" opacity=\"0.85\"/>",
+                fcx - 0.6 * DPI,
+                fy,
+                1.2 * DPI,
+                r.accent
+            ));
+        }
         fy += 2.0;
         let fsvm = self.vmetrics(&r.sub_font, 500, r.sub_italic == "italic");
         let fsshadow = shadow_def(&mut defs, &r.sub_shadow, "fssh");

@@ -97,6 +97,46 @@
           <button type="button" id="selItalic">Italic</button>
         </span>
       </div>
+      <div class="field">
+        <label>Align</label>
+        <span class="seg" id="selAlign">
+          <button type="button" data-align="left">Left</button>
+          <button type="button" data-align="center">Center</button>
+          <button type="button" data-align="right">Right</button>
+        </span>
+      </div>
+      <div class="field">
+        <label>Case</label>
+        <span class="seg" id="selCase">
+          <button type="button" data-case="none">Aa</button>
+          <button type="button" data-case="upper">AA</button>
+          <button type="button" data-case="lower">aa</button>
+        </span>
+      </div>
+      <div class="row">
+        <div class="field" style="flex:1">
+          <label for="selLineHeight">Line height</label>
+          <input type="number" id="selLineHeight" step="0.05" min="0.6" max="3" />
+        </div>
+        <div class="field" style="flex:1">
+          <label for="selLetterSpacing">Letter spacing</label>
+          <input type="number" id="selLetterSpacing" step="0.5" />
+        </div>
+      </div>
+      <div class="field">
+        <label for="selOpacity">Opacity <span id="selOpacityVal" class="hint"></span></label>
+        <input type="range" id="selOpacity" min="0" max="1" step="0.05" style="width:100%" />
+      </div>
+      <div class="field">
+        <label>Outline (stroke)</label>
+        <div class="row">
+          <input type="color" id="selStrokeColor" aria-label="Stroke color" />
+          <input type="number" id="selStrokeWidth" min="0" max="20" step="0.5" placeholder="width" aria-label="Stroke width px" />
+        </div>
+      </div>
+      <div class="field">
+        <label><input type="checkbox" id="selShadow" /> Drop shadow</label>
+      </div>
     </div>
 
     <!-- Contextual: the background is clicked (front view). -->

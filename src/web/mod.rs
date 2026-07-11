@@ -128,7 +128,7 @@ async fn serve(repo_root: PathBuf, port: u16, pages: u32) -> Result<()> {
         .route("/api/build/{book}/{lang}", post(api_build))
         // cover editor
         .route("/api/cover/{book}/{lang}", get(api_cover).post(api_save))
-        .route("/api/cover/{book}/{lang}/svg", get(api_cover_svg))
+        .route("/api/cover/{book}/{lang}/svg", get(api_cover_svg).post(api_cover_svg_preview))
         .route("/api/cover/{book}/{lang}/audiobook", post(api_audiobook_cover))
         .route("/api/asset/{book}/{lang}/{kind}", get(api_asset))
         // interior previewer
@@ -669,6 +669,66 @@ async fn api_cover_svg(
     let wrap = q.wrap != 0;
     let pages = pdf_pages(&kdp_pdf_path(&act.disco.root, &book, &lang)).unwrap_or(st.default_pages);
     let svg = bookmill::editor_cover_svg(&act.disco.root, &dir, &lang, wrap, pages).map_err(err)?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "image/svg+xml"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        svg,
+    ))
+}
+
+/// Convert a web editor [`Element`] to a config [`CoverElement`] (same fractions,
+/// style + text carried as overrides). Used to render the editor's working state.
+fn to_cover_el(e: &Element) -> bookmill::config::CoverElement {
+    bookmill::config::CoverElement {
+        x_pct: e.x_pct,
+        y_pct: e.y_pct,
+        w_pct: e.w_pct,
+        font_pct: e.font_pct,
+        fill: Some(e.fill.clone()),
+        font_family: Some(e.font_family.clone()),
+        font_style: Some(e.font_style.clone()),
+        text: Some(e.text.clone()),
+        align: e.align.clone(),
+        line_height: e.line_height,
+        letter_spacing: e.letter_spacing,
+        text_transform: e.text_transform.clone(),
+        stroke: e.stroke.clone(),
+        shadow: e.shadow,
+        opacity: e.opacity,
+    }
+}
+
+/// `POST /api/cover/{book}/{lang}/svg?wrap=0|1` — render the editor's WORKING
+/// (unsaved) layout to SVG without touching disk, so size/style/font/text/markdown
+/// edits preview live on the canvas. Body is the same shape the Save endpoint takes.
+async fn api_cover_svg_preview(
+    State(st): State<Shared>,
+    AxPath((book, lang)): AxPath<(String, String)>,
+    Query(q): Query<SvgQuery>,
+    Json(body): Json<SaveBody>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let act = st.active.read().unwrap();
+    let (cfg, dir) = act.disco.find_book(&book).map_err(err)?;
+    check_lang(&cfg.languages, &lang)?;
+    let wrap = q.wrap != 0;
+    let pages = pdf_pages(&kdp_pdf_path(&act.disco.root, &book, &lang)).unwrap_or(st.default_pages);
+    let layout = bookmill::config::CoverLayout {
+        title: Some(to_cover_el(&body.title)),
+        subtitle: Some(to_cover_el(&body.subtitle)),
+        author: Some(to_cover_el(&body.author)),
+    };
+    let wrap_layout = body.wrap.as_ref().map(|w| bookmill::config::CoverWrapLayout {
+        blurb: w.blurb.as_ref().map(to_cover_el),
+        badge: w.badge.as_ref().map(to_cover_el),
+        author: w.author.as_ref().map(to_cover_el),
+    });
+    let bg = (!body.bgcolor.trim().is_empty()).then(|| body.bgcolor.clone());
+    let svg = bookmill::editor_cover_svg_preview(
+        &act.disco.root, &dir, &lang, wrap, pages, layout, wrap_layout, bg,
+    )
+    .map_err(err)?;
     Ok((
         [
             (header::CONTENT_TYPE, "image/svg+xml"),

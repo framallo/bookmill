@@ -182,6 +182,7 @@ fn build_sample(
         true,
         false,
         false,
+        false,
         cover.as_deref(),
         geometry,
         lang,

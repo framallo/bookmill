@@ -54,7 +54,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }
 tower-http = { version = "0.6", features = ["cors"] }
 toml_edit = "0.22"
 epub-builder = "0.8"
-comrak = "0.52"
+comrak = { version = "0.52", features = ["syntect"] }
 docx-rs = "0.4"
 # Native (poppler-free) PDF metadata: page count + first-page MediaBox size.
 # Replaces shelling out to `pdfinfo`. Lean: no date/parallel/serde extras.

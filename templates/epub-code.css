@@ -1,0 +1,49 @@
+/* Fenced code blocks + syntect class-mode syntax highlighting.
+   Bundled into every EPUB by bookmill (appended after the repo's css/epub.css),
+   so ```ruby / ```bash / ```yaml … render highlighted with no per-book setup.
+   Token colors are mid-tone so they stay legible on light OR dark backgrounds
+   (many e-ink readers just invert the page); a prefers-color-scheme override
+   tunes readers that honor it. */
+
+pre {
+  font-size: 0.85em;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  margin: 1em 0;
+  padding: 0.6em 0.8em;
+  border-radius: 4px;
+  background: #f6f6f4;
+  -epub-hyphens: none;
+  hyphens: none;
+}
+code { font-family: monospace; }
+pre code { font-size: 1em; background: transparent; padding: 0; }
+:not(pre) > code {
+  background: #f0f0ee;
+  padding: 0.05em 0.3em;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+
+/* syntect ClassStyle::Spaced scope atoms */
+.comment            { color: #6a737d; font-style: italic; }
+.string             { color: #1a7f37; }
+.constant           { color: #953800; }
+.keyword, .storage  { color: #a626a4; }
+.variable           { color: #953800; }
+.entity             { color: #4b69c6; }
+.support            { color: #16718d; }
+
+@media (prefers-color-scheme: dark) {
+  pre               { background: #1e1e24; color: #e6e6e6; }
+  :not(pre) > code  { background: #2a2a30; }
+  .comment          { color: #8b98a6; }
+  .string           { color: #7ee787; }
+  .constant         { color: #ffa657; }
+  .keyword, .storage{ color: #d2a8ff; }
+  .variable         { color: #ffa657; }
+  .entity           { color: #79c0ff; }
+  .support          { color: #56d4dd; }
+}
