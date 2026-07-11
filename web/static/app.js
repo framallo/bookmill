@@ -1,9 +1,20 @@
-// bookmill cover editor (v2). The canvas IS the authoritative resvg SVG (served by
+// bookmill cover editor (v3). The canvas IS the authoritative resvg SVG (served by
 // /api/cover/{slug}/{lang}/svg) — no Konva re-implementation, so the editor can no
 // longer drift from what `build cover` ships. A thin pointer-drag overlay places
-// labeled boxes over the front's title/subtitle/author; dragging updates the saved
-// fractions and Save re-renders. Languages and Front/Wrap/Audiobook views toggle
-// in place. Wrap shows the full back·spine·front paperback.
+// labeled boxes over the editable text blocks; dragging updates the saved fractions
+// and Save re-renders.
+//
+// Views (which are offered is driven by the book's edit mode — see EDIT_MODE):
+//   • front     — the eBook front only (title/subtitle/author + bg color).
+//   • wrap      — the full paperback back·spine·front. BOTH panels are editable:
+//                 the back (blurb/badge/author) AND the front (title/subtitle/author).
+//   • audiobook — square crop of the front.
+// A digital-only book (no print edition) exposes only front + audiobook; a paperback
+// book exposes wrap + front + audiobook. `[cover].edit` overrides the derivation.
+//
+// Each view lays out one or more `groups`, each a set of draggable blocks that share
+// a coordinate space (front canvas, wrap back panel, or wrap front panel). Handles are
+// keyed "<groupId>:<key>" so the front and back `author` never collide.
 
 const $ = (id) => document.getElementById(id);
 const W = 1600, H = 2560;            // authoritative front-cover pixel space
@@ -15,19 +26,22 @@ const BADGE_SIZE = 32, BADGE_LH = 1.2;
 const RULE_H = 3, RULE_GAP = 46;
 const KEYS = ['title', 'subtitle', 'author'];
 const WRAP_KEYS = ['blurb', 'badge', 'author'];
+const FAMILIES = ['Playfair Display', 'Montserrat', 'Baloo 2', 'Oswald', 'Patrick Hand'];
 
-let SLUG = null, LANG = null, VIEW = 'wrap';  // open on the full paperback
+let SLUG = null, LANG = null, VIEW = 'wrap';  // open on the full paperback (if allowed)
 let LANGS = [];                      // book's declared languages
+let EDIT_MODE = 'wrap';              // 'front' (digital-only) | 'wrap' (paperback)
 let data = null;                     // last /api/cover payload
-let els = null;                      // working front {title,subtitle,author} fractions
-let wrapEls = null;                  // working wrap back-panel {blurb,badge,author} fractions
-let current = null;                  // selected key (front or wrap)
-let handles = {};                    // key -> overlay div
-// Coordinate space of the current view's drag overlay. Front is the 1600×2560
-// portrait canvas; wrap is the back-panel sub-rectangle of the landscape wrap SVG
-// (origin at the wrap's left edge; width = the SVG's data-back-w in viewBox units,
-// height = the full viewBox height). Set by renderStage() per view.
-let space = { w: W, h: H, x0: 0, vbW: W, vbH: H };
+let els = null;                      // front layout {title,subtitle,author} fractions
+let wrapEls = null;                  // wrap back-panel {blurb,badge,author} fractions
+let current = null;                  // selected "groupId:key", or '__bg__', or null
+let handles = {};                    // "groupId:key" -> overlay div
+// Draggable groups for the current view. Each: { id, keys, els, space, sizeRef }.
+// `space` maps stored fractions to viewBox px: center = (x0 + x_pct·w, y_pct·h),
+// wrap width = w_pct·w, size = font_pct·h. `sizeRef` is the height the size FIELD
+// reports/edits against (front elements always report against the 2560 canvas so the
+// number is stable whether shown in the front view or the wrap's front panel).
+let groups = [];
 
 init();
 
@@ -53,7 +67,6 @@ async function init() {
   $('openWrap').href = `/api/output/${encodeURIComponent(SLUG)}/${encodeURIComponent(LANG)}/wrap-cover`;
 
   buildLangSeg();
-  wireViewSeg();
   $('saveBtn').onclick = save;
   $('genAudiobook').onclick = genAudiobookCover;
   bindStyleInputs();
@@ -77,9 +90,21 @@ function buildLangSeg() {
   });
 }
 
-function wireViewSeg() {
-  $('viewSeg').querySelectorAll('button').forEach(b => {
-    b.onclick = () => setView(b.dataset.view);
+// Build the Front/Wrap/Audiobook segmented control from the book's edit mode: a
+// digital-only book has no wrap to edit, so it only offers front + audiobook.
+function buildViewSeg() {
+  const seg = $('viewSeg');
+  seg.innerHTML = '';
+  const views = EDIT_MODE === 'front'
+    ? [['front', 'Front'], ['audiobook', 'Audiobook']]
+    : [['wrap', 'Wrap'], ['front', 'Front'], ['audiobook', 'Audiobook']];
+  views.forEach(([v, label]) => {
+    const b = document.createElement('button');
+    b.dataset.view = v;
+    b.textContent = label;
+    b.className = v === VIEW ? 'on' : '';
+    b.onclick = () => setView(v);
+    seg.appendChild(b);
   });
 }
 
@@ -94,19 +119,28 @@ async function switchLang(l) {
 function setView(v) {
   VIEW = v;
   $('viewSeg').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.view === v));
-  // The front (KEYS) and wrap (WRAP_KEYS) selections don't overlap cleanly, so
-  // clear the selection when switching surfaces.
   current = null;
   renderStage().then(() => select(null));
 }
 
-// The left pane is contextual: a selected text block → block editor; the
-// background (clicked on the canvas) → background color; otherwise the view's
-// default (wrap → blurb, audiobook → generate, front → hint).
+// ---- group helpers ---------------------------------------------------------
+
+function groupOf(id) { return groups.find(g => g.id === id); }
+// Resolve the current "groupId:key" selection to {g, key, el}, or null.
+function selInfo() {
+  if (!current || current === '__bg__') return null;
+  const [gid, key] = current.split(':');
+  const g = groupOf(gid);
+  if (!g || !g.els[key]) return null;
+  return { g, key, el: g.els[key] };
+}
+
+// The left pane is contextual: a selected text block → block editor; the front
+// background (front view only) → background color; otherwise the view's default
+// (wrap → blurb text, audiobook → generate, front → hint).
 function show(id, on) { const e = $(id); if (e) e.style.display = on ? '' : 'none'; }
 function renderPane() {
-  const set = activeEls();
-  const isBlock = !!current && current !== '__bg__' && !!(set && set[current]);
+  const isBlock = !!selInfo();
   const isBg = current === '__bg__' && VIEW === 'front';
   show('blockPane', isBlock);
   show('bgPane', isBg);
@@ -122,21 +156,20 @@ async function loadCover() {
   status('loading…');
   data = await fetch(`/api/cover/${SLUG}/${LANG}`).then(r => r.json());
   els = JSON.parse(JSON.stringify(data.elements));
-  // Wrap back-panel blocks: the backend seeds these (from [cover.<lang>.wrap] when
-  // saved, else defaults matching the renderer's back_absolute positions).
   wrapEls = data.wrap
     ? JSON.parse(JSON.stringify(data.wrap))
     : { blurb: null, badge: null, author: null };
-  // Seed handle positions to match the SVG's flex render when nothing is saved.
   if (!data.layout_saved) applyFlexDefaults(data, els);
+
+  // Which surfaces this book exposes. A digital-only book can't be viewed as a wrap.
+  EDIT_MODE = data.edit_mode === 'front' ? 'front' : 'wrap';
+  if (EDIT_MODE === 'front' && VIEW === 'wrap') VIEW = 'front';
+  buildViewSeg();
 
   $('bookLabel').textContent = SLUG;
   $('protBadge').style.display = data.protected ? '' : 'none';
   $('bgcolor').value = toHex6(data.bgcolor);
   $('bgcolorHex').value = data.bgcolor;
-  // The blurb textarea is the back-cover blurb *text* source; the wrap blurb
-  // handle carries its position/size/color. Seed from the wrap element's text
-  // (which the backend fills from [cover.<lang>].blurb) so the two stay in sync.
   $('blurbText').value = (wrapEls.blurb && wrapEls.blurb.text) || data.blurb || '';
   select(null);
   await renderStage();
@@ -144,7 +177,7 @@ async function loadCover() {
 }
 
 // Fetch + inject the authoritative SVG for the current view, then lay the drag
-// handles over it (front only). Cache-busted so a re-render is reflected.
+// handle groups over it. Cache-busted so a re-render is reflected.
 async function renderStage() {
   const wrap = VIEW === 'wrap' ? 1 : 0;
   const stage = $('stage');
@@ -162,33 +195,44 @@ async function renderStage() {
   const svgEl = stage.querySelector('svg');
   if (svgEl) {
     fitSvg(svgEl);
-    // Clicking the canvas itself (not a handle — handles are siblings, not svg
-    // children) selects the background in front view, or deselects in wrap.
+    // Clicking the canvas (not a handle) selects the background in front view, or
+    // deselects otherwise.
     svgEl.addEventListener('click', () => select(VIEW === 'front' ? '__bg__' : null));
   }
 
   handles = {};
-  if (VIEW === 'front') {
-    // Front canvas: viewBox is 1600×2560, overlay space is the whole canvas.
-    space = { w: W, h: H, x0: 0, vbW: W, vbH: H };
-    KEYS.forEach(makeHandle);
-    positionHandles();
-  } else if (VIEW === 'wrap' && svgEl) {
-    // Wrap: the back panel is the LEFT sub-rect of the landscape wrap SVG. Its
-    // width is exposed as data-back-w (viewBox units); height is the full viewBox.
-    const vb = (svgEl.getAttribute('viewBox') || '0 0 0 0').split(/\s+/).map(Number);
-    const vbW = vb[2] || 0, vbH = vb[3] || 0;
-    const backW = parseFloat(svgEl.getAttribute('data-back-w')) || vbW;
-    space = { w: backW, h: vbH, x0: 0, vbW, vbH };
-    WRAP_KEYS.forEach(makeHandle);
-    positionHandles();
-  }
+  groups = buildGroups(svgEl);
+  groups.forEach(g => g.keys.forEach(k => makeHandle(g, k)));
+  positionHandles();
   status('');
 }
 
-// Size the SVG to fit the host box, honoring its own aspect (front is portrait
-// 1600×2560; wrap is landscape). Explicit px so the inline-block stage shrink-wraps
-// it and the drag overlay can measure a real rendered box.
+// The draggable groups for the current view.
+function buildGroups(svgEl) {
+  if (VIEW === 'front') {
+    return [{ id: 'front', keys: KEYS, els, space: { w: W, h: H, x0: 0, vbW: W, vbH: H }, sizeRef: H }];
+  }
+  if (VIEW === 'wrap' && svgEl) {
+    // The wrap SVG exposes the back panel (data-back-w) and the front panel
+    // (data-front-x / data-front-w) as sub-rectangles of the landscape viewBox.
+    const vb = (svgEl.getAttribute('viewBox') || '0 0 0 0').split(/\s+/).map(Number);
+    const vbW = vb[2] || 0, vbH = vb[3] || 0;
+    const backW = parseFloat(svgEl.getAttribute('data-back-w')) || vbW;
+    const frontX = parseFloat(svgEl.getAttribute('data-front-x')) || 0;
+    const frontW = parseFloat(svgEl.getAttribute('data-front-w')) || backW;
+    return [
+      { id: 'back', keys: WRAP_KEYS, els: wrapEls, space: { w: backW, h: vbH, x0: 0, vbW, vbH }, sizeRef: vbH },
+      // Front-panel blocks share the front layout fractions ([cover.<lang>.layout]),
+      // mapped into the wrap's front sub-rect. sizeRef stays the 2560 front canvas so
+      // the size field reads the same here as in the front view.
+      { id: 'front', keys: KEYS, els, space: { w: frontW, h: vbH, x0: frontX, vbW, vbH }, sizeRef: H },
+    ];
+  }
+  return [];
+}
+
+// Size the SVG to fit the host box, honoring its own aspect. Explicit px so the
+// inline-block stage shrink-wraps it and the drag overlay can measure a real box.
 function fitSvg(svgEl) {
   const vb = (svgEl.getAttribute('viewBox') || `0 0 ${W} ${H}`).split(/\s+/).map(Number);
   const aspect = (vb[2] || W) / (vb[3] || H);
@@ -201,72 +245,66 @@ function fitSvg(svgEl) {
   svgEl.style.height = h + 'px';
 }
 
-function makeHandle(key) {
+function makeHandle(g, key) {
+  const id = g.id + ':' + key;
   const h = document.createElement('div');
   h.className = 'handle';
-  h.innerHTML = `<span class="tag">${key}</span>`;
-  h.onpointerdown = (e) => startDrag(e, key);
+  // In the wrap view the same key exists on both panels; tag the side for clarity.
+  const tag = groups.length > 1 ? `${g.id} · ${key}` : key;
+  h.innerHTML = `<span class="tag">${tag}</span>`;
+  h.onpointerdown = (e) => startDrag(e, g, key);
   $('stage').appendChild(h);
-  handles[key] = h;
+  handles[id] = h;
 }
 
-// The working element set + key list for the current view (front canvas vs. wrap
-// back panel). Fractions in `els`/`wrapEls` are relative to `space`.
-function activeEls() { return VIEW === 'wrap' ? wrapEls : els; }
-function activeKeys() { return VIEW === 'wrap' ? WRAP_KEYS : KEYS; }
-
-// Map the stored (space-relative) fractions to on-screen pixels. An element's box
-// center in viewBox units is (space.x0 + x_pct·space.w, y_pct·space.h); the SVG's
-// rendered rect maps the full viewBox (vbW×vbH) onto its on-screen size.
+// Map every group's stored fractions to on-screen pixels. Handle height reflects the
+// real wrapped block (mirrors the renderer's word-wrap) so multi-line blocks are
+// grabbable across their whole extent.
 function positionHandles() {
   const svgEl = $('stage').querySelector('svg');
   if (!svgEl || VIEW === 'audiobook') return;
   const r = svgEl.getBoundingClientRect();
-  const sx = r.width / space.vbW, sy = r.height / space.vbH;
-  const set = activeEls();
-  activeKeys().forEach(k => {
-    const el = set[k], hd = handles[k];
-    if (!hd || !el) return;
-    // Height = the actual wrapped block, not one line — a multi-line blurb must
-    // be grabbable/selectable across its whole visible extent (mirrors the
-    // renderer's word-wrap; see cover_svg.rs::emit_abs_element). One-line blocks
-    // (title/badge/author) fall back to a single line box.
-    const size = el.font_pct * space.h;
-    const bw = el.w_pct * space.w;
-    const lines = wrapCount(el.text, size, el.font_style, el.font_family, bw);
-    const bh = Math.max(lines * size, 26);
-    const cx = space.x0 + el.x_pct * space.w, cy = el.y_pct * space.h;
-    hd.style.left = ((cx - bw / 2) * sx) + 'px';
-    hd.style.top = ((cy - bh / 2) * sy) + 'px';
-    hd.style.width = (bw * sx) + 'px';
-    hd.style.height = (bh * sy) + 'px';
-    hd.classList.toggle('sel', k === current);
+  groups.forEach(g => {
+    const sx = r.width / g.space.vbW, sy = r.height / g.space.vbH;
+    g.keys.forEach(k => {
+      const el = g.els[k], hd = handles[g.id + ':' + k];
+      if (!hd || !el) return;
+      const size = el.font_pct * g.space.h;
+      const bw = el.w_pct * g.space.w;
+      const lines = wrapCount(el.text, size, el.font_style, el.font_family, bw);
+      const bh = Math.max(lines * size, 26);
+      const cx = g.space.x0 + el.x_pct * g.space.w, cy = el.y_pct * g.space.h;
+      hd.style.left = ((cx - bw / 2) * sx) + 'px';
+      hd.style.top = ((cy - bh / 2) * sy) + 'px';
+      hd.style.width = (bw * sx) + 'px';
+      hd.style.height = (bh * sy) + 'px';
+      hd.classList.toggle('sel', current === g.id + ':' + k);
+    });
   });
 }
 
 // ---- dragging --------------------------------------------------------------
 
-function startDrag(e, key) {
+function startDrag(e, g, key) {
   e.preventDefault();
-  select(key);
-  const set = activeEls();
-  if (!set[key]) return;
+  select(g.id + ':' + key);
+  const el = g.els[key];
+  if (!el) return;
   const svgEl = $('stage').querySelector('svg');
   const r = svgEl.getBoundingClientRect();
-  // Screen px per fraction of `space` (viewBox px per fraction × screen/viewBox).
-  const sx = (r.width / space.vbW) * space.w, sy = (r.height / space.vbH) * space.h;
+  const sx = (r.width / g.space.vbW) * g.space.w, sy = (r.height / g.space.vbH) * g.space.h;
   const startX = e.clientX, startY = e.clientY;
-  const ox = set[key].x_pct, oy = set[key].y_pct;
+  const ox = el.x_pct, oy = el.y_pct;
   let moved = false;
-  const hd = handles[key];
+  const hd = handles[g.id + ':' + key];
   hd.setPointerCapture(e.pointerId);
 
   const move = (ev) => {
-    const dx = (ev.clientX - startX) / sx;   // fraction delta (of space)
+    const dx = (ev.clientX - startX) / sx;
     const dy = (ev.clientY - startY) / sy;
     if (Math.abs(ev.clientX - startX) + Math.abs(ev.clientY - startY) > 2) moved = true;
-    set[key].x_pct = clamp(ox + dx, 0, 1);
-    set[key].y_pct = clamp(oy + dy, 0, 1);
+    el.x_pct = clamp(ox + dx, 0, 1);
+    el.y_pct = clamp(oy + dy, 0, 1);
     positionHandles();
   };
   const up = (ev) => {
@@ -281,45 +319,76 @@ function startDrag(e, key) {
 
 // ---- selection + style inputs ----------------------------------------------
 
-function select(key) {
-  current = key;
-  const set = activeEls();
-  const isBlock = !!key && key !== '__bg__' && !!(set && set[key]);
-  if (isBlock) {
-    const el = set[key];
-    $('selName').textContent = key;
-    $('selText').value = el.text;
+function select(sel) {
+  current = sel;
+  const info = selInfo();
+  if (info) {
+    const el = info.el;
+    $('selName').textContent = groups.length > 1 ? `${info.g.id} · ${info.key}` : info.key;
+    $('selText').value = el.text || '';
     $('selFill').value = toHex6(el.fill);
-    $('selFillHex').value = el.fill;
-    $('selSize').value = Math.round(el.font_pct * space.h);
+    $('selFillHex').value = el.fill || '';
+    $('selSize').value = Math.round(el.font_pct * info.g.sizeRef);
+    const st = el.font_style || 'normal';
+    $('selBold').classList.toggle('on', st.includes('bold'));
+    $('selItalic').classList.toggle('on', st.includes('italic'));
+    setFamilySelect(el.font_family || '');
   }
   renderPane();
   positionHandles();
 }
 
+// The font-style string bookmill expects: "normal" | "bold" | "italic" | "bold italic".
+function styleStr(bold, italic) {
+  if (bold && italic) return 'bold italic';
+  if (bold) return 'bold';
+  if (italic) return 'italic';
+  return 'normal';
+}
+
+function setFamilySelect(fam) {
+  const sel = $('selFamily');
+  // Keep an unknown (hand-authored) family selectable rather than silently losing it.
+  if (fam && !FAMILIES.includes(fam) && ![...sel.options].some(o => o.value === fam)) {
+    const o = document.createElement('option');
+    o.value = o.textContent = fam;
+    sel.appendChild(o);
+  }
+  sel.value = fam || FAMILIES[0];
+}
+
 function bindStyleInputs() {
-  const sel = () => { const s = activeEls(); return current && s ? s[current] : null; };
+  const sel = () => { const i = selInfo(); return i ? i.el : null; };
   $('selText').oninput = () => {
     const e = sel();
     if (!e) return;
     e.text = $('selText').value;
-    if (VIEW === 'wrap' && current === 'blurb') $('blurbText').value = $('selText').value;
+    if (VIEW === 'wrap' && current === 'back:blurb') $('blurbText').value = $('selText').value;
   };
   const setFill = (v) => { const e = sel(); if (e) e.fill = v; };
   $('selFill').oninput = () => { $('selFillHex').value = $('selFill').value; setFill($('selFill').value); };
   $('selFillHex').oninput = () => { $('selFill').value = toHex6($('selFillHex').value); setFill($('selFillHex').value); };
   $('selSize').onchange = () => {
+    const i = selInfo();
+    if (!i) return;
+    const v = parseFloat($('selSize').value);
+    if (v > 0) { i.el.font_pct = v / i.g.sizeRef; positionHandles(); }
+  };
+  $('selFamily').onchange = () => { const e = sel(); if (e) { e.font_family = $('selFamily').value; positionHandles(); } };
+  const applyStyle = () => {
     const e = sel();
     if (!e) return;
-    const v = parseFloat($('selSize').value);
-    if (v > 0) { e.font_pct = v / space.h; positionHandles(); }
+    e.font_style = styleStr($('selBold').classList.contains('on'), $('selItalic').classList.contains('on'));
+    positionHandles();
   };
+  $('selBold').onclick = () => { $('selBold').classList.toggle('on'); applyStyle(); };
+  $('selItalic').onclick = () => { $('selItalic').classList.toggle('on'); applyStyle(); };
   $('bgcolor').oninput = () => { $('bgcolorHex').value = $('bgcolor').value; };
   $('bgcolorHex').oninput = () => { $('bgcolor').value = toHex6($('bgcolorHex').value); };
   // Back-cover blurb textarea (wrap view) → the wrap blurb element's text.
   $('blurbText').oninput = () => {
     if (wrapEls && wrapEls.blurb) wrapEls.blurb.text = $('blurbText').value;
-    if (VIEW === 'wrap' && current === 'blurb') $('selText').value = $('blurbText').value;
+    if (VIEW === 'wrap' && current === 'back:blurb') $('selText').value = $('blurbText').value;
   };
 }
 
@@ -344,13 +413,13 @@ function wireShortcuts() {
     if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key === '?') { e.preventDefault(); toggleHelp(); return; }
     const arrows = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
-    const set = activeEls();
-    if (current && set && set[current] && VIEW !== 'audiobook' && arrows[e.key]) {
+    const info = selInfo();
+    if (info && VIEW !== 'audiobook' && arrows[e.key]) {
       e.preventDefault();
       const step = (e.shiftKey ? 40 : 8);
       const [dx, dy] = arrows[e.key];
-      set[current].x_pct = clamp(set[current].x_pct + dx * step / space.w, 0, 1);
-      set[current].y_pct = clamp(set[current].y_pct + dy * step / space.h, 0, 1);
+      info.el.x_pct = clamp(info.el.x_pct + dx * step / info.g.space.w, 0, 1);
+      info.el.y_pct = clamp(info.el.y_pct + dy * step / info.g.space.h, 0, 1);
       positionHandles();
       status('moved · Save to re-render');
     }
@@ -373,6 +442,9 @@ async function genAudiobookCover() {
 }
 
 async function save() {
+  // The front layout (title/subtitle/author) is always persisted; the wrap view also
+  // persists the back panel. So dragging front blocks while in the wrap view saves
+  // them to [cover.<lang>.layout] just as the front view does.
   const body = {
     title: els.title,
     subtitle: els.subtitle,
@@ -380,9 +452,6 @@ async function save() {
     bgcolor: $('bgcolorHex').value || '#000000',
   };
   if (VIEW === 'wrap') {
-    // Keep the blurb element's text in sync with the textarea, persist the blurb
-    // text to [cover.<lang>].blurb, and the back-panel drag layout to
-    // [cover.<lang>.wrap]. Elements already carry x_pct/y_pct/... snake_case keys.
     if (wrapEls.blurb) wrapEls.blurb.text = $('blurbText').value;
     body.blurb = $('blurbText').value;
     body.wrap = {

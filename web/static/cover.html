@@ -50,11 +50,9 @@
   <span id="bookLabel" class="hint"></span>
   <span class="spacer"></span>
   <span class="seg" id="langSeg" title="Language"></span>
-  <span class="seg" id="viewSeg">
-    <button data-view="front">Front</button>
-    <button data-view="wrap" class="on">Wrap</button>
-    <button data-view="audiobook">Audiobook</button>
-  </span>
+  <!-- Views are built by app.js::buildViewSeg from the book's edit mode (a
+       digital-only book only offers Front + Audiobook). -->
+  <span class="seg" id="viewSeg"></span>
   <span id="protBadge" class="pill" style="display:none">protected</span>
   <button class="btn primary" id="saveBtn">Save &amp; re-render</button>
   <span id="status"></span>
@@ -81,6 +79,23 @@
       <div class="field">
         <label for="selSize">Font size</label>
         <input type="text" id="selSize" />
+      </div>
+      <div class="field">
+        <label for="selFamily">Font</label>
+        <select id="selFamily">
+          <option value="Playfair Display">Playfair Display</option>
+          <option value="Montserrat">Montserrat</option>
+          <option value="Baloo 2">Baloo 2</option>
+          <option value="Oswald">Oswald</option>
+          <option value="Patrick Hand">Patrick Hand</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Style</label>
+        <span class="seg">
+          <button type="button" id="selBold">Bold</button>
+          <button type="button" id="selItalic">Italic</button>
+        </span>
       </div>
     </div>
 

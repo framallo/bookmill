@@ -1314,6 +1314,8 @@ impl CoverRenderer {
             .replace("{{FULL_W_PX}}", &fmt(fw))
             .replace("{{FULL_H_PX}}", &fmt(fh))
             .replace("{{BACK_W_PX}}", &fmt(back_w))
+            .replace("{{FRONT_X_PX}}", &fmt(front_x))
+            .replace("{{FRONT_W_PX}}", &fmt(front_w))
             .replace("{{BGCOLOR}}", &xml_attr(&r.bgcolor))
             .replace("{{DEFS}}", &defs)
             .replace("{{WRAPBG}}", &wrapbg)

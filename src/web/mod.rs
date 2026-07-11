@@ -636,7 +636,12 @@ async fn api_cover(
     let act = st.active.read().unwrap();
     let b = act.repo.find_book(&book).map_err(err)?;
     check_lang(&b.languages, &lang)?;
-    let resp = cover::load_cover(&act.repo, &b, &lang).map_err(err)?;
+    let mut resp = cover::load_cover(&act.repo, &b, &lang).map_err(err)?;
+    // Derive which surface the editor exposes (front vs wrap) from the book's
+    // editions / explicit [cover].edit, using the main config model.
+    if let Ok((bcfg, _)) = act.disco.find_book(&book) {
+        resp.edit_mode = crate::config::cover_edit_mode(&bcfg, &act.disco.config);
+    }
     Ok(Json(resp))
 }
 

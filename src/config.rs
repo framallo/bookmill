@@ -267,6 +267,11 @@ pub struct CoverConfig {
     pub blurb_emph_color: Option<String>,
     pub blurb_emph_style: Option<String>,
     pub blurb_emph_family: Option<String>,
+    /// which cover surface the web editor exposes: "front" (digital-only, eBook
+    /// front only) or "wrap" (paperback: full back+spine+front, front and back
+    /// both editable). Absent → derived from editions (any print edition → "wrap",
+    /// else "front"). See `cover_edit_mode`.
+    pub edit: Option<String>,
     pub author_stroke: Option<String>,
     pub badge_color: Option<String>,
     pub badge_stroke: Option<String>,
@@ -655,6 +660,33 @@ pub fn spine_mult(paper: &str, ink: &str) -> f64 {
     }
 }
 
+/// Which cover surface the web editor should expose for a book: `"front"`
+/// (digital-only) or `"wrap"` (paperback — full back+spine+front). An explicit
+/// `[cover].edit` (book over repo) wins; otherwise it is derived from the book's
+/// editions — any **print** edition (kdp-paperback / kdp-hardcover / bubok) means
+/// a wrap exists to edit, else the book is digital-only and only the front matters.
+pub fn cover_edit_mode(book: &BookConfig, repo: &RepoConfig) -> String {
+    if let Some(m) = book
+        .cover
+        .as_ref()
+        .and_then(|c| c.edit.clone())
+        .or_else(|| repo.cover.as_ref().and_then(|c| c.edit.clone()))
+    {
+        let m = m.trim().to_lowercase();
+        if m == "front" || m == "wrap" {
+            return m;
+        }
+    }
+    let has_print = book.editions.iter().any(|e| {
+        repo.editions
+            .get(e)
+            .and_then(|ed| ed.target.as_deref())
+            .map(|t| matches!(t, "kdp-paperback" | "kdp-hardcover" | "bubok"))
+            .unwrap_or(false)
+    });
+    if has_print { "wrap".into() } else { "front".into() }
+}
+
 /// Resolve the paper stock for one (edition, book): edition → book `[pdf]` →
 /// repo `[defaults]` → "white".
 pub fn resolve_paper(edition: Option<&Edition>, book: &BookConfig, repo: &RepoConfig) -> String {
@@ -932,6 +964,24 @@ mod tests {
         // an explicit 0 is treated as "off"
         let zero = book_cfg("slug = 's'\n[pdf]\ndigital_pdf_dpi = 0\n");
         assert_eq!(resolve_digital_pdf_dpi(None, &zero), None);
+    }
+
+    #[test]
+    fn cover_edit_mode_derives_from_editions_and_override() {
+        let repo = repo_cfg(
+            "[editions.kdp-paperback]\ntarget = 'kdp-paperback'\n\
+             [editions.kdp-epub]\ntarget = 'kdp-epub'\n\
+             [editions.gumroad]\ntarget = 'gumroad'\n",
+        );
+        // a print edition present → wrap
+        let paperback = book_cfg("slug = 's'\neditions = ['kdp-paperback', 'kdp-epub']\n");
+        assert_eq!(cover_edit_mode(&paperback, &repo), "wrap");
+        // digital-only → front
+        let digital = book_cfg("slug = 's'\neditions = ['kdp-epub', 'gumroad']\n");
+        assert_eq!(cover_edit_mode(&digital, &repo), "front");
+        // explicit [cover].edit overrides the derivation
+        let forced = book_cfg("slug = 's'\neditions = ['kdp-paperback']\n[cover]\nedit = 'front'\n");
+        assert_eq!(cover_edit_mode(&forced, &repo), "front");
     }
 
     #[test]
