@@ -309,11 +309,21 @@ fn build_doc(
         outer: 0.6,
         bindingoffset: 0.375,
     });
+    // Proof (proofreading) builds ignore the book's KDP trim and print on US
+    // Legal (8.5×14) with tight uniform margins and no binding offset — the goal
+    // is to fit the most text per sheet so the printed proof takes the fewest
+    // pages. It's throwaway paper, not a bound interior.
+    let g = if proof {
+        PageGeometry { pw: 8.5, ph: 14.0, top: 0.5, bottom: 0.5, inner: 0.5, outer: 0.5, bindingoffset: 0.0 }
+    } else {
+        g
+    };
     let inside = g.inner + g.bindingoffset;
     let chlabel = if lang == "es" { "Capítulo" } else { "Chapter" };
     let toc_title = if lang == "es" { "Índice" } else { "Contents" };
-    // recto-open break used before each chapter heading
-    let recto = if openright {
+    // recto-open break used before each chapter heading. Proof builds never
+    // force a chapter onto an odd page — blank verso pages just waste sheets.
+    let recto = if openright && !proof {
         "pagebreak(to: \"odd\", weak: true)"
     } else {
         "pagebreak(weak: true)"
