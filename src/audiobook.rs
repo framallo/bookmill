@@ -6,9 +6,11 @@
 //! A render request expands to one [`AudioJob`] per (book × language). Each job
 //! resolves its chapter list through the shared `[content.<lang>]` selection
 //! (prepend + glob + files + append, in order), stages those files into a numbered
-//! temp dir so the lexical glob `kab convert` runs preserves bookmill's exact
-//! order (including appended epilogues a bare `capitulo-*.md` glob would miss),
-//! and feeds them to the [`TtsEngine`]. Output is `<slug>-<lang>.m4b`.
+//! scratch dir (repo-local `.bookmill-tmp/`, OUTSIDE `output/`) so the lexical glob
+//! `kab convert` runs preserves bookmill's exact order (including appended epilogues
+//! a bare `capitulo-*.md` glob would miss), and feeds them to the [`TtsEngine`].
+//! Output is `<slug>-<lang>.m4b`. The transient staging copy and the persistent
+//! per-chapter WAV cache both live under the scratch dir — never in `output/`.
 //!
 //! The trait boundary is deliberate: the content-hash AST *segment cache* (so
 //! fixing one line re-renders only that clip) slots in later as a caching engine
@@ -46,6 +48,19 @@ pub struct AudioJob {
     /// ordered chapter files (prepend + glob + files + append), absolute paths
     pub chapters: Vec<PathBuf>,
     pub out: PathBuf,
+    /// per-job scratch/cache base, OUTSIDE `output/` (staging + WAV cache live
+    /// here so they never clutter the deliverable folder). See [`audio_tmp_dir`].
+    pub tmp: PathBuf,
+}
+
+/// The audiobook scratch/cache base for a book+language: a repo-local hidden dir
+/// **outside** `output/` (`<repo>/.bookmill-tmp/audio/<slug>/<lang>/`). Holds the
+/// transient `stage/` copy of the chapters and the persistent per-chapter `cache/`
+/// of WAVs. Kept local to the repo (not the OS temp dir) so the cache survives
+/// reboots and stays tied to this project's content — that's what makes the
+/// incremental re-render skip correct across sessions.
+pub fn audio_tmp_dir(root: &Path, slug: &str, lang: &str) -> PathBuf {
+    root.join(".bookmill-tmp").join("audio").join(slug).join(lang)
 }
 
 // ---------- config resolution ----------
@@ -179,6 +194,7 @@ fn plan(
                 .join(&book.slug)
                 .join(&lang)
                 .join(format!("{}-{}.m4b", book.slug, lang));
+            let tmp = audio_tmp_dir(&repo.root, &book.slug, &lang);
             jobs.push(AudioJob {
                 slug: book.slug.clone(),
                 lang: lang.clone(),
@@ -190,6 +206,7 @@ fn plan(
                 speak_titles: r.speak_titles,
                 chapters,
                 out,
+                tmp,
             });
         }
     }
@@ -216,11 +233,13 @@ fn dir_size(p: &Path) -> u64 {
     total
 }
 
-/// Remove the audiobook temp/cache artifacts under `output/<slug>/<lang>/` —
-/// the `.audiostage` staging dir and the `.audiocache` per-chapter WAV cache
-/// (and, with `drop_manifest`, the `.…audiomanifest.json`). Scoped to one book /
-/// language or all of them. The rendered `.m4b` is never touched. Reports how
-/// many items were removed and how much disk was freed.
+/// Remove the audiobook temp/cache artifacts for a book/language — the repo-local
+/// scratch base `.bookmill-tmp/audio/<slug>/<lang>/` (its `stage/` + `cache/`), and
+/// (with `drop_manifest`) the `.…audiomanifest.json` that sits next to the `.m4b`.
+/// Also sweeps the *legacy* in-`output/` `.audiostage`/`.audiocache` dirs left by
+/// older bookmill versions. Scoped to one book / language or all of them. The
+/// rendered `.m4b` is never touched. Reports how many items were removed and how
+/// much disk was freed.
 pub fn clean(
     repo: &Repo,
     book_slug: Option<String>,
@@ -243,10 +262,13 @@ pub fn clean(
     for (book, _dir) in &books {
         for lang in langs_for(book, &lang_filter) {
             let odir = repo.root.join("output").join(&book.slug).join(&lang);
-            if !odir.exists() {
-                continue;
-            }
-            let mut targets = vec![odir.join(".audiostage"), odir.join(".audiocache")];
+            // New location (repo-local scratch, outside output/) + legacy
+            // in-output dirs from older versions.
+            let mut targets = vec![
+                audio_tmp_dir(&repo.root, &book.slug, &lang),
+                odir.join(".audiostage"),
+                odir.join(".audiocache"),
+            ];
             if drop_manifest {
                 targets.push(odir.join(format!(".{}-{}.audiomanifest.json", book.slug, lang)));
             }
@@ -277,6 +299,23 @@ pub fn clean(
     } else {
         println!("\nCleaned {removed} item(s), freed {:.1} MB", freed as f64 / 1e6);
     }
+    Ok(())
+}
+
+/// Wipe the whole audiobook tmp tree (`<repo>/.bookmill-tmp/`) in one sweep — the
+/// blunt, book-agnostic counterpart to [`clean`]. Removes every book/language's
+/// `stage/` + `cache/` at once; never touches the rendered `.m4b` files or their
+/// manifests (which live under `output/`). Reports the disk freed.
+pub fn clear(repo: &Repo) -> Result<()> {
+    let tmp = repo.root.join(".bookmill-tmp");
+    if !tmp.exists() {
+        println!("nothing to clear (no {} dir)", tmp.display());
+        return Ok(());
+    }
+    let sz = dir_size(&tmp);
+    std::fs::remove_dir_all(&tmp)
+        .with_context(|| format!("removing {}", tmp.display()))?;
+    println!("Cleared {} — freed {:.1} MB", tmp.display(), sz as f64 / 1e6);
     Ok(())
 }
 
@@ -515,15 +554,11 @@ impl TtsEngine for KabEngine {
         // kab's lexical `sorted(glob(...))` reproduces bookmill's exact order.
         let stage = stage_chapters(job)?;
 
-        // Persistent per-chapter audio cache, alongside the .m4b and its
-        // manifest. ane_book.py keys each chapter's WAV by a hash of the spoken
-        // text (+ voice/lang/speed/model) so a one-line edit re-renders only
-        // that chapter on the next run; the cache survives across runs.
-        let cache_dir = job
-            .out
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join(".audiocache");
+        // Persistent per-chapter audio cache, in the repo-local scratch dir
+        // (OUTSIDE `output/`). ane_book.py keys each chapter's WAV by a hash of
+        // the spoken text (+ voice/lang/speed/model) so a one-line edit
+        // re-renders only that chapter on the next run; the cache survives runs.
+        let cache_dir = job.tmp.join("cache");
         std::fs::create_dir_all(&cache_dir)
             .with_context(|| format!("creating audio cache dir {}", cache_dir.display()))?;
 
@@ -560,15 +595,11 @@ impl TtsEngine for KabEngine {
     }
 }
 
-/// Copy a job's ordered chapter files into a fresh `.audiostage` dir under the
-/// output folder, renamed `NNNN-<original>` to lock in reading order for kab's
-/// glob. Returns the staging dir.
+/// Copy a job's ordered chapter files into a fresh `stage/` dir in the repo-local
+/// scratch base (OUTSIDE `output/`), renamed `NNNN-<original>` to lock in reading
+/// order for kab's glob. Returns the staging dir.
 fn stage_chapters(job: &AudioJob) -> Result<PathBuf> {
-    let stage = job
-        .out
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(".audiostage");
+    let stage = job.tmp.join("stage");
     // Start clean so a previous run's files can't leak into this one.
     let _ = std::fs::remove_dir_all(&stage);
     std::fs::create_dir_all(&stage)
@@ -640,9 +671,10 @@ mod tests {
         assert_eq!(stem("epilogo"), "epilogo");
     }
 
-    /// The KabEngine must pass `--cache-dir <out_parent>/.audiocache` (and create
-    /// it) so ane_book.py can reuse unchanged chapters across runs. Verified with
-    /// a fake `kab` that records its argv and produces the expected .m4b.
+    /// The KabEngine must pass `--cache-dir <job.tmp>/cache` (and create it) so
+    /// ane_book.py can reuse unchanged chapters across runs — and that scratch dir
+    /// must live OUTSIDE the output folder (next to neither the .m4b). Verified
+    /// with a fake `kab` that records its argv and produces the expected .m4b.
     #[test]
     fn render_passes_cache_dir_and_creates_it() {
         use std::io::Write;
@@ -656,6 +688,7 @@ mod tests {
         std::fs::write(&chap, "# Capítulo uno\n\nHola.\n").unwrap();
 
         let out = tmp.join("out").join("slug-es.m4b");
+        let scratch = tmp.join("scratch");
         let arglog = tmp.join("argv.txt");
 
         // Fake kab: dump argv to a file, then create the requested --out file so
@@ -683,13 +716,18 @@ mod tests {
             speak_titles: true,
             chapters: vec![chap],
             out: out.clone(),
+            tmp: scratch.clone(),
         };
 
         let engine = KabEngine { bin: fake };
         engine.render(&job).expect("render should succeed with fake kab");
 
-        let expected_cache = out.parent().unwrap().join(".audiocache");
+        let expected_cache = scratch.join("cache");
         assert!(expected_cache.is_dir(), "cache dir must be created");
+        assert!(
+            !out.parent().unwrap().join(".audiocache").exists(),
+            "cache must NOT be created inside the output folder"
+        );
 
         let argv = std::fs::read_to_string(&arglog).unwrap();
         let lines: Vec<&str> = argv.lines().collect();
@@ -700,7 +738,7 @@ mod tests {
         assert_eq!(
             lines[i + 1],
             expected_cache.to_str().unwrap(),
-            "--cache-dir must point at <out>/.audiocache"
+            "--cache-dir must point at <job.tmp>/cache"
         );
 
         let _ = std::fs::remove_dir_all(&tmp);

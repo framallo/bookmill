@@ -184,7 +184,7 @@ struct AudiobookArgs {
 /// `audiobook` subcommands.
 #[derive(Subcommand)]
 enum AudiobookSub {
-    /// Remove audiobook temp/cache files (.audiostage + .audiocache) for all books or one
+    /// Remove audiobook scratch/cache (.bookmill-tmp/audio/) for all books or one
     Clean {
         book: Option<String>,
         #[arg(long)]
@@ -193,6 +193,9 @@ enum AudiobookSub {
         #[arg(long)]
         manifest: bool,
     },
+    /// Wipe the entire audiobook tmp dir (.bookmill-tmp/) in one sweep — all books,
+    /// all languages. Blunt counterpart to `clean`; keeps every `.m4b` + manifest.
+    Clear,
 }
 
 /// `build` subcommands. Interior (epub/pdf) is the default when none is given.
@@ -401,6 +404,9 @@ fn main() -> Result<()> {
         Cmd::Audiobook { what, render } => match what {
             Some(AudiobookSub::Clean { book, lang, manifest }) => {
                 audiobook::clean(&repo, book, lang, manifest)?;
+            }
+            Some(AudiobookSub::Clear) => {
+                audiobook::clear(&repo)?;
             }
             None => {
                 if let Some(e) = &render.engine {

@@ -1,8 +1,11 @@
-// bookmill cover editor (v3). The canvas IS the authoritative resvg SVG (served by
+// bookmill cover editor (v3). The canvas IS the authoritative SVG (served by
 // /api/cover/{slug}/{lang}/svg) — no Konva re-implementation, so the editor can no
-// longer drift from what `build cover` ships. A thin pointer-drag overlay places
-// labeled boxes over the editable text blocks; dragging updates the saved fractions
-// and Save re-renders.
+// longer drift from what `build cover` ships. The SVG is layered: a static
+// background (photo + panels + gradients) with each editable text block wrapped in
+// its own `<g data-drag="groupId:key">` layer. A pointer-drag overlay of labeled
+// boxes captures the drag; as you drag, the block's `<g>` layer is translated live
+// so the ACTUAL text tracks the pointer in real time (no background re-render).
+// Save persists the fractions and re-renders the authoritative PNG/PDF.
 //
 // Views (which are offered is driven by the book's edit mode — see EDIT_MODE):
 //   • front     — the eBook front only (title/subtitle/author + bg color).
@@ -42,6 +45,12 @@ let handles = {};                    // "groupId:key" -> overlay div
 // reports/edits against (front elements always report against the 2560 canvas so the
 // number is stable whether shown in the front view or the wrap's front panel).
 let groups = [];
+// The block positions the CURRENTLY-INJECTED SVG was rendered at (server bakes
+// text at the saved fractions). Keyed "groupId:key" -> {x_pct,y_pct}. Live drag
+// translates each block's `<g data-drag>` layer by (working − baked), so the real
+// text tracks the pointer without re-rendering the background. Re-synced on load
+// and after every save (when the SVG catches up to the working fractions).
+let baked = {};
 
 init();
 
@@ -171,6 +180,7 @@ async function loadCover() {
   $('bgcolor').value = toHex6(data.bgcolor);
   $('bgcolorHex').value = data.bgcolor;
   $('blurbText').value = (wrapEls.blurb && wrapEls.blurb.text) || data.blurb || '';
+  snapshotBaked();   // the SVG we're about to fetch is baked at these fractions
   select(null);
   await renderStage();
   status('');
@@ -203,6 +213,7 @@ async function renderStage() {
   handles = {};
   groups = buildGroups(svgEl);
   groups.forEach(g => g.keys.forEach(k => makeHandle(g, k)));
+  applyAllLive();   // restore any unsaved drags onto the fresh SVG
   positionHandles();
   status('');
 }
@@ -283,6 +294,36 @@ function positionHandles() {
   });
 }
 
+// ---- live text layer (real-time drag) --------------------------------------
+
+// Record the fractions the current SVG was baked at, for every editable block on
+// both panels (front + back), so live transforms are measured against the actual
+// rendered positions regardless of which view is showing.
+function snapshotBaked() {
+  baked = {};
+  if (els) for (const k of KEYS) if (els[k]) baked['front:' + k] = { x_pct: els[k].x_pct, y_pct: els[k].y_pct };
+  if (wrapEls) for (const k of WRAP_KEYS) if (wrapEls[k]) baked['back:' + k] = { x_pct: wrapEls[k].x_pct, y_pct: wrapEls[k].y_pct };
+}
+
+// Translate one block's `<g data-drag>` layer to its working position (delta from
+// the baked SVG position, in viewBox px). No-op if the SVG has no such layer.
+function liveTransform(g, key) {
+  const svgEl = $('stage').querySelector('svg');
+  if (!svgEl) return;
+  const id = g.id + ':' + key;
+  const layer = svgEl.querySelector(`[data-drag="${id}"]`);
+  const el = g.els[key], b = baked[id];
+  if (!layer || !el || !b) return;
+  const dx = (el.x_pct - b.x_pct) * g.space.w;
+  const dy = (el.y_pct - b.y_pct) * g.space.h;
+  if (dx || dy) layer.setAttribute('transform', `translate(${dx.toFixed(2)} ${dy.toFixed(2)})`);
+  else layer.removeAttribute('transform');
+}
+
+// Re-apply every group's live transform (used after a fresh SVG injection so any
+// unsaved drags persist visually across view switches).
+function applyAllLive() { groups.forEach(g => g.keys.forEach(k => liveTransform(g, k))); }
+
 // ---- dragging --------------------------------------------------------------
 
 function startDrag(e, g, key) {
@@ -305,6 +346,7 @@ function startDrag(e, g, key) {
     if (Math.abs(ev.clientX - startX) + Math.abs(ev.clientY - startY) > 2) moved = true;
     el.x_pct = clamp(ox + dx, 0, 1);
     el.y_pct = clamp(oy + dy, 0, 1);
+    liveTransform(g, key);   // move the actual text in real time
     positionHandles();
   };
   const up = (ev) => {
@@ -420,6 +462,7 @@ function wireShortcuts() {
       const [dx, dy] = arrows[e.key];
       info.el.x_pct = clamp(info.el.x_pct + dx * step / info.g.space.w, 0, 1);
       info.el.y_pct = clamp(info.el.y_pct + dy * step / info.g.space.h, 0, 1);
+      liveTransform(info.g, info.key);
       positionHandles();
       status('moved · Save to re-render');
     }
@@ -468,6 +511,7 @@ async function save() {
     const log = $('log');
     log.style.display = ''; log.textContent = (r.ok ? '✓ ' : '✗ ') + 'saved ' + r.saved + '\n\n' + (r.renderLog || '');
     data.layout_saved = true;
+    snapshotBaked();                        // the re-render bakes the working fractions → deltas reset to 0
     await renderStage();                    // reload the authoritative SVG
     status(r.ok ? 'saved + rendered' : 'saved (render failed)');
     a11y.announce(r.ok ? 'Cover saved and re-rendered' : 'Cover saved, but render failed');

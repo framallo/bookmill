@@ -537,6 +537,7 @@ impl CoverRenderer {
             w,
             h,
             0.0,
+            Some("front:title"),
         );
 
         // Accent rule, centered under the title block (default 46px gap, 220x3).
@@ -564,6 +565,7 @@ impl CoverRenderer {
             w,
             h,
             0.0,
+            Some("front:subtitle"),
         );
 
         // Author (absolute; rendered as stored — the editor does not upper-case it).
@@ -581,6 +583,7 @@ impl CoverRenderer {
             w,
             h,
             0.0,
+            Some("front:author"),
         );
     }
 
@@ -588,6 +591,7 @@ impl CoverRenderer {
     /// present and otherwise the supplied default (`def` = x_pct, y_pct, w_pct,
     /// font_pct). Returns the block's `(top_y, total_height, center_x)` so callers
     /// can anchor adjacent decoration (e.g. the rule under the title).
+    #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_arguments)]
     fn emit_abs_element(
         &self,
@@ -604,10 +608,11 @@ impl CoverRenderer {
         w: f64,
         h: f64,
         x0: f64,
+        drag: Option<&str>,
     ) -> (f64, f64, f64) {
         self.emit_abs_element_emph(
             out, defs, el, def, def_text, def_fill, def_family, def_style, shadow_css,
-            shadow_id, w, h, x0, None,
+            shadow_id, w, h, x0, None, drag,
         )
     }
 
@@ -632,6 +637,7 @@ impl CoverRenderer {
         h: f64,
         x0: f64,
         emph: Option<&EmphSpec>,
+        drag: Option<&str>,
     ) -> (f64, f64, f64) {
         let (def_x, def_y, def_w, def_font) = def;
         let x_pct = el.map(|e| e.x_pct).unwrap_or(def_x);
@@ -658,6 +664,14 @@ impl CoverRenderer {
         let lh = 1.0_f64; // Konva default line-height.
         let vm = self.vmetrics(&family, weight, italic);
         let shadow = shadow_def(defs, shadow_css, shadow_id);
+
+        // Editor layer: wrap this block's lines in a labeled `<g>` so the web
+        // editor can translate the whole block live (real-time drag) without
+        // re-rendering the background. `data-drag` = "<groupId>:<key>" matching
+        // app.js. `None` (the build path never sets it) emits no wrapper.
+        if let Some(d) = drag {
+            out.push_str(&format!("<g data-drag=\"{d}\">"));
+        }
 
         // Emphasis path: wrap into styled runs and emit each line as tspans.
         if let Some(e) = emph.filter(|e| !e.phrases.is_empty()) {
@@ -692,6 +706,9 @@ impl CoverRenderer {
                     ei,
                 );
             }
+            if drag.is_some() {
+                out.push_str("</g>");
+            }
             return (block_top, total_h, block_cx);
         }
 
@@ -717,6 +734,9 @@ impl CoverRenderer {
                     anchor: "middle",
                 },
             );
+        }
+        if drag.is_some() {
+            out.push_str("</g>");
         }
         (block_top, total_h, block_cx)
     }
@@ -893,6 +913,7 @@ impl CoverRenderer {
             back_w,
             fh,
             0.0,
+            Some("back:badge"),
         );
 
         // Blurb (absolute; default: upper-middle of the back panel). The only block
@@ -912,6 +933,7 @@ impl CoverRenderer {
             fh,
             0.0,
             Some(&emspec),
+            Some("back:blurb"),
         );
 
         // Author (absolute; default: near the bottom, kept off the bottom-right
@@ -930,6 +952,7 @@ impl CoverRenderer {
             back_w,
             fh,
             0.0,
+            Some("back:author"),
         );
     }
 
@@ -1193,6 +1216,7 @@ impl CoverRenderer {
                 front_w,
                 fh,
                 front_x,
+                Some("front:title"),
             );
             let rule_y = t_top + t_h + 0.18 * DPI;
             body.push_str(&format!(
@@ -1217,6 +1241,7 @@ impl CoverRenderer {
                 front_w,
                 fh,
                 front_x,
+                Some("front:subtitle"),
             );
             self.emit_abs_element(
                 &mut body,
@@ -1232,6 +1257,7 @@ impl CoverRenderer {
                 front_w,
                 fh,
                 front_x,
+                Some("front:author"),
             );
         } else {
         fy += fbadge_h + fgap1;

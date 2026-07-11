@@ -484,7 +484,7 @@ fn ensure_gitignore(target: &Path) -> Result<()> {
     let p = target.join(".gitignore");
     let existing = std::fs::read_to_string(&p).unwrap_or_default();
     let mut add = Vec::new();
-    for want in ["/output", "/target"] {
+    for want in ["/output", "/target", "/.bookmill-tmp"] {
         if !existing.lines().any(|l| l.trim() == want) {
             add.push(want);
         }
