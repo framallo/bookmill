@@ -152,6 +152,11 @@ pub struct CoverResponse {
     /// True when `[cover.<lang>.wrap]` was present (positions came from the saved
     /// wrap layout). When false, the seeded defaults match the renderer's flex back.
     pub wrap_saved: bool,
+    /// Which surface the editor should expose: "front" (digital-only) or "wrap"
+    /// (paperback — front and back both editable). Set by the axum handler from the
+    /// book's editions / explicit `[cover].edit`; `load_cover` seeds a safe default.
+    #[serde(default)]
+    pub edit_mode: String,
 }
 
 /// Back-panel layout the editor seeds its wrap drag handles from. Each block is a
@@ -323,6 +328,8 @@ pub fn load_cover(repo: &Repo, book: &BookSummary, lang: &str) -> Result<CoverRe
         blurb,
         wrap: WrapLayoutResponse { blurb: wrap_blurb, badge: wrap_badge, author: wrap_author },
         wrap_saved: saved_wrap.is_some(),
+        // Safe default; the axum handler overrides this from the book's editions.
+        edit_mode: "wrap".to_string(),
     })
 }
 
