@@ -43,15 +43,20 @@
   #stage { position:relative; display:inline-block; line-height:0; box-shadow:0 8px 40px rgba(0,0,0,.55); }
   #stage svg, #stage img { display:block; }
 
-  /* draggable position handles — boxes, not glyphs: appearance comes from the SVG
-     underneath, so no font-metric drift. */
-  .handle { position:absolute; border:1.5px dashed rgba(212,169,55,.9); border-radius:3px;
-            background:rgba(212,169,55,.08); cursor:move; touch-action:none; }
-  .handle:hover { background:rgba(212,169,55,.16); }
-  .handle.sel { border-style:solid; border-color:var(--accent); background:rgba(212,169,55,.22); }
+  /* Draggable position handles — boxes, not glyphs: appearance comes from the SVG
+     underneath, so no font-metric drift. They stay INVISIBLE at rest: a filled box
+     over a big block (the back-cover blurb especially) washes out the artwork and
+     reads as a grey slab. The affordance appears on hover / when selected. */
+  .handle { position:absolute; border:1.5px dashed transparent; border-radius:3px;
+            background:transparent; cursor:move; touch-action:none; transition:background .09s, border-color .09s; }
+  .handle:hover { border-color:rgba(212,169,55,.85); background:rgba(212,169,55,.10); }
+  .handle.sel { border-style:solid; border-color:var(--accent); background:rgba(212,169,55,.16); }
   .handle.editing { display:none; }
+  /* the name tag rides with the affordance — hidden at rest, shown on hover/select */
   .handle .tag { position:absolute; top:-19px; left:-1px; font:600 10px/1.4 system-ui; letter-spacing:.4px;
-                 text-transform:uppercase; color:#1a1206; background:var(--accent); padding:1px 6px; border-radius:4px 4px 0 0; }
+                 text-transform:uppercase; color:#1a1206; background:var(--accent); padding:1px 6px;
+                 border-radius:4px 4px 0 0; opacity:0; transition:opacity .09s; pointer-events:none; }
+  .handle:hover .tag, .handle.sel .tag { opacity:1; }
 
   /* ---- inline text editor: sits ON the cover, over the block being edited ----
      It mirrors the block's real typography so what you type looks like what
@@ -82,9 +87,10 @@
   <span id="status"></span>
   <span class="spacer"></span>
   <span class="seg" id="langSeg" title="Language"></span>
-  <span class="seg" id="viewSeg"></span>
   <span id="protBadge" class="pill" style="display:none">protected</span>
-  <button class="btn" id="genAudiobook" style="display:none">Generate from front</button>
+  <!-- One document: you edit the full wrap. The eBook front is its front panel and
+       the audiobook cover is a square crop of that — both generated, not edited. -->
+  <button class="btn" id="genAudiobook" title="Square crop of the front panel (3000×3000)">Audiobook cover</button>
   <button class="btn primary" id="saveBtn">Save &amp; re-render</button>
   <a class="navlink" id="toPreview" href="#">preview →</a>
 </header>

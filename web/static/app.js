@@ -7,17 +7,15 @@
 // so the ACTUAL text tracks the pointer in real time (no background re-render).
 // Save persists the fractions and re-renders the authoritative PNG/PDF.
 //
-// Views (which are offered is driven by the book's edit mode — see EDIT_MODE):
-//   • front     — the eBook front only (title/subtitle/author + bg color).
-//   • wrap      — the full paperback back·spine·front. BOTH panels are editable:
-//                 the back (blurb/badge/author) AND the front (title/subtitle/author).
-//   • audiobook — square crop of the front.
-// A digital-only book (no print edition) exposes only front + audiobook; a paperback
-// book exposes wrap + front + audiobook. `[cover].edit` overrides the derivation.
+// ONE DOCUMENT: you edit the full paperback wrap (back · spine · front). Both panels
+// are editable — the back (blurb/badge/author) and the front (title/subtitle/author).
+// The eBook front cover IS the wrap's front panel (they share [cover.layout]), and the
+// audiobook cover is a square crop of it: both are GENERATED from this one document,
+// never edited separately. That's why there are no view tabs.
 //
-// Each view lays out one or more `groups`, each a set of draggable blocks that share
-// a coordinate space (front canvas, wrap back panel, or wrap front panel). Handles are
-// keyed "<groupId>:<key>" so the front and back `author` never collide.
+// The wrap lays out two `groups`, each a set of draggable blocks sharing a coordinate
+// space (the back panel, the front panel). Handles are keyed "<groupId>:<key>" so the
+// front and back `author` never collide.
 
 const $ = (id) => document.getElementById(id);
 const W = 1600, H = 2560;            // authoritative front-cover pixel space
@@ -31,9 +29,9 @@ const KEYS = ['title', 'subtitle', 'author'];
 const WRAP_KEYS = ['blurb', 'badge', 'author'];
 const FAMILIES = ['Playfair Display', 'Montserrat', 'Baloo 2', 'Oswald', 'Patrick Hand'];
 
-let SLUG = null, LANG = null, VIEW = 'wrap';  // open on the full paperback (if allowed)
+let SLUG = null, LANG = null;
+const VIEW = 'wrap';                 // the only surface: the full paperback wrap
 let LANGS = [];                      // book's declared languages
-let EDIT_MODE = 'wrap';              // 'front' (digital-only) | 'wrap' (paperback)
 let data = null;                     // last /api/cover payload
 let els = null;                      // front layout {title,subtitle,author} fractions
 let wrapEls = null;                  // wrap back-panel {blurb,badge,author} fractions
@@ -104,38 +102,6 @@ function buildLangSeg() {
   });
 }
 
-// Build the Front/Wrap/Audiobook segmented control from the book's edit mode: a
-// digital-only book has no wrap to edit, so it only offers front + audiobook.
-function buildViewSeg() {
-  const seg = $('viewSeg');
-  seg.innerHTML = '';
-  const views = EDIT_MODE === 'front'
-    ? [['front', 'Front'], ['audiobook', 'Audiobook']]
-    : [['wrap', 'Wrap'], ['front', 'Front'], ['audiobook', 'Audiobook']];
-  views.forEach(([v, label]) => {
-    const b = document.createElement('button');
-    b.dataset.view = v;
-    b.textContent = label;
-    b.className = v === VIEW ? 'on' : '';
-    b.onclick = () => setView(v);
-    seg.appendChild(b);
-  });
-}
-
-async function switchLang(l) {
-  LANG = l;
-  $('toPreview').href = `/preview.html?book=${encodeURIComponent(SLUG)}&lang=${encodeURIComponent(LANG)}`;
-  buildLangSeg();
-  await loadCover();
-}
-
-function setView(v) {
-  VIEW = v;
-  $('viewSeg').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.view === v));
-  current = null;
-  renderStage().then(() => select(null));
-}
-
 // ---- group helpers ---------------------------------------------------------
 
 function groupOf(id) { return groups.find(g => g.id === id); }
@@ -154,14 +120,10 @@ function selInfo() {
 function show(id, on) { const e = $(id); if (e) e.style.display = on ? '' : 'none'; }
 function renderPane() {
   const isBlock = !!selInfo();
-  $('fmtbar').classList.toggle('off', !isBlock || VIEW === 'audiobook');
-  $('fmtHint').textContent = VIEW === 'audiobook'
-    ? ''
-    : isBlock
-      ? (editing ? 'Select text to style just that run' : 'Double-click the block to edit its text')
-      : 'Click a block to select it · double-click to edit its text';
-  $('saveBtn').style.display = VIEW === 'audiobook' ? 'none' : '';
-  show('genAudiobook', VIEW === 'audiobook');
+  $('fmtbar').classList.toggle('off', !isBlock);
+  $('fmtHint').textContent = isBlock
+    ? (editing ? 'Select text to style just that run' : 'Double-click the block to edit its text')
+    : 'Click a block to select it · double-click to edit its text';
 }
 
 // ---- load + render ---------------------------------------------------------
@@ -174,11 +136,6 @@ async function loadCover() {
     ? JSON.parse(JSON.stringify(data.wrap))
     : { blurb: null, badge: null, author: null };
   if (!data.layout_saved) applyFlexDefaults(data, els);
-
-  // Which surfaces this book exposes. A digital-only book can't be viewed as a wrap.
-  EDIT_MODE = data.edit_mode === 'front' ? 'front' : 'wrap';
-  if (EDIT_MODE === 'front' && VIEW === 'wrap') VIEW = 'front';
-  buildViewSeg();
 
   $('bookLabel').textContent = SLUG;
   $('protBadge').style.display = data.protected ? '' : 'none';
@@ -199,12 +156,11 @@ async function loadCover() {
 // SVG is baked at the working fractions, snapshot `baked` right before mounting so
 // live-drag deltas reset to zero.
 async function renderStage() {
-  const wrap = VIEW === 'wrap' ? 1 : 0;
   const stage = $('stage');
   status('rendering…');
   let svg;
   try {
-    svg = await fetch(`/api/cover/${SLUG}/${LANG}/svg?wrap=${wrap}`, {
+    svg = await fetch(`/api/cover/${SLUG}/${LANG}/svg?wrap=1`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(currentBody()),
     }).then(r => r.ok ? r.text() : r.text().then(t => { throw new Error(t); }));
   } catch (e) {
@@ -228,7 +184,7 @@ function mountSvg(svg) {
     // deselects otherwise.
     svgEl.addEventListener('click', () => {
       if (editing) { commitEdit(); return; }
-      select(VIEW === 'front' ? '__bg__' : null);
+      select(null);
     });
   }
   handles = {};
@@ -247,7 +203,6 @@ function scheduleLivePreview() {
   _previewTimer = setTimeout(runLivePreview, 160);
 }
 async function runLivePreview() {
-  if (VIEW === 'audiobook') return;
   if (_previewBusy) { _previewAgain = true; return; }
   _previewBusy = true;
   try { await renderStage(); }
@@ -259,10 +214,7 @@ async function runLivePreview() {
 
 // The draggable groups for the current view.
 function buildGroups(svgEl) {
-  if (VIEW === 'front') {
-    return [{ id: 'front', keys: KEYS, els, space: { w: W, h: H, x0: 0, vbW: W, vbH: H }, sizeRef: H }];
-  }
-  if (VIEW === 'wrap' && svgEl) {
+  if (svgEl) {
     // The wrap SVG exposes the back panel (data-back-w) and the front panel
     // (data-front-x / data-front-w) as sub-rectangles of the landscape viewBox.
     const vb = (svgEl.getAttribute('viewBox') || '0 0 0 0').split(/\s+/).map(Number);
@@ -313,7 +265,7 @@ function makeHandle(g, key) {
 // grabbable across their whole extent.
 function positionHandles() {
   const svgEl = $('stage').querySelector('svg');
-  if (!svgEl || VIEW === 'audiobook') return;
+  if (!svgEl) return;
   const r = svgEl.getBoundingClientRect();
   groups.forEach(g => {
     const sx = r.width / g.space.vbW, sy = r.height / g.space.vbH;
@@ -917,7 +869,7 @@ function wireShortcuts() {
     if (e.key === '?') { e.preventDefault(); toggleHelp(); return; }
     const arrows = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
     const info = selInfo();
-    if (info && VIEW !== 'audiobook' && arrows[e.key]) {
+    if (info && arrows[e.key]) {
       e.preventDefault();
       const step = (e.shiftKey ? 40 : 8);
       const [dx, dy] = arrows[e.key];
@@ -955,14 +907,12 @@ function currentBody() {
     author: els.author,
     bgcolor: bgcolor || '#000000',
   };
-  if (VIEW === 'wrap') {
-    body.blurb = (wrapEls.blurb && wrapEls.blurb.text) || '';
-    body.wrap = {
-      blurb: wrapEls.blurb || undefined,
-      badge: wrapEls.badge || undefined,
-      author: wrapEls.author || undefined,
-    };
-  }
+  body.blurb = (wrapEls.blurb && wrapEls.blurb.text) || '';
+  body.wrap = {
+    blurb: wrapEls.blurb || undefined,
+    badge: wrapEls.badge || undefined,
+    author: wrapEls.author || undefined,
+  };
   return body;
 }
 
