@@ -256,7 +256,9 @@ function makeHandle(g, key) {
   h.className = 'handle';
   // In the wrap view the same key exists on both panels; tag the side for clarity.
   const tag = groups.length > 1 ? `${g.id} · ${key}` : key;
-  h.innerHTML = `<span class="tag">${tag}</span>`;
+  h.innerHTML = `<span class="tag">${tag}</span><span class="grip l"></span><span class="grip r"></span>`;
+  h.querySelectorAll('.grip').forEach(gr =>
+    gr.addEventListener('pointerdown', (e) => { e.stopPropagation(); startResize(e, g, key); }));
   h.onpointerdown = (e) => startDrag(e, g, key);
   h.ondblclick = (e) => { e.preventDefault(); enterEdit(g, key); };
   $('stage').appendChild(h);
@@ -357,6 +359,40 @@ function startDrag(e, g, key) {
   hd.addEventListener('pointerup', up);
 }
 
+// Drag a width grip: the wrap box grows/shrinks symmetrically about the block's
+// center, and the text reflows inside it. Only the WIDTH is settable — the block's
+// height is whatever the wrapped text needs (see positionHandles).
+function startResize(e, g, key) {
+  e.preventDefault();
+  select(g.id + ':' + key);
+  const el = g.els[key];
+  if (!el) return;
+  const svgEl = $('stage').querySelector('svg');
+  const r = svgEl.getBoundingClientRect();
+  const sx = r.width / g.space.vbW;           // screen px per viewBox px
+  const grip = e.target;
+  grip.setPointerCapture(e.pointerId);
+
+  const move = (ev) => {
+    // pointer position in the block's panel coordinate space
+    const px = (ev.clientX - r.left) / sx - g.space.x0;
+    const cx = el.x_pct * g.space.w;
+    const half = Math.abs(px - cx);
+    el.w_pct = clamp((2 * half) / g.space.w, 0.04, 1);
+    positionHandles();
+    syncBar();
+    scheduleLivePreview();                    // the text reflows in the real SVG
+  };
+  const up = (ev) => {
+    grip.removeEventListener('pointermove', move);
+    grip.removeEventListener('pointerup', up);
+    try { grip.releasePointerCapture(ev.pointerId); } catch {}
+    status('box resized · Save to re-render');
+  };
+  grip.addEventListener('pointermove', move);
+  grip.addEventListener('pointerup', up);
+}
+
 // ---- selection + the format bar --------------------------------------------
 
 function select(sel) {
@@ -412,6 +448,7 @@ function syncBar() {
   $('fFillSw').style.background = toHex6(fill);
 
   // Block-level controls (never per-run).
+  $('fBoxW').value = Math.round(el.w_pct * info.g.space.w);
   setSeg('align', el.align || 'center');
   setSeg('case', el.text_transform || 'none');
   $('fLineHeight').value = el.line_height != null ? el.line_height : '';
@@ -465,6 +502,15 @@ function bindFormatBar() {
       afterStyle();
     };
   });
+  // Box width — the wrap box the text flows inside (same reference as the size field).
+  $('fBoxW').oninput = () => {
+    const i = selInfo(); if (!i) return;
+    const v = parseFloat($('fBoxW').value);
+    if (v > 0) { i.el.w_pct = clamp(v / i.g.space.w, 0.04, 1); positionHandles(); afterStyle(); }
+  };
+  // Center the block in its panel (the front panel or the back panel, not the whole wrap).
+  $('fCenterH').onclick = () => centerBlock('x');
+  $('fCenterV').onclick = () => centerBlock('y');
   $('fLineHeight').oninput = () => { const e = sel(); if (!e) return; const v = parseFloat($('fLineHeight').value); e.line_height = v > 0 ? v : undefined; afterStyle(); };
   $('fLetterSpacing').oninput = () => { const e = sel(); if (!e) return; const v = parseFloat($('fLetterSpacing').value); e.letter_spacing = isNaN(v) ? undefined : v; afterStyle(); };
   $('fOpacity').oninput = () => { const e = sel(); if (!e) return; e.opacity = parseFloat($('fOpacity').value); afterStyle(); };
@@ -488,6 +534,21 @@ function bindFormatBar() {
     $('bgSw').style.background = bgcolor;
     scheduleLivePreview();
   };
+}
+
+// Center the selected block within ITS panel — the back panel or the front panel,
+// whichever it belongs to (each group's space is that panel's rect), not the whole
+// wrap. Position is stored as the block's center, so centering is just 0.5.
+function centerBlock(axis) {
+  const i = selInfo();
+  if (!i) return;
+  if (axis === 'x') i.el.x_pct = 0.5;
+  else i.el.y_pct = 0.5;
+  liveTransform(i.g, i.key);     // move the real text immediately
+  positionHandles();
+  if (editing) placeInline();
+  status('centered · Save to re-render');
+  scheduleLivePreview();
 }
 
 // After a block-level style change: reflow handles, and re-render. While the

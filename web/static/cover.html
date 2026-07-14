@@ -57,6 +57,15 @@
                  text-transform:uppercase; color:#1a1206; background:var(--accent); padding:1px 6px;
                  border-radius:4px 4px 0 0; opacity:0; transition:opacity .09s; pointer-events:none; }
   .handle:hover .tag, .handle.sel .tag { opacity:1; }
+  /* Width grips on the SELECTED box — drag either edge to widen/narrow the wrap box
+     (the text reflows inside it). Height is derived from the wrapped text, so there
+     is nothing to grab vertically. Symmetric about the block's center. */
+  .handle .grip { position:absolute; top:50%; width:9px; height:34px; margin-top:-17px;
+                  background:var(--accent); border:1px solid rgba(0,0,0,.5); border-radius:3px;
+                  display:none; cursor:ew-resize; touch-action:none; }
+  .handle.sel .grip { display:block; }
+  .handle .grip.l { left:-5px; }
+  .handle .grip.r { right:-5px; }
 
   /* ---- inline text editor: sits ON the cover, over the block being edited ----
      It mirrors the block's real typography so what you type looks like what
@@ -116,6 +125,18 @@
   </button>
   <button class="fb" data-align="right" title="Align right" aria-label="Align right">
     <svg viewBox="0 0 20 20"><path d="M3 5h14M8 9h9M3 13h14M8 17h9"/></svg>
+  </button>
+  <span class="fb-sep"></span>
+  <!-- Box: the block's wrap-box WIDTH (what the text wraps inside). Height is
+       derived from the wrapped text, so width is the only dimension to set.
+       Drag the grips on the selected box to do it on the canvas instead. -->
+  <span class="fb-lab">Box</span>
+  <input type="number" id="fBoxW" class="fb-num" min="10" step="4" title="Box width (text wraps inside it)" aria-label="Box width" />
+  <button class="fb" id="fCenterH" title="Center horizontally in the panel" aria-label="Center horizontally">
+    <svg viewBox="0 0 20 20"><path d="M10 2v16" stroke-dasharray="2 2"/><rect x="4" y="7" width="12" height="6" rx="1"/></svg>
+  </button>
+  <button class="fb" id="fCenterV" title="Center vertically in the panel" aria-label="Center vertically">
+    <svg viewBox="0 0 20 20"><path d="M2 10h16" stroke-dasharray="2 2"/><rect x="7" y="4" width="6" height="12" rx="1"/></svg>
   </button>
   <span class="fb-sep"></span>
   <button class="fb" data-case="none" title="Normal case" aria-label="Normal case">Aa</button>
