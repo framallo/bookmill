@@ -65,7 +65,7 @@
   #log { position:fixed; right:14px; bottom:14px; max-width:420px; max-height:190px; overflow:auto; z-index:20;
          white-space:pre-wrap; font:11px/1.4 ui-monospace,Menlo,monospace; color:var(--muted);
          background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:9px; box-shadow:0 6px 24px rgba(0,0,0,.5); }
-  #status { font-size:12px; color:var(--muted); }
+  #status { font-size:12px; color:var(--muted); margin-left:10px; white-space:nowrap; }
   .pill { background:rgba(224,182,74,.1); color:var(--accent); border-color:rgba(224,182,74,.28); }
   #audiobookImg { position:fixed; right:14px; bottom:14px; width:220px; border:1px solid var(--line); border-radius:8px; z-index:19; }
 </style>
@@ -76,13 +76,16 @@
   <a class="navlink" id="backBook" href="#">← book</a>
   <h1>Edit cover</h1>
   <span id="bookLabel" class="fb-lab"></span>
+  <!-- Status lives on the LEFT, after the slug: it grows into the free space
+       before the spacer, so "saved + rendered" can't shove the ES/EN and view
+       buttons around as its width changes. -->
+  <span id="status"></span>
   <span class="spacer"></span>
   <span class="seg" id="langSeg" title="Language"></span>
   <span class="seg" id="viewSeg"></span>
   <span id="protBadge" class="pill" style="display:none">protected</span>
   <button class="btn" id="genAudiobook" style="display:none">Generate from front</button>
   <button class="btn primary" id="saveBtn">Save &amp; re-render</button>
-  <span id="status"></span>
   <a class="navlink" id="toPreview" href="#">preview →</a>
 </header>
 
