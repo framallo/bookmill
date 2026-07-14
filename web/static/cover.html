@@ -7,39 +7,67 @@
 <link rel="stylesheet" href="/app.css" />
 <style>
   /* tokens, buttons, .seg, .pill, .help* come from /app.css */
-  select, input[type=color], input[type=text] {
-    background:var(--panel2); color:var(--ink); border:1px solid var(--line-strong); border-radius:var(--radius); padding:7px 9px; font:inherit;
+  select, input[type=color], input[type=text], input[type=number] {
+    background:var(--panel2); color:var(--ink); border:1px solid var(--line-strong); border-radius:var(--radius); padding:5px 7px; font:inherit;
   }
-  .wrap { display:flex; height:calc(100vh - var(--appbar-h)); }
-  .side { width:310px; min-width:310px; background:var(--panel); border-right:1px solid var(--line); padding:14px; overflow:auto; }
-  .stage-host { flex:1; display:flex; align-items:center; justify-content:center; overflow:auto; padding:20px; background:
+
+  /* ---- format bar: the only chrome. No sidebar; you edit on the cover. ---- */
+  .fmtbar { display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+            background:var(--panel); border-bottom:1px solid var(--line); padding:7px 12px; }
+  .fmtbar.off { opacity:.38; pointer-events:none; }
+  .fb { display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px;
+        background:var(--panel2); color:var(--ink); border:1px solid var(--line-strong);
+        border-radius:var(--radius); cursor:pointer; padding:0; font:inherit; line-height:1; }
+  .fb:hover { border-color:var(--accent); }
+  .fb.on { background:rgba(224,182,74,.20); border-color:var(--accent); color:var(--accent); }
+  .fb svg { width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:1.9; stroke-linecap:round; }
+  .fb-sep { width:1px; height:22px; background:var(--line-strong); margin:0 4px; }
+  .fb-num { width:58px; }
+  .fb-sel { max-width:150px; }
+  /* color button: a glyph over the chosen swatch, the input itself is invisible */
+  .fb-color { position:relative; width:30px; height:30px; border:1px solid var(--line-strong);
+              border-radius:var(--radius); background:var(--panel2); cursor:pointer; overflow:hidden; display:inline-block; }
+  .fb-color input { position:absolute; inset:0; width:100%; height:100%; opacity:0; cursor:pointer; padding:0; border:0; }
+  .fb-color .g { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+                 font:700 12px/1 system-ui; pointer-events:none; padding-bottom:5px; }
+  .fb-color .sw { position:absolute; left:4px; right:4px; bottom:3px; height:4px; border-radius:2px;
+                  border:1px solid rgba(0,0,0,.4); pointer-events:none; }
+  .fb-lab { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.4px; }
+  #fmtHint { color:var(--muted); font-size:12px; }
+
+  .stage-host { height:calc(100vh - var(--appbar-h) - 45px); display:flex; align-items:center; justify-content:center;
+     overflow:auto; padding:20px; background:
      repeating-conic-gradient(#0d1117 0% 25%, #10151d 0% 50%) 50% / 28px 28px; }
 
   /* the SVG-as-canvas: the authoritative render IS the editing surface */
   #stage { position:relative; display:inline-block; line-height:0; box-shadow:0 8px 40px rgba(0,0,0,.55); }
   #stage svg, #stage img { display:block; }
 
-  /* draggable position handles (front view only) — boxes, not glyphs: appearance
-     comes from the SVG underneath, so no font-metric drift. */
+  /* draggable position handles — boxes, not glyphs: appearance comes from the SVG
+     underneath, so no font-metric drift. */
   .handle { position:absolute; border:1.5px dashed rgba(212,169,55,.9); border-radius:3px;
             background:rgba(212,169,55,.08); cursor:move; touch-action:none; }
   .handle:hover { background:rgba(212,169,55,.16); }
   .handle.sel { border-style:solid; border-color:var(--accent); background:rgba(212,169,55,.22); }
+  .handle.editing { display:none; }
   .handle .tag { position:absolute; top:-19px; left:-1px; font:600 10px/1.4 system-ui; letter-spacing:.4px;
                  text-transform:uppercase; color:#1a1206; background:var(--accent); padding:1px 6px; border-radius:4px 4px 0 0; }
 
-  .field { margin-bottom:12px; }
-  .field label { display:block; color:var(--muted); font-size:12px; margin-bottom:4px; text-transform:uppercase; letter-spacing:.4px; }
-  .row { display:flex; gap:8px; align-items:center; }
-  .row > * { flex:1; }
-  h3 { font-size:12px; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); border-bottom:1px solid var(--line); padding-bottom:6px; margin:18px 0 10px; }
-  textarea { width:100%; min-height:54px; background:#222b36; color:var(--ink); border:1px solid var(--line); border-radius:6px; padding:6px; font:inherit; resize:vertical; }
-  .hint { color:var(--muted); font-size:12px; }
+  /* ---- inline text editor: sits ON the cover, over the block being edited ----
+     It mirrors the block's real typography so what you type looks like what
+     resvg will print. The SVG's own text layer is hidden while it is open. */
+  #inline { position:absolute; margin:0; z-index:5; outline:2px solid var(--accent);
+            outline-offset:3px; border-radius:2px; background:rgba(10,14,20,.18);
+            caret-color:#fff; white-space:pre-wrap; overflow-wrap:break-word; cursor:text; }
+  #inline:focus { outline-color:var(--accent); }
+  .editing-hidden { visibility:hidden; }
+
+  #log { position:fixed; right:14px; bottom:14px; max-width:420px; max-height:190px; overflow:auto; z-index:20;
+         white-space:pre-wrap; font:11px/1.4 ui-monospace,Menlo,monospace; color:var(--muted);
+         background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:9px; box-shadow:0 6px 24px rgba(0,0,0,.5); }
   #status { font-size:12px; color:var(--muted); }
   .pill { background:rgba(224,182,74,.1); color:var(--accent); border-color:rgba(224,182,74,.28); }
-  #log { white-space:pre-wrap; font:11px/1.4 ui-monospace,Menlo,monospace; color:var(--muted); background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:8px; max-height:160px; overflow:auto; margin-top:8px; }
-  .preview-img { width:100%; border:1px solid var(--line); border-radius:6px; margin-top:8px; }
-  /* .helpbtn / .help-overlay / .help-card come from /app.css */
+  #audiobookImg { position:fixed; right:14px; bottom:14px; width:220px; border:1px solid var(--line); border-radius:8px; z-index:19; }
 </style>
 </head>
 <body>
@@ -47,146 +75,90 @@
   <a class="navlink" href="/">← all books</a>
   <a class="navlink" id="backBook" href="#">← book</a>
   <h1>Edit cover</h1>
-  <span id="bookLabel" class="hint"></span>
+  <span id="bookLabel" class="fb-lab"></span>
   <span class="spacer"></span>
   <span class="seg" id="langSeg" title="Language"></span>
-  <!-- Views are built by app.js::buildViewSeg from the book's edit mode (a
-       digital-only book only offers Front + Audiobook). -->
   <span class="seg" id="viewSeg"></span>
   <span id="protBadge" class="pill" style="display:none">protected</span>
+  <button class="btn" id="genAudiobook" style="display:none">Generate from front</button>
   <button class="btn primary" id="saveBtn">Save &amp; re-render</button>
   <span id="status"></span>
   <a class="navlink" id="toPreview" href="#">preview →</a>
 </header>
 
-<div class="wrap">
-  <aside class="side">
-    <!-- Contextual: a text block is selected (front title/subtitle/author or wrap
-         blurb/badge/author). -->
-    <div id="blockPane" style="display:none">
-      <h3 id="selName">Title</h3>
-      <div class="field">
-        <label for="selText">Text</label>
-        <textarea id="selText"></textarea>
-      </div>
-      <div class="field">
-        <label for="selFill">Fill color</label>
-        <div class="row">
-          <input type="color" id="selFill" />
-          <input type="text" id="selFillHex" aria-label="Fill color hex value" />
-        </div>
-      </div>
-      <div class="field">
-        <label for="selSize">Font size</label>
-        <input type="text" id="selSize" />
-      </div>
-      <div class="field">
-        <label for="selFamily">Font</label>
-        <select id="selFamily">
-          <option value="Playfair Display">Playfair Display</option>
-          <option value="Montserrat">Montserrat</option>
-          <option value="Baloo 2">Baloo 2</option>
-          <option value="Oswald">Oswald</option>
-          <option value="Patrick Hand">Patrick Hand</option>
-        </select>
-      </div>
-      <div class="field">
-        <label>Style</label>
-        <span class="seg">
-          <button type="button" id="selBold">Bold</button>
-          <button type="button" id="selItalic">Italic</button>
-        </span>
-      </div>
-      <div class="field">
-        <label>Align</label>
-        <span class="seg" id="selAlign">
-          <button type="button" data-align="left">Left</button>
-          <button type="button" data-align="center">Center</button>
-          <button type="button" data-align="right">Right</button>
-        </span>
-      </div>
-      <div class="field">
-        <label>Case</label>
-        <span class="seg" id="selCase">
-          <button type="button" data-case="none">Aa</button>
-          <button type="button" data-case="upper">AA</button>
-          <button type="button" data-case="lower">aa</button>
-        </span>
-      </div>
-      <div class="row">
-        <div class="field" style="flex:1">
-          <label for="selLineHeight">Line height</label>
-          <input type="number" id="selLineHeight" step="0.05" min="0.6" max="3" />
-        </div>
-        <div class="field" style="flex:1">
-          <label for="selLetterSpacing">Letter spacing</label>
-          <input type="number" id="selLetterSpacing" step="0.5" />
-        </div>
-      </div>
-      <div class="field">
-        <label for="selOpacity">Opacity <span id="selOpacityVal" class="hint"></span></label>
-        <input type="range" id="selOpacity" min="0" max="1" step="0.05" style="width:100%" />
-      </div>
-      <div class="field">
-        <label>Outline (stroke)</label>
-        <div class="row">
-          <input type="color" id="selStrokeColor" aria-label="Stroke color" />
-          <input type="number" id="selStrokeWidth" min="0" max="20" step="0.5" placeholder="width" aria-label="Stroke width px" />
-        </div>
-      </div>
-      <div class="field">
-        <label><input type="checkbox" id="selShadow" /> Drop shadow</label>
-      </div>
-    </div>
-
-    <!-- Contextual: the background is clicked (front view). -->
-    <div id="bgPane" style="display:none">
-      <h3 id="bgPaneH">Background color</h3>
-      <div class="row">
-        <input type="color" id="bgcolor" aria-labelledby="bgPaneH" />
-        <input type="text" id="bgcolorHex" aria-label="Background color hex value" />
-      </div>
-    </div>
-
-    <!-- Wrap default: the back-cover blurb. -->
-    <div id="wrapPane" style="display:none">
-      <h3 id="blurbH">Back-cover blurb</h3>
-      <div class="field">
-        <textarea id="blurbText" style="min-height:150px" aria-labelledby="blurbH"></textarea>
-      </div>
-      <div class="hint">Drag the blurb / badge / author boxes on the back panel; click a box to edit it. Keep the bottom-right barcode zone clear.</div>
-      <a class="navlink" id="openWrap" href="#" target="_blank" rel="noopener"
-         style="display:inline-block;margin-top:8px;color:var(--accent)">open wrap PDF ↗</a>
-    </div>
-
-    <!-- Audiobook: inferred square crop of the front. -->
-    <div id="audiobookPane" style="display:none">
-      <h3>Audiobook cover</h3>
-      <button class="btn primary" id="genAudiobook" style="width:100%">Generate from front</button>
-      <div class="hint" style="margin-top:8px">Center-square crop of the front (3000×3000).</div>
-      <img id="audiobookImg" class="preview-img" style="display:none" alt="audiobook cover" />
-    </div>
-
-    <!-- Front default hint. -->
-    <div id="hintPane" class="hint">Click a block to edit it, or the background to change its color.</div>
-
-    <div id="log" style="display:none"></div>
-  </aside>
-
-  <main class="stage-host">
-    <div id="stage"></div>
-  </main>
+<!-- Format bar. Applies to the SELECTED TEXT when the inline editor has a
+     selection (per-character styling), else to the whole block. -->
+<div class="fmtbar off" id="fmtbar">
+  <select id="fFamily" class="fb-sel" title="Font" aria-label="Font family"></select>
+  <input type="number" id="fSize" class="fb-num" min="4" step="1" title="Font size" aria-label="Font size" />
+  <span class="fb-sep"></span>
+  <button class="fb" id="fBold" title="Bold (⌘B)" aria-label="Bold"><b>B</b></button>
+  <button class="fb" id="fItalic" title="Italic (⌘I)" aria-label="Italic"><i>I</i></button>
+  <label class="fb-color" id="fFillWrap" title="Text color">
+    <input type="color" id="fFill" aria-label="Text color" />
+    <span class="g">A</span><span class="sw" id="fFillSw"></span>
+  </label>
+  <button class="fb" id="fClear" title="Clear styling from selection" aria-label="Clear styling">
+    <svg viewBox="0 0 20 20"><path d="M4 16h12M6 13l7-9 4 3-7 9z"/><path d="M4 5l3 3"/></svg>
+  </button>
+  <span class="fb-sep"></span>
+  <button class="fb" data-align="left" title="Align left" aria-label="Align left">
+    <svg viewBox="0 0 20 20"><path d="M3 5h14M3 9h9M3 13h14M3 17h9"/></svg>
+  </button>
+  <button class="fb" data-align="center" title="Align center" aria-label="Align center">
+    <svg viewBox="0 0 20 20"><path d="M3 5h14M5 9h10M3 13h14M5 17h10"/></svg>
+  </button>
+  <button class="fb" data-align="right" title="Align right" aria-label="Align right">
+    <svg viewBox="0 0 20 20"><path d="M3 5h14M8 9h9M3 13h14M8 17h9"/></svg>
+  </button>
+  <span class="fb-sep"></span>
+  <button class="fb" data-case="none" title="Normal case" aria-label="Normal case">Aa</button>
+  <button class="fb" data-case="upper" title="Uppercase" aria-label="Uppercase">AA</button>
+  <button class="fb" data-case="lower" title="Lowercase" aria-label="Lowercase">aa</button>
+  <span class="fb-sep"></span>
+  <span class="fb-lab">LH</span>
+  <input type="number" id="fLineHeight" class="fb-num" step="0.05" min="0.6" max="3" title="Line height" aria-label="Line height" />
+  <span class="fb-lab">LS</span>
+  <input type="number" id="fLetterSpacing" class="fb-num" step="0.5" title="Letter spacing" aria-label="Letter spacing" />
+  <span class="fb-lab">Op</span>
+  <input type="range" id="fOpacity" min="0" max="1" step="0.05" style="width:70px" title="Opacity" aria-label="Opacity" />
+  <span class="fb-sep"></span>
+  <label class="fb-color" title="Outline color">
+    <input type="color" id="fStrokeColor" aria-label="Outline color" />
+    <span class="g">O</span><span class="sw" id="fStrokeSw"></span>
+  </label>
+  <input type="number" id="fStrokeWidth" class="fb-num" min="0" max="20" step="0.5" title="Outline width" aria-label="Outline width" />
+  <button class="fb" id="fShadow" title="Drop shadow" aria-label="Drop shadow">
+    <svg viewBox="0 0 20 20"><circle cx="8" cy="8" r="5"/><path d="M12 12a5 5 0 0 0 0 0" /><circle cx="12" cy="12" r="5" stroke-dasharray="2 2"/></svg>
+  </button>
+  <span class="fb-sep"></span>
+  <span class="fb-lab">BG</span>
+  <label class="fb-color" title="Background color">
+    <input type="color" id="bgcolor" aria-label="Background color" />
+    <span class="g">▦</span><span class="sw" id="bgSw"></span>
+  </label>
+  <span id="fmtHint"></span>
 </div>
+
+<main class="stage-host">
+  <div id="stage"></div>
+</main>
+
+<div id="log" style="display:none"></div>
+<img id="audiobookImg" style="display:none" alt="audiobook cover" />
 
 <button class="helpbtn" id="helpBtn" title="Keyboard shortcuts (?)">?</button>
 <div class="help-overlay" id="helpOverlay">
   <div class="help-card">
     <h3>Keyboard shortcuts</h3>
     <table>
+      <tr><td><kbd>Double-click</kbd></td><td>Edit a block's text on the cover</td></tr>
+      <tr><td>Select text, then <kbd>B</kbd>/<kbd>I</kbd>/color</td><td>Style just that run</td></tr>
+      <tr><td><kbd>⌘</kbd>/<kbd>Ctrl</kbd>+<kbd>B</kbd> / <kbd>I</kbd></td><td>Bold / italic the selection</td></tr>
+      <tr><td><kbd>⌘</kbd>/<kbd>Ctrl</kbd>+<kbd>Enter</kbd></td><td>Finish editing</td></tr>
       <tr><td><kbd>⌘</kbd>/<kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>Save &amp; re-render</td></tr>
-      <tr><td><kbd>←</kbd> <kbd>↑</kbd> <kbd>→</kbd> <kbd>↓</kbd></td><td>Nudge selected box</td></tr>
-      <tr><td><kbd>Shift</kbd> + arrows</td><td>Nudge by a larger step</td></tr>
-      <tr><td><kbd>Esc</kbd></td><td>Deselect</td></tr>
+      <tr><td><kbd>←</kbd> <kbd>↑</kbd> <kbd>→</kbd> <kbd>↓</kbd></td><td>Nudge selected box (<kbd>Shift</kbd> = larger)</td></tr>
+      <tr><td><kbd>Esc</kbd></td><td>Finish editing / deselect</td></tr>
       <tr><td><kbd>?</kbd></td><td>Toggle this help</td></tr>
     </table>
     <div class="hc-close">Press <kbd>Esc</kbd> or <kbd>?</kbd> to close</div>

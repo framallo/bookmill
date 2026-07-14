@@ -413,13 +413,29 @@ pub fn save_cover(book: &BookSummary, lang: &str, els: &Elements, bgcolor: &str)
         doc["cover"][lang]["sub"] = value(els.subtitle.text.clone());
     }
 
-    // [cover.<lang>.layout] — canonical normalized layout
+    // ONE design for every language: the geometry + style go to the SHARED
+    // [cover.layout], and only the text (with its styled runs) goes to
+    // [cover.<lang>.layout], which overlays the shared block field-by-field. So
+    // moving a block while editing EN moves it on ES too — that is the point —
+    // while each language keeps its own words. Hand-edit [cover.<lang>.layout] to
+    // add a per-language tweak (e.g. a smaller title because the words are longer).
     let mut layout = Table::new();
     layout.set_implicit(false);
-    layout.insert("title", Item::Value(element_inline(&els.title)));
-    layout.insert("subtitle", Item::Value(element_inline(&els.subtitle)));
-    layout.insert("author", Item::Value(element_inline(&els.author)));
-    doc["cover"][lang]["layout"] = Item::Table(layout);
+    layout.insert("title", Item::Value(element_inline(&geometry_of(&els.title))));
+    layout.insert("subtitle", Item::Value(element_inline(&geometry_of(&els.subtitle))));
+    layout.insert("author", Item::Value(element_inline(&geometry_of(&els.author))));
+    doc["cover"]["layout"] = Item::Table(layout);
+
+    let mut lang_layout = Table::new();
+    lang_layout.set_implicit(false);
+    // Only blocks that actually carry text — an empty one would just be noise (the
+    // renderer already falls back to [title.<lang>] / [subtitle.<lang>]).
+    for (key, el) in [("title", &els.title), ("subtitle", &els.subtitle)] {
+        if let Some(v) = text_only_inline(el) {
+            lang_layout.insert(key, Item::Value(v));
+        }
+    }
+    doc["cover"][lang]["layout"] = Item::Table(lang_layout);
 
     std::fs::write(&path, doc.to_string()).with_context(|| format!("writing {}", path.display()))?;
     Ok(path)
@@ -474,21 +490,24 @@ pub fn save_wrap_layout(book: &BookSummary, lang: &str, els: &WrapElements) -> R
         }
     }
 
-    // [cover.<lang>.wrap] — merge present blocks over any prior saved wrap layout,
+    // Shared [cover.wrap] — geometry + style only, so the back cover is one design
+    // in every language. The blurb/badge text resolves per-language on its own
+    // ([cover.<lang>].blurb and the localized series badge), so nothing text-shaped
+    // needs to be duplicated here. Present blocks merge over any prior saved layout,
     // so dragging only the blurb doesn't drop a previously-placed badge/author.
-    if doc["cover"][lang].get("wrap").and_then(|i| i.as_table()).is_none() {
+    if doc["cover"].get("wrap").and_then(|i| i.as_table()).is_none() {
         let mut t = Table::new();
         t.set_implicit(false);
-        doc["cover"][lang]["wrap"] = Item::Table(t);
+        doc["cover"]["wrap"] = Item::Table(t);
     }
     if let Some(e) = &els.blurb {
-        doc["cover"][lang]["wrap"]["blurb"] = Item::Value(element_inline(e));
+        doc["cover"]["wrap"]["blurb"] = Item::Value(element_inline(&geometry_of(e)));
     }
     if let Some(e) = &els.badge {
-        doc["cover"][lang]["wrap"]["badge"] = Item::Value(element_inline(e));
+        doc["cover"]["wrap"]["badge"] = Item::Value(element_inline(&geometry_of(e)));
     }
     if let Some(e) = &els.author {
-        doc["cover"][lang]["wrap"]["author"] = Item::Value(element_inline(e));
+        doc["cover"]["wrap"]["author"] = Item::Value(element_inline(&geometry_of(e)));
     }
 
     std::fs::write(&path, doc.to_string()).with_context(|| format!("writing {}", path.display()))?;
@@ -540,10 +559,17 @@ fn element_inline(e: &Element) -> Value {
     t.insert("fontFamily", e.font_family.clone().into());
     t.insert("fontStyle", e.font_style.clone().into());
     // Styled runs win over the flat string; a block with no per-run styling keeps
-    // writing `text = "…"` so existing configs stay readable and diffable.
+    // writing `text = "…"` so existing configs stay readable and diffable. An empty
+    // text is omitted entirely — that's the shared [cover.layout], whose text comes
+    // from the per-language block.
     match &e.runs {
-        Some(rs) if rs.iter().any(|r| r.styled()) => t.insert("text", runs_value(rs)),
-        _ => t.insert("text", e.text.clone().into()),
+        Some(rs) if rs.iter().any(|r| r.styled()) => {
+            t.insert("text", runs_value(rs));
+        }
+        _ if !e.text.is_empty() => {
+            t.insert("text", e.text.clone().into());
+        }
+        _ => {}
     };
     // Optional formatting — only written when set, so untouched blocks stay terse.
     if let Some(v) = &e.align {
@@ -570,12 +596,106 @@ fn element_inline(e: &Element) -> Value {
     Value::InlineTable(t)
 }
 
+/// The saved front layout, resolved the way the RENDERER resolves it: the shared
+/// `[cover.layout]` is the base and `[cover.<lang>.layout]` overlays it field by
+/// field. The editor must do the same merge or it would read a text-only language
+/// block, see no geometry, fall back to the flex defaults — and then save those
+/// defaults over the shared design.
 fn read_saved_layout(doc: &DocumentMut, lang: &str) -> Option<Elements> {
-    let layout = doc.get("cover")?.get(lang)?.get("layout")?;
+    let cover = doc.get("cover")?;
+    let shared = cover.get("layout");
+    let langed = cover.get(lang).and_then(|l| l.get("layout"));
+    if shared.is_none() && langed.is_none() {
+        return None;
+    }
+    let get = |key: &str| -> Option<Element> {
+        merge_el(
+            shared.and_then(|l| l.get(key)).and_then(read_element_partial),
+            langed.and_then(|l| l.get(key)).and_then(read_element_partial),
+        )
+    };
     Some(Elements {
-        title: read_element(layout.get("title")?)?,
-        subtitle: read_element(layout.get("subtitle")?)?,
-        author: read_element(layout.get("author")?)?,
+        title: get("title")?,
+        subtitle: get("subtitle")?,
+        author: get("author")?,
+    })
+}
+
+/// Overlay a per-language block onto the shared one. Only a block that ends up
+/// with real geometry (x/y/size) is usable by the editor; anything less means the
+/// book has no saved layout for that element and the flex default should seed it.
+fn merge_el(base: Option<PartialElement>, over: Option<PartialElement>) -> Option<Element> {
+    let (b, o) = (base.unwrap_or_default(), over.unwrap_or_default());
+    let pick = |a: Option<f64>, c: Option<f64>| c.or(a);
+    let picks = |a: Option<String>, c: Option<String>| c.or(a);
+    Some(Element {
+        x_pct: pick(b.x_pct, o.x_pct)?,
+        y_pct: pick(b.y_pct, o.y_pct)?,
+        w_pct: pick(b.w_pct, o.w_pct).unwrap_or(0.8),
+        font_pct: pick(b.font_pct, o.font_pct)?,
+        fill: picks(b.fill, o.fill).unwrap_or_else(|| "#FFFFFF".into()),
+        font_family: picks(b.font_family, o.font_family).unwrap_or_else(|| "Playfair Display".into()),
+        font_style: picks(b.font_style, o.font_style).unwrap_or_else(|| "normal".into()),
+        text: o.text.clone().or(b.text).unwrap_or_default(),
+        runs: o.runs.or(b.runs),
+        align: picks(b.align, o.align),
+        line_height: pick(b.line_height, o.line_height),
+        letter_spacing: pick(b.letter_spacing, o.letter_spacing),
+        text_transform: picks(b.text_transform, o.text_transform),
+        stroke: picks(b.stroke, o.stroke),
+        shadow: o.shadow.or(b.shadow),
+        opacity: pick(b.opacity, o.opacity),
+    })
+}
+
+/// Every field optional — a `[cover.<lang>.layout]` block legitimately carries only
+/// `text`, and the shared block carries only geometry.
+#[derive(Default, Clone)]
+struct PartialElement {
+    x_pct: Option<f64>,
+    y_pct: Option<f64>,
+    w_pct: Option<f64>,
+    font_pct: Option<f64>,
+    fill: Option<String>,
+    font_family: Option<String>,
+    font_style: Option<String>,
+    text: Option<String>,
+    runs: Option<Vec<TextRun>>,
+    align: Option<String>,
+    line_height: Option<f64>,
+    letter_spacing: Option<f64>,
+    text_transform: Option<String>,
+    stroke: Option<String>,
+    shadow: Option<bool>,
+    opacity: Option<f64>,
+}
+
+fn read_element_partial(item: &Item) -> Option<PartialElement> {
+    let t = item.as_inline_table()?;
+    let f = |k: &str| t.get(k).and_then(|v| v.as_float());
+    let s = |k: &str| t.get(k).and_then(|v| v.as_str()).map(str::to_string);
+    let runs = read_runs(t.get("text"));
+    let text = match (&runs, s("text")) {
+        (Some(rs), _) => Some(rs.iter().map(|r| r.t.as_str()).collect::<String>()),
+        (None, p) => p,
+    };
+    Some(PartialElement {
+        x_pct: f("xPct"),
+        y_pct: f("yPct"),
+        w_pct: f("wPct"),
+        font_pct: f("fontPct"),
+        fill: s("fill"),
+        font_family: s("fontFamily"),
+        font_style: s("fontStyle"),
+        text,
+        runs,
+        align: s("align"),
+        line_height: f("lineHeight"),
+        letter_spacing: f("letterSpacing"),
+        text_transform: s("textTransform"),
+        stroke: s("stroke"),
+        shadow: t.get("shadow").and_then(|v| v.as_bool()),
+        opacity: f("opacity"),
     })
 }
 
@@ -587,12 +707,25 @@ struct SavedWrap {
     author: Option<Element>,
 }
 
+/// Same shared-over-language merge as [`read_saved_layout`], for the back panel:
+/// `[cover.wrap]` is the shared design, `[cover.<lang>.wrap]` overlays it.
 fn read_saved_wrap(doc: &DocumentMut, lang: &str) -> Option<SavedWrap> {
-    let wrap = doc.get("cover")?.get(lang)?.get("wrap")?;
+    let cover = doc.get("cover")?;
+    let shared = cover.get("wrap");
+    let langed = cover.get(lang).and_then(|l| l.get("wrap"));
+    if shared.is_none() && langed.is_none() {
+        return None;
+    }
+    let get = |key: &str| -> Option<Element> {
+        merge_el(
+            shared.and_then(|w| w.get(key)).and_then(read_element_partial),
+            langed.and_then(|w| w.get(key)).and_then(read_element_partial),
+        )
+    };
     Some(SavedWrap {
-        blurb: wrap.get("blurb").and_then(read_element),
-        badge: wrap.get("badge").and_then(read_element),
-        author: wrap.get("author").and_then(read_element),
+        blurb: get("blurb"),
+        badge: get("badge"),
+        author: get("author"),
     })
 }
 
@@ -646,6 +779,28 @@ fn read_runs(item: Option<&toml_edit::Value>) -> Option<Vec<TextRun>> {
         });
     }
     (!out.is_empty()).then_some(out)
+}
+
+/// The block minus its text — what goes into the language-neutral `[cover.layout]`.
+fn geometry_of(e: &Element) -> Element {
+    Element { text: String::new(), runs: None, ..e.clone() }
+}
+
+/// Only the block's text (+ styled runs) — what goes into `[cover.<lang>.layout]`,
+/// overlaying the shared block. Every geometry field is `Option` on the config side,
+/// so this really is text-only. `None` when the block has no text at all.
+fn text_only_inline(e: &Element) -> Option<Value> {
+    let mut t = toml_edit::InlineTable::new();
+    match &e.runs {
+        Some(rs) if rs.iter().any(|r| r.styled()) => {
+            t.insert("text", runs_value(rs));
+        }
+        _ if !e.text.trim().is_empty() => {
+            t.insert("text", e.text.clone().into());
+        }
+        _ => return None,
+    }
+    Some(Value::InlineTable(t))
 }
 
 /// Serialize styled runs back to a TOML array of inline tables. Only set style

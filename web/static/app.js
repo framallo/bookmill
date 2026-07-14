@@ -51,6 +51,12 @@ let groups = [];
 // text tracks the pointer without re-rendering the background. Re-synced on load
 // and after every save (when the SVG catches up to the working fractions).
 let baked = {};
+let bgcolor = '#000000';             // working background color (no sidebar; bar holds it)
+// Inline editor state: which block is open ("groupId:key") and its char model.
+// The char model is the per-character styling substrate — one entry per character,
+// carrying the run style it belongs to. Selection-based styling edits this array,
+// which then collapses back into runs (adjacent same-style chars merge).
+let editing = null;                  // { g, key, el } while the inline editor is open
 
 init();
 
@@ -73,14 +79,13 @@ async function init() {
 
   $('backBook').href = `/book.html?book=${encodeURIComponent(SLUG)}`;
   $('toPreview').href = `/preview.html?book=${encodeURIComponent(SLUG)}&lang=${encodeURIComponent(LANG)}`;
-  $('openWrap').href = `/api/output/${encodeURIComponent(SLUG)}/${encodeURIComponent(LANG)}/wrap-cover`;
 
   buildLangSeg();
   $('saveBtn').onclick = save;
   $('genAudiobook').onclick = genAudiobookCover;
-  bindStyleInputs();
+  bindFormatBar();
   wireShortcuts();
-  window.addEventListener('resize', () => positionHandles());
+  window.addEventListener('resize', () => { positionHandles(); if (editing) { styleInline(); placeInline(); } });
 
   await loadCover();
 }
@@ -120,7 +125,6 @@ function buildViewSeg() {
 async function switchLang(l) {
   LANG = l;
   $('toPreview').href = `/preview.html?book=${encodeURIComponent(SLUG)}&lang=${encodeURIComponent(LANG)}`;
-  $('openWrap').href = `/api/output/${encodeURIComponent(SLUG)}/${encodeURIComponent(LANG)}/wrap-cover`;
   buildLangSeg();
   await loadCover();
 }
@@ -144,19 +148,20 @@ function selInfo() {
   return { g, key, el: g.els[key] };
 }
 
-// The left pane is contextual: a selected text block → block editor; the front
-// background (front view only) → background color; otherwise the view's default
-// (wrap → blurb text, audiobook → generate, front → hint).
+// There is no sidebar: the format bar is the whole chrome. It is live only when a
+// text block is selected, and it targets the inline editor's SELECTION when there
+// is one (per-run styling), else the whole block.
 function show(id, on) { const e = $(id); if (e) e.style.display = on ? '' : 'none'; }
 function renderPane() {
   const isBlock = !!selInfo();
-  const isBg = current === '__bg__' && VIEW === 'front';
-  show('blockPane', isBlock);
-  show('bgPane', isBg);
-  show('wrapPane', VIEW === 'wrap' && !isBlock);
-  show('audiobookPane', VIEW === 'audiobook');
-  show('hintPane', VIEW === 'front' && !isBlock && !isBg);
+  $('fmtbar').classList.toggle('off', !isBlock || VIEW === 'audiobook');
+  $('fmtHint').textContent = VIEW === 'audiobook'
+    ? ''
+    : isBlock
+      ? (editing ? 'Select text to style just that run' : 'Double-click the block to edit its text')
+      : 'Click a block to select it · double-click to edit its text';
   $('saveBtn').style.display = VIEW === 'audiobook' ? 'none' : '';
+  show('genAudiobook', VIEW === 'audiobook');
 }
 
 // ---- load + render ---------------------------------------------------------
@@ -177,9 +182,11 @@ async function loadCover() {
 
   $('bookLabel').textContent = SLUG;
   $('protBadge').style.display = data.protected ? '' : 'none';
-  $('bgcolor').value = toHex6(data.bgcolor);
-  $('bgcolorHex').value = data.bgcolor;
-  $('blurbText').value = (wrapEls.blurb && wrapEls.blurb.text) || data.blurb || '';
+  bgcolor = data.bgcolor || '#000000';
+  $('bgcolor').value = toHex6(bgcolor);
+  $('bgSw').style.background = toHex6(bgcolor);
+  // The back-cover blurb is edited inline on the canvas now (no sidebar textarea).
+  if (wrapEls.blurb && !wrapEls.blurb.text) wrapEls.blurb.text = data.blurb || '';
   snapshotBaked();   // the SVG we're about to fetch is baked at these fractions
   select(null);
   await renderStage();
@@ -219,7 +226,10 @@ function mountSvg(svg) {
     fitSvg(svgEl);
     // Clicking the canvas (not a handle) selects the background in front view, or
     // deselects otherwise.
-    svgEl.addEventListener('click', () => select(VIEW === 'front' ? '__bg__' : null));
+    svgEl.addEventListener('click', () => {
+      if (editing) { commitEdit(); return; }
+      select(VIEW === 'front' ? '__bg__' : null);
+    });
   }
   handles = {};
   groups = buildGroups(svgEl);
@@ -293,6 +303,7 @@ function makeHandle(g, key) {
   const tag = groups.length > 1 ? `${g.id} · ${key}` : key;
   h.innerHTML = `<span class="tag">${tag}</span>`;
   h.onpointerdown = (e) => startDrag(e, g, key);
+  h.ondblclick = (e) => { e.preventDefault(); enterEdit(g, key); };
   $('stage').appendChild(h);
   handles[id] = h;
 }
@@ -388,42 +399,19 @@ function startDrag(e, g, key) {
   hd.addEventListener('pointerup', up);
 }
 
-// ---- selection + style inputs ----------------------------------------------
+// ---- selection + the format bar --------------------------------------------
 
 function select(sel) {
+  if (editing && sel !== current) commitEdit();
   current = sel;
-  const info = selInfo();
-  if (info) {
-    const el = info.el;
-    $('selName').textContent = groups.length > 1 ? `${info.g.id} · ${info.key}` : info.key;
-    $('selText').value = el.text || '';
-    $('selFill').value = toHex6(el.fill);
-    $('selFillHex').value = el.fill || '';
-    $('selSize').value = Math.round(el.font_pct * info.g.sizeRef);
-    const st = el.font_style || 'normal';
-    $('selBold').classList.toggle('on', st.includes('bold'));
-    $('selItalic').classList.toggle('on', st.includes('italic'));
-    setFamilySelect(el.font_family || '');
-    // formatting controls
-    setSeg('selAlign', 'align', el.align || 'center');
-    setSeg('selCase', 'case', el.text_transform || 'none');
-    $('selLineHeight').value = el.line_height != null ? el.line_height : '';
-    $('selLetterSpacing').value = el.letter_spacing != null ? el.letter_spacing : '';
-    const op = el.opacity != null ? el.opacity : 1;
-    $('selOpacity').value = op; $('selOpacityVal').textContent = Math.round(op * 100) + '%';
-    const s = parseStroke(el.stroke);
-    $('selStrokeColor').value = s.color;
-    $('selStrokeWidth').value = s.w || '';
-    $('selShadow').checked = el.shadow !== false; // default on
-  }
+  syncBar();
   renderPane();
   positionHandles();
 }
 
-// Reflect the active button in a segmented control keyed by a data-<attr>.
-function setSeg(segId, attr, val) {
-  const seg = $(segId); if (!seg) return;
-  seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset[attr] === val));
+// Reflect the active button in an icon group keyed by a data-<attr>.
+function setSeg(attr, val) {
+  $('fmtbar').querySelectorAll(`[data-${attr}]`).forEach(b => b.classList.toggle('on', b.dataset[attr] === val));
 }
 // Parse an SVG-ish stroke "2px #rrggbb" into {w, color}; empty/none → no stroke.
 function parseStroke(s) {
@@ -446,10 +434,41 @@ function styleStr(bold, italic) {
   return 'normal';
 }
 
+// Push the selected block's style into the bar. When the inline editor has a
+// non-empty selection, the type controls show that RUN's style instead, so the
+// bar always describes what a click would change.
+function syncBar() {
+  const info = selInfo();
+  if (!info) return;
+  const el = info.el;
+  const st = el.font_style || 'normal';
+  const r = editing ? selectionStyle() : null;   // run style under the cursor/selection
+
+  setFamilySelect((r && r.family) || el.font_family || '');
+  const blockSize = Math.round(el.font_pct * info.g.sizeRef);
+  $('fSize').value = r && r.size ? Math.round(blockSize * r.size) : blockSize;
+  $('fBold').classList.toggle('on', r ? !!r.bold : st.includes('bold'));
+  $('fItalic').classList.toggle('on', r ? !!r.italic : st.includes('italic'));
+  const fill = (r && r.fill) || el.fill || '#FFFFFF';
+  $('fFill').value = toHex6(fill);
+  $('fFillSw').style.background = toHex6(fill);
+
+  // Block-level controls (never per-run).
+  setSeg('align', el.align || 'center');
+  setSeg('case', el.text_transform || 'none');
+  $('fLineHeight').value = el.line_height != null ? el.line_height : '';
+  $('fLetterSpacing').value = el.letter_spacing != null ? el.letter_spacing : '';
+  $('fOpacity').value = el.opacity != null ? el.opacity : 1;
+  const s = parseStroke(el.stroke);
+  $('fStrokeColor').value = s.color;
+  $('fStrokeSw').style.background = s.color;
+  $('fStrokeWidth').value = s.w || '';
+  $('fShadow').classList.toggle('on', el.shadow !== false);
+}
+
 function setFamilySelect(fam) {
-  const sel = $('selFamily');
-  // Keep an unknown (hand-authored) family selectable rather than silently losing it.
-  if (fam && !FAMILIES.includes(fam) && ![...sel.options].some(o => o.value === fam)) {
+  const sel = $('fFamily');
+  if (fam && ![...sel.options].some(o => o.value === fam)) {
     const o = document.createElement('option');
     o.value = o.textContent = fam;
     sel.appendChild(o);
@@ -457,57 +476,422 @@ function setFamilySelect(fam) {
   sel.value = fam || FAMILIES[0];
 }
 
-function bindStyleInputs() {
+function bindFormatBar() {
   const sel = () => { const i = selInfo(); return i ? i.el : null; };
-  $('selText').oninput = () => {
-    const e = sel();
-    if (!e) return;
-    e.text = $('selText').value;
-    if (VIEW === 'wrap' && current === 'back:blurb') $('blurbText').value = $('selText').value;
+  FAMILIES.forEach(f => {
+    const o = document.createElement('option');
+    o.value = o.textContent = f;
+    $('fFamily').appendChild(o);
+  });
+
+  // --- type controls: apply to the inline selection if there is one, else block.
+  $('fFamily').onchange = () => applyType({ family: $('fFamily').value });
+  $('fSize').oninput = () => {
+    const v = parseFloat($('fSize').value);
+    if (v > 0) applyType({ sizePx: v });
+  };
+  $('fBold').onclick = () => applyType({ toggleBold: true });
+  $('fItalic').onclick = () => applyType({ toggleItalic: true });
+  $('fFill').oninput = () => { $('fFillSw').style.background = $('fFill').value; applyType({ fill: $('fFill').value }); };
+  $('fClear').onclick = () => applyType({ clear: true });
+
+  // --- block-only controls
+  $('fmtbar').querySelectorAll('[data-align]').forEach(b => {
+    b.onclick = () => { const e = sel(); if (!e) return; e.align = b.dataset.align; setSeg('align', b.dataset.align); afterStyle(); };
+  });
+  $('fmtbar').querySelectorAll('[data-case]').forEach(b => {
+    b.onclick = () => {
+      const e = sel(); if (!e) return;
+      e.text_transform = b.dataset.case === 'none' ? undefined : b.dataset.case;
+      setSeg('case', b.dataset.case);
+      afterStyle();
+    };
+  });
+  $('fLineHeight').oninput = () => { const e = sel(); if (!e) return; const v = parseFloat($('fLineHeight').value); e.line_height = v > 0 ? v : undefined; afterStyle(); };
+  $('fLetterSpacing').oninput = () => { const e = sel(); if (!e) return; const v = parseFloat($('fLetterSpacing').value); e.letter_spacing = isNaN(v) ? undefined : v; afterStyle(); };
+  $('fOpacity').oninput = () => { const e = sel(); if (!e) return; e.opacity = parseFloat($('fOpacity').value); afterStyle(); };
+  const applyStroke = () => {
+    const e = sel(); if (!e) return;
+    $('fStrokeSw').style.background = $('fStrokeColor').value;
+    e.stroke = composeStroke($('fStrokeWidth').value, $('fStrokeColor').value);
+    afterStyle();
+  };
+  $('fStrokeColor').oninput = applyStroke;
+  $('fStrokeWidth').oninput = applyStroke;
+  $('fShadow').onclick = () => {
+    const e = sel(); if (!e) return;
+    const on = !$('fShadow').classList.contains('on');
+    $('fShadow').classList.toggle('on', on);
+    e.shadow = on;
+    afterStyle();
+  };
+  $('bgcolor').oninput = () => {
+    bgcolor = $('bgcolor').value;
+    $('bgSw').style.background = bgcolor;
     scheduleLivePreview();
   };
-  const setFill = (v) => { const e = sel(); if (e) e.fill = v; scheduleLivePreview(); };
-  $('selFill').oninput = () => { $('selFillHex').value = $('selFill').value; setFill($('selFill').value); };
-  $('selFillHex').oninput = () => { $('selFill').value = toHex6($('selFillHex').value); setFill($('selFillHex').value); };
-  $('selSize').oninput = () => {
-    const i = selInfo();
-    if (!i) return;
-    const v = parseFloat($('selSize').value);
-    if (v > 0) { i.el.font_pct = v / i.g.sizeRef; positionHandles(); scheduleLivePreview(); }
+}
+
+// After a block-level style change: reflow handles, and re-render. While the
+// inline editor is open we restyle IT instead of re-rendering the SVG (a render
+// would blow the editor away mid-keystroke).
+function afterStyle() {
+  positionHandles();
+  if (editing) { styleInline(); return; }
+  scheduleLivePreview();
+}
+
+// ---- inline text editor (on the cover) -------------------------------------
+//
+// Per-character styling, canvas-editor style: the block's text becomes an array of
+// {ch, style} — one entry per character. The contenteditable renders that array as
+// styled <span>s; a toolbar click rewrites the style of the selected character
+// range; the array then collapses back into runs (adjacent same-style chars merge)
+// which is exactly what bookmill.toml stores and resvg renders.
+
+let chars = [];   // [{ ch, s:{bold,italic,fill,family,size} }] for the open block
+
+// Explode an element's runs into the per-character model.
+function elToChars(el) {
+  const runs = (el.runs && el.runs.length) ? el.runs : [{ t: el.text || '' }];
+  const out = [];
+  runs.forEach(r => {
+    const s = {
+      bold: r.bold ?? undefined, italic: r.italic ?? undefined,
+      fill: r.fill ?? undefined, family: r.family ?? undefined, size: r.size ?? undefined,
+    };
+    for (const ch of (r.t || '')) out.push({ ch, s: { ...s } });
+  });
+  return out;
+}
+
+const sameStyle = (a, b) =>
+  a.bold === b.bold && a.italic === b.italic && a.fill === b.fill && a.family === b.family && a.size === b.size;
+
+// Collapse the char model back into runs (adjacent same-style chars merge).
+function charsToRuns(cs) {
+  const runs = [];
+  for (const c of cs) {
+    const last = runs[runs.length - 1];
+    if (last && sameStyle(last._s, c.s)) last.t += c.ch;
+    else runs.push({ _s: { ...c.s }, t: c.ch, ...c.s });
+  }
+  return runs.map(r => {
+    const o = { t: r.t };
+    for (const k of ['bold', 'italic', 'fill', 'family', 'size']) if (r._s[k] !== undefined) o[k] = r._s[k];
+    return o;
+  });
+}
+
+const charsToText = (cs) => cs.map(c => c.ch).join('');
+const isStyled = (s) => s.bold !== undefined || s.italic !== undefined || s.fill !== undefined || s.family !== undefined || s.size !== undefined;
+
+// Open the inline editor over a block. It mirrors the block's typography so the
+// text you type sits where the printed text sits.
+function enterEdit(g, key) {
+  if (editing) commitEdit();
+  const el = g.els[key];
+  if (!el) return;
+  select(g.id + ':' + key);
+  editing = { g, key, el };
+  chars = elToChars(el);
+
+  const box = document.createElement('div');
+  box.id = 'inline';
+  box.contentEditable = 'true';
+  box.spellcheck = false;
+  $('stage').appendChild(box);
+  renderInline();
+  styleInline();
+  placeInline();
+
+  // Hide the SVG's own text for this block so we don't see it twice.
+  const layer = $('stage').querySelector(`[data-drag="${g.id}:${key}"]`);
+  if (layer) layer.classList.add('editing-hidden');
+  handles[g.id + ':' + key]?.classList.add('editing');
+
+  box.addEventListener('input', onInlineInput);
+  box.addEventListener('keydown', onInlineKey);
+  document.addEventListener('selectionchange', onInlineSelChange);
+  box.focus();
+  // put the caret at the end
+  const r = document.createRange();
+  r.selectNodeContents(box);
+  r.collapse(false);
+  const s = window.getSelection();
+  s.removeAllRanges(); s.addRange(r);
+  renderPane();
+}
+
+// Render the char model into the contenteditable as styled spans.
+function renderInline() {
+  const box = $('inline');
+  if (!box) return;
+  const runs = charsToRuns(chars);
+  const info = selInfo();
+  const blockSize = info ? info.el.font_pct * info.g.space.h : 40;
+  box.innerHTML = runs.map(r => {
+    const st = [];
+    if (r.bold) st.push('font-weight:700');
+    if (r.bold === false) st.push('font-weight:400');
+    if (r.italic) st.push('font-style:italic');
+    if (r.italic === false) st.push('font-style:normal');
+    if (r.fill) st.push(`color:${r.fill}`);
+    if (r.family) st.push(`font-family:'${r.family}'`);
+    if (r.size) st.push(`font-size:${(blockSize * r.size).toFixed(2)}px`);
+    const html = escapeHtml(r.t).replace(/\n/g, '<br>');
+    return `<span data-r="1"${st.length ? ` style="${st.join(';')}"` : ''}>${html}</span>`;
+  }).join('') || '<span data-r="1"></span>';
+}
+
+// Mirror the BLOCK's typography onto the editor box (font, size, color, alignment,
+// line-height, tracking, case) so the overlay looks like the render.
+function styleInline() {
+  const box = $('inline');
+  const info = selInfo();
+  if (!box || !info) return;
+  const { el, g } = info;
+  const svgEl = $('stage').querySelector('svg');
+  if (!svgEl) return;
+  const r = svgEl.getBoundingClientRect();
+  const scale = r.width / g.space.vbW;           // viewBox px → screen px
+  const size = el.font_pct * g.space.h * scale;
+  const st = el.font_style || 'normal';
+  box.style.fontFamily = `'${el.font_family || 'Playfair Display'}'`;
+  box.style.fontSize = size + 'px';
+  box.style.fontWeight = st.includes('bold') ? 700 : 400;
+  box.style.fontStyle = st.includes('italic') ? 'italic' : 'normal';
+  box.style.color = el.fill || '#FFFFFF';
+  box.style.textAlign = el.align || 'center';
+  box.style.lineHeight = (el.line_height && el.line_height > 0 ? el.line_height : 1.0) * 1.32;
+  box.style.letterSpacing = ((el.letter_spacing || 0) * scale) + 'px';
+  box.style.textTransform = el.text_transform === 'upper' ? 'uppercase'
+    : el.text_transform === 'lower' ? 'lowercase' : 'none';
+  box.style.opacity = el.opacity != null ? el.opacity : 1;
+  renderInline();   // per-run sizes are relative to the block size → re-emit
+}
+
+// Put the editor box exactly over the block's wrap box on the canvas.
+function placeInline() {
+  const box = $('inline');
+  const info = selInfo();
+  if (!box || !info) return;
+  const { el, g } = info;
+  const svgEl = $('stage').querySelector('svg');
+  if (!svgEl) return;
+  const r = svgEl.getBoundingClientRect();
+  const sx = r.width / g.space.vbW, sy = r.height / g.space.vbH;
+  const bw = el.w_pct * g.space.w;
+  const cx = g.space.x0 + el.x_pct * g.space.w, cy = el.y_pct * g.space.h;
+  const h = box.offsetHeight || 40;
+  box.style.left = ((cx - bw / 2) * sx) + 'px';
+  box.style.width = (bw * sx) + 'px';
+  box.style.top = (cy * sy - h / 2) + 'px';
+}
+
+// Read the DOM back into the char model (typing changes it), preserving the style
+// of each surviving character via its span.
+function onInlineInput() {
+  const box = $('inline');
+  const out = [];
+  const walk = (node, s) => {
+    for (const n of node.childNodes) {
+      if (n.nodeType === 3) {
+        for (const ch of n.nodeValue) out.push({ ch, s: { ...s } });
+      } else if (n.nodeName === 'BR') {
+        out.push({ ch: '\n', s: { ...s } });
+      } else if (n.nodeType === 1) {
+        walk(n, styleOfSpan(n, s));
+      }
+    }
   };
-  $('selFamily').onchange = () => { const e = sel(); if (e) { e.font_family = $('selFamily').value; positionHandles(); scheduleLivePreview(); } };
-  const applyStyle = () => {
-    const e = sel();
-    if (!e) return;
-    e.font_style = styleStr($('selBold').classList.contains('on'), $('selItalic').classList.contains('on'));
-    positionHandles();
-    scheduleLivePreview();
+  walk(box, {});
+  chars = out;
+  syncEl();
+  placeInline();
+}
+
+// The run style a span carries (inline styles we wrote, or a browser-inserted
+// <b>/<i> from a native bold shortcut).
+function styleOfSpan(n, inherited) {
+  const s = { ...inherited };
+  const st = n.style || {};
+  if (n.nodeName === 'B' || n.nodeName === 'STRONG' || st.fontWeight === '700' || st.fontWeight === 'bold') s.bold = true;
+  else if (st.fontWeight === '400') s.bold = false;
+  if (n.nodeName === 'I' || n.nodeName === 'EM' || st.fontStyle === 'italic') s.italic = true;
+  else if (st.fontStyle === 'normal') s.italic = false;
+  if (st.color) s.fill = rgbToHex(st.color);
+  if (st.fontFamily) s.family = st.fontFamily.replace(/['"]/g, '');
+  if (st.fontSize) {
+    const info = selInfo();
+    const blockSize = info ? info.el.font_pct * info.g.space.h : 0;
+    const px = parseFloat(st.fontSize);
+    if (blockSize > 0 && px > 0) {
+      const mult = px / blockSize;
+      if (Math.abs(mult - 1) > 0.01) s.size = Math.round(mult * 100) / 100;
+    }
+  }
+  return s;
+}
+
+// Push the char model onto the selected element (plain text + runs).
+function syncEl() {
+  if (!editing) return;
+  const el = editing.el;
+  el.text = charsToText(chars);
+  const runs = charsToRuns(chars);
+  el.runs = runs.some(r => isStyled(r)) ? runs : undefined;
+}
+
+function onInlineKey(e) {
+  if (e.key === 'Escape') { e.preventDefault(); commitEdit(); return; }
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); commitEdit(); return; }
+  if ((e.metaKey || e.ctrlKey) && (e.key === 'b' || e.key === 'B')) { e.preventDefault(); applyType({ toggleBold: true }); return; }
+  if ((e.metaKey || e.ctrlKey) && (e.key === 'i' || e.key === 'I')) { e.preventDefault(); applyType({ toggleItalic: true }); return; }
+  if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S')) { e.preventDefault(); commitEdit(); save(); }
+}
+
+function onInlineSelChange() {
+  if (!editing) return;
+  const box = $('inline');
+  const s = window.getSelection();
+  if (!s.rangeCount || !box.contains(s.anchorNode)) return;
+  syncBar();
+}
+
+// The selected character range as [start, end) offsets into `chars`.
+function selRange() {
+  const box = $('inline');
+  const s = window.getSelection();
+  if (!box || !s.rangeCount || !box.contains(s.anchorNode)) return null;
+  const r = s.getRangeAt(0);
+  const off = (node, offset) => {
+    // count characters before (node, offset) in document order
+    let n = 0, done = false;
+    const walk = (el) => {
+      for (const c of el.childNodes) {
+        if (done) return;
+        if (c === node) {
+          if (c.nodeType === 3) { n += offset; done = true; return; }
+          // element node: offset counts child nodes
+          for (let i = 0; i < offset && i < c.childNodes.length; i++) n += len(c.childNodes[i]);
+          done = true; return;
+        }
+        if (c.nodeType === 3) n += c.nodeValue.length;
+        else if (c.nodeName === 'BR') n += 1;
+        else if (c.nodeType === 1) { walk(c); }
+      }
+    };
+    const len = (el) => el.nodeType === 3 ? el.nodeValue.length : el.nodeName === 'BR' ? 1 : [...el.childNodes].reduce((a, x) => a + len(x), 0);
+    walk(box);
+    return n;
   };
-  $('selBold').onclick = () => { $('selBold').classList.toggle('on'); applyStyle(); };
-  $('selItalic').onclick = () => { $('selItalic').classList.toggle('on'); applyStyle(); };
-  // formatting: alignment, case, line height, letter spacing, opacity, stroke, shadow
-  const segClick = (segId, attr, apply) => {
-    $(segId).querySelectorAll('button').forEach(b => {
-      b.onclick = () => { const e = sel(); if (!e) return; apply(e, b.dataset[attr]); setSeg(segId, attr, b.dataset[attr]); positionHandles(); scheduleLivePreview(); };
-    });
+  const a = off(r.startContainer, r.startOffset);
+  const b = off(r.endContainer, r.endOffset);
+  return { start: Math.min(a, b), end: Math.max(a, b) };
+}
+
+// The style at the caret / across the selection (undefined where runs disagree).
+function selectionStyle() {
+  const r = selRange();
+  if (!r) return null;
+  const i = r.start === r.end ? Math.max(0, r.start - 1) : r.start;
+  const c = chars[i];
+  if (!c) return null;
+  if (r.end > r.start) {
+    const slice = chars.slice(r.start, r.end);
+    const s = {};
+    for (const k of ['bold', 'italic', 'fill', 'family', 'size']) {
+      const v = slice[0]?.s[k];
+      s[k] = slice.every(x => x.s[k] === v) ? v : undefined;
+    }
+    return s;
+  }
+  return { ...c.s };
+}
+
+// Restore a character-offset selection after re-rendering the spans.
+function restoreSel(start, end) {
+  const box = $('inline');
+  if (!box) return;
+  let pos = 0, sNode = null, sOff = 0, eNode = null, eOff = 0;
+  const visit = (el) => {
+    for (const c of el.childNodes) {
+      if (c.nodeType === 3) {
+        const l = c.nodeValue.length;
+        if (sNode === null && pos + l >= start) { sNode = c; sOff = start - pos; }
+        if (eNode === null && pos + l >= end) { eNode = c; eOff = end - pos; }
+        pos += l;
+      } else if (c.nodeName === 'BR') {
+        if (sNode === null && pos + 1 > start) { sNode = c.parentNode; sOff = 0; }
+        pos += 1;
+      } else if (c.nodeType === 1) visit(c);
+    }
   };
-  segClick('selAlign', 'align', (e, v) => { e.align = v; });
-  segClick('selCase', 'case', (e, v) => { e.text_transform = v === 'none' ? undefined : v; });
-  $('selLineHeight').oninput = () => { const e = sel(); if (!e) return; const v = parseFloat($('selLineHeight').value); e.line_height = v > 0 ? v : undefined; positionHandles(); scheduleLivePreview(); };
-  $('selLetterSpacing').oninput = () => { const e = sel(); if (!e) return; const v = parseFloat($('selLetterSpacing').value); e.letter_spacing = isNaN(v) ? undefined : v; scheduleLivePreview(); };
-  $('selOpacity').oninput = () => { const e = sel(); if (!e) return; const v = parseFloat($('selOpacity').value); e.opacity = v; $('selOpacityVal').textContent = Math.round(v * 100) + '%'; scheduleLivePreview(); };
-  const applyStroke = () => { const e = sel(); if (!e) return; e.stroke = composeStroke($('selStrokeWidth').value, $('selStrokeColor').value); scheduleLivePreview(); };
-  $('selStrokeColor').oninput = applyStroke;
-  $('selStrokeWidth').oninput = applyStroke;
-  $('selShadow').onchange = () => { const e = sel(); if (!e) return; e.shadow = $('selShadow').checked; scheduleLivePreview(); };
-  $('bgcolor').oninput = () => { $('bgcolorHex').value = $('bgcolor').value; scheduleLivePreview(); };
-  $('bgcolorHex').oninput = () => { $('bgcolor').value = toHex6($('bgcolorHex').value); scheduleLivePreview(); };
-  // Back-cover blurb textarea (wrap view) → the wrap blurb element's text.
-  $('blurbText').oninput = () => {
-    if (wrapEls && wrapEls.blurb) wrapEls.blurb.text = $('blurbText').value;
-    if (VIEW === 'wrap' && current === 'back:blurb') $('selText').value = $('blurbText').value;
-    scheduleLivePreview();
-  };
+  visit(box);
+  if (!sNode || !eNode) return;
+  const r = document.createRange();
+  try { r.setStart(sNode, Math.max(0, sOff)); r.setEnd(eNode, Math.max(0, eOff)); } catch { return; }
+  const s = window.getSelection();
+  s.removeAllRanges(); s.addRange(r);
+}
+
+// Apply a type change. With an inline selection → per-character styling of just
+// that range (a run). Without one → the whole block's style.
+function applyType(op) {
+  const info = selInfo();
+  if (!info) return;
+  const r = editing ? selRange() : null;
+
+  if (r && r.end > r.start) {
+    const cur = selectionStyle() || {};
+    for (let i = r.start; i < r.end; i++) {
+      const s = chars[i].s;
+      if (op.clear) { chars[i].s = {}; continue; }
+      if (op.toggleBold) s.bold = !cur.bold ? true : undefined;
+      if (op.toggleItalic) s.italic = !cur.italic ? true : undefined;
+      if (op.fill) s.fill = op.fill;
+      if (op.family) s.family = op.family;
+      if (op.sizePx) {
+        const blockSize = Math.round(info.el.font_pct * info.g.sizeRef);
+        const mult = Math.round((op.sizePx / blockSize) * 100) / 100;
+        s.size = Math.abs(mult - 1) < 0.01 ? undefined : mult;
+      }
+    }
+    syncEl();
+    renderInline();
+    restoreSel(r.start, r.end);
+    syncBar();
+    return;
+  }
+
+  // No selection → the block itself.
+  const el = info.el;
+  const st = el.font_style || 'normal';
+  if (op.clear) { chars.forEach(c => (c.s = {})); syncEl(); if (editing) renderInline(); }
+  if (op.toggleBold) el.font_style = styleStr(!st.includes('bold'), st.includes('italic'));
+  if (op.toggleItalic) el.font_style = styleStr(st.includes('bold'), !st.includes('italic'));
+  if (op.fill) el.fill = op.fill;
+  if (op.family) el.font_family = op.family;
+  if (op.sizePx) el.font_pct = op.sizePx / info.g.sizeRef;
+  syncBar();
+  afterStyle();
+}
+
+// Close the inline editor: write the text/runs back and re-render the real SVG.
+function commitEdit() {
+  const box = $('inline');
+  if (!editing) return;
+  const { g, key } = editing;
+  syncEl();
+  document.removeEventListener('selectionchange', onInlineSelChange);
+  if (box) box.remove();
+  const layer = $('stage').querySelector(`[data-drag="${g.id}:${key}"]`);
+  if (layer) layer.classList.remove('editing-hidden');
+  handles[g.id + ':' + key]?.classList.remove('editing');
+  editing = null;
+  renderPane();
+  scheduleLivePreview();   // the authoritative SVG catches up
 }
 
 function wireShortcuts() {
@@ -524,6 +908,7 @@ function wireShortcuts() {
     }
     if (e.key === 'Escape') {
       if (overlay.classList.contains('open')) { shutHelp(); return; }
+      if (editing) { commitEdit(); return; }
       if (current) select(null);
       return;
     }
@@ -568,11 +953,10 @@ function currentBody() {
     title: els.title,
     subtitle: els.subtitle,
     author: els.author,
-    bgcolor: $('bgcolorHex').value || '#000000',
+    bgcolor: bgcolor || '#000000',
   };
   if (VIEW === 'wrap') {
-    if (wrapEls.blurb) wrapEls.blurb.text = $('blurbText').value;
-    body.blurb = $('blurbText').value;
+    body.blurb = (wrapEls.blurb && wrapEls.blurb.text) || '';
     body.wrap = {
       blurb: wrapEls.blurb || undefined,
       badge: wrapEls.badge || undefined,
@@ -684,6 +1068,12 @@ function parseMargin(s, refW) {
 
 function status(s) { $('status').textContent = s; }
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+// "rgb(212, 169, 55)" (what the DOM gives back) -> "#d4a937".
+function rgbToHex(c) {
+  const m = String(c).match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+  if (!m) return toHex6(c);
+  return '#' + [1, 2, 3].map(i => (+m[i]).toString(16).padStart(2, '0')).join('');
+}
 function escapeHtml(s) { return String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
 
 function toHex6(c) {
