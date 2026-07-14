@@ -274,8 +274,36 @@ impl CoverRenderer {
         w
     }
 
-    /// Greedy word-wrap to `max_w` px.
+    /// Word-wrap to `max_w` px, honouring **explicit newlines as hard breaks**.
+    ///
+    /// A `\n` in the config (or in an editor text block) is a break the author
+    /// chose, so it is never re-flowed: each hard line is greedy-wrapped on its
+    /// own and a blank line stays blank (that's what separates blurb paragraphs).
     fn wrap(
+        &self,
+        text: &str,
+        family: &str,
+        weight: u16,
+        italic: bool,
+        size: f64,
+        max_w: f64,
+    ) -> Vec<String> {
+        let mut lines: Vec<String> = Vec::new();
+        for hard in text.trim().split('\n') {
+            if hard.trim().is_empty() {
+                lines.push(String::new()); // paragraph gap
+                continue;
+            }
+            lines.extend(self.wrap_seg(hard, family, weight, italic, size, max_w));
+        }
+        if lines.is_empty() {
+            return vec![String::new()];
+        }
+        lines
+    }
+
+    /// Greedy word-wrap of ONE hard line (no newlines) to `max_w` px.
+    fn wrap_seg(
         &self,
         text: &str,
         family: &str,
@@ -330,12 +358,16 @@ impl CoverRenderer {
         let mut image = String::new();
         let filt_id = filter_def(&mut defs, &r.filt, "imgfilt");
         let par = if pos_right { "xMaxYMid slice" } else { "xMidYMid slice" };
-        let href = data_uri(&cover_dir.join(&bg_file))
-            .with_context(|| format!("embedding {bg_file}"))?;
-        image.push_str(&format!(
-            "<image x=\"0\" y=\"0\" width=\"{W}\" height=\"{H}\" preserveAspectRatio=\"{par}\" xlink:href=\"{href}\"{}/>",
-            attr_filter(&filt_id)
-        ));
+        // No art on disk => no <image>; the template's {{BGCOLOR}} rect shows
+        // through and the cover renders on a solid colour.
+        if let Some(href) =
+            data_uri_opt(&cover_dir.join(&bg_file)).with_context(|| format!("embedding {bg_file}"))?
+        {
+            image.push_str(&format!(
+                "<image x=\"0\" y=\"0\" width=\"{W}\" height=\"{H}\" preserveAspectRatio=\"{par}\" xlink:href=\"{href}\"{}/>",
+                attr_filter(&filt_id)
+            ));
+        }
 
         // Web-editor absolute layout: when [cover.<lang>.layout] is present, place
         // title/subtitle/author from its saved canvas fractions instead of the flex
@@ -776,8 +808,52 @@ impl CoverRenderer {
     /// any `phrases` entry (matched as a consecutive run of words, compared
     /// punctuation/accent-insensitively via [`fold`]). Emphasized words are measured
     /// with the emphasis face so wrapping accounts for their (italic) advance.
+    ///
+    /// Like [`Self::wrap`], explicit newlines are hard breaks: each paragraph is
+    /// wrapped on its own (a blank line stays blank). Phrases are matched within
+    /// a paragraph, which is where they live — none straddles a break.
     #[allow(clippy::too_many_arguments)]
     fn wrap_emph(
+        &self,
+        content: &str,
+        phrases: &[String],
+        base_family: &str,
+        base_weight: u16,
+        base_italic: bool,
+        emph_family: &str,
+        emph_weight: u16,
+        emph_italic: bool,
+        size: f64,
+        max_w: f64,
+    ) -> Vec<Vec<(String, bool)>> {
+        let mut out: Vec<Vec<(String, bool)>> = Vec::new();
+        for hard in content.trim().split('\n') {
+            if hard.trim().is_empty() {
+                out.push(Vec::new()); // paragraph gap
+                continue;
+            }
+            out.extend(self.wrap_emph_seg(
+                hard,
+                phrases,
+                base_family,
+                base_weight,
+                base_italic,
+                emph_family,
+                emph_weight,
+                emph_italic,
+                size,
+                max_w,
+            ));
+        }
+        if out.is_empty() {
+            return vec![vec![]];
+        }
+        out
+    }
+
+    /// Emphasis-aware greedy wrap of ONE hard line (no newlines).
+    #[allow(clippy::too_many_arguments)]
+    fn wrap_emph_seg(
         &self,
         content: &str,
         phrases: &[String],
@@ -1174,13 +1250,15 @@ impl CoverRenderer {
         let ftop = fpad_t;
         let fbottom = fh - fpad_b;
 
-        // front bg image (only when no wraparound photo)
+        // front bg image (only when no wraparound photo). Absent art => the
+        // full-wrap {{BGCOLOR}} base rect shows through on the front panel too.
         if r.wrap_bg.is_none() {
-            let href = data_uri(&cover_dir.join(&r.bg))?;
-            body.push_str(&format!(
-                "<image x=\"{front_x}\" y=\"0\" width=\"{front_w}\" height=\"{fh}\" preserveAspectRatio=\"xMidYMid slice\" xlink:href=\"{href}\"{}/>",
-                attr_filter(&filt_id)
-            ));
+            if let Some(href) = data_uri_opt(&cover_dir.join(&r.bg))? {
+                body.push_str(&format!(
+                    "<image x=\"{front_x}\" y=\"0\" width=\"{front_w}\" height=\"{fh}\" preserveAspectRatio=\"xMidYMid slice\" xlink:href=\"{href}\"{}/>",
+                    attr_filter(&filt_id)
+                ));
+            }
         }
         // front gradient (over the front panel only)
         body.push_str(&format!(
@@ -1734,6 +1812,36 @@ fn family_name(data: &[u8]) -> Option<String> {
         }
     }
     fallback
+}
+
+/// `data:` URI for a background image, or `None` when the file is absent.
+///
+/// A book with no art is not an error: both SVG templates paint a full-size
+/// `{{BGCOLOR}}` rect *under* the image, so dropping the `<image>` element
+/// simply lets the solid colour show through and the cover renders on a plain
+/// colour background (gradient, accent frame and all text still draw on top).
+fn data_uri_opt(path: &Path) -> Result<Option<String>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    data_uri(path).map(Some)
+}
+
+/// True when the book has no background art on disk — i.e. its cover will render
+/// on the solid `bgcolor`. Used by the cover command to prompt before rendering.
+pub fn art_missing(repo: &RepoConfig, book: &BookConfig, lang: &str, cover_dir: &Path) -> bool {
+    let r = crate::cover_tmpl::resolve(repo, book, lang);
+    match &r.wrap_bg {
+        // An explicitly configured wraparound panorama must exist; a missing one
+        // is a config error, not a "no art" book (render_* will report it).
+        Some(w) => !cover_dir.join(w).exists() && !cover_dir.join(&r.bg).exists(),
+        None => !cover_dir.join(&r.bg).exists(),
+    }
+}
+
+/// The resolved solid background colour for a book/lang (shown in the prompt).
+pub fn bgcolor_of(repo: &RepoConfig, book: &BookConfig, lang: &str) -> String {
+    crate::cover_tmpl::resolve(repo, book, lang).bgcolor
 }
 
 /// Read an image file and return a `data:` URI (base64).

@@ -14,6 +14,7 @@ use crate::config::BookConfig;
 use crate::cover_svg::CoverRenderer;
 use crate::discover::Repo;
 use anyhow::{bail, Context, Result};
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 /// Books whose tracked `cover/` image assets must NOT be overwritten by the
@@ -28,6 +29,7 @@ pub fn run(
     book_slug: Option<String>,
     lang_filter: Option<String>,
     pages_override: Option<u32>,
+    assume_yes: bool,
 ) -> Result<()> {
     let books = resolve_books(repo, &book_slug)?;
     let renderer = CoverRenderer::new();
@@ -38,6 +40,26 @@ pub fn run(
             Some(l) if l != "all" => vec![l.clone()],
             _ => book.languages.clone(),
         };
+        // A book with no background art is no longer skipped: it renders on the
+        // solid `[cover].bgcolor`. That's a visible product decision, so ask
+        // before doing it (once per book — the art is shared across languages).
+        let cover_dir = dir.join("cover");
+        let no_art = langs
+            .iter()
+            .all(|l| crate::cover_svg::art_missing(&repo.config, book, l, &cover_dir));
+        if no_art {
+            let color = langs
+                .first()
+                .map(|l| crate::cover_svg::bgcolor_of(&repo.config, book, l))
+                .unwrap_or_else(|| "#000000".to_string());
+            if !confirm_solid(&book.slug, &color, assume_yes)? {
+                println!("  \u{2014} {} skipped (no cover art)", book.slug);
+                skipped += langs.len();
+                continue;
+            }
+            std::fs::create_dir_all(&cover_dir)
+                .with_context(|| format!("creating {}", cover_dir.display()))?;
+        }
         for lang in &langs {
             match cover_one_resvg(repo, book, dir, lang, &renderer, pages_override) {
                 Ok(()) => made += 1,
@@ -82,9 +104,11 @@ fn cover_one_resvg(
 ) -> Result<()> {
     let slug = &book.slug;
     let cover_dir = dir.join("cover");
-    if !cover_dir.exists() {
-        bail!("no cover dir at {}", cover_dir.display());
-    }
+    // No `cover/` dir is fine: a book with no art renders on the solid bgcolor
+    // (the caller has already asked and created the dir). Only a *file* the
+    // config explicitly points at and that is missing is an error.
+    std::fs::create_dir_all(&cover_dir)
+        .with_context(|| format!("creating {}", cover_dir.display()))?;
     let odir = repo.root.join("output").join(slug).join(lang);
     std::fs::create_dir_all(&odir)?;
     let pages = resolve_pages(&odir, slug, lang, pages_override)?;
@@ -119,6 +143,34 @@ fn cover_one_resvg(
 
     println!("  \u{2713} {slug} {lang}: {pages}pp  (resvg: front PNG + wrap PDF + JPG)");
     Ok(())
+}
+
+/// Ask whether to render a colour-only cover for a book that has no art.
+///
+/// Interactive shells get a y/N prompt; `--yes` and non-interactive shells (CI,
+/// pipes) accept automatically so a scripted `bookmill build cover` never hangs.
+/// The colour itself comes from `[cover].bgcolor` — config stays the single
+/// source of truth, so recolouring means editing the book's `bookmill.toml`.
+fn confirm_solid(slug: &str, color: &str, assume_yes: bool) -> Result<bool> {
+    println!("  ! {slug}: no cover art (no cover/bg.jpg)");
+    println!("    A cover can still be rendered on the solid [cover].bgcolor {color}.");
+    if assume_yes || !std::io::stdin().is_terminal() {
+        println!("    -> generating (non-interactive; pass --yes explicitly to silence)");
+        return Ok(true);
+    }
+    print!("    Generate a solid-colour cover on {color}? [y/N] ");
+    std::io::stdout().flush()?;
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line)? == 0 {
+        return Ok(false); // EOF
+    }
+    let ans = line.trim().to_ascii_lowercase();
+    if matches!(ans.as_str(), "y" | "yes") {
+        Ok(true)
+    } else {
+        println!("    (to change the colour, set bgcolor under [cover] in the book's bookmill.toml)");
+        Ok(false)
+    }
 }
 
 /// Page count of a PDF (native, via `lopdf`).

@@ -234,6 +234,9 @@ struct CoverArgs {
     /// lets covers render before the print interior exists
     #[arg(long)]
     pages: Option<u32>,
+    /// don't prompt: a book with no cover art renders on its [cover].bgcolor
+    #[arg(long)]
+    yes: bool,
 }
 
 #[derive(Args)]
@@ -333,13 +336,13 @@ fn main() -> Result<()> {
                         };
                         let jobs = tui::jobs_for_req(&repo, &all)?;
                         tui::run_queue_ui(&repo, &jobs, &cmd)?;
-                        covers::run(&repo, Some(req.book.clone()), lang, None)?;
+                        covers::run(&repo, Some(req.book.clone()), lang, None, true)?;
                         deep::run(&repo, Some(req.book), false)?;
                     }
                     tui::Action::Validate { book } => deep::run(&repo, Some(book), false)?,
                     tui::Action::Covers { book, lang } => {
                         let lang = (lang != "all").then_some(lang);
-                        covers::run(&repo, Some(book), lang, None)?;
+                        covers::run(&repo, Some(book), lang, None, true)?;
                     }
                     tui::Action::Audiobook { book, lang } => {
                         let lang = (lang != "all").then_some(lang);
@@ -376,7 +379,7 @@ fn main() -> Result<()> {
                         build::run_editions(&repo, a.book, a.lang, a.edition)?;
                     }
                 }
-                BuildSub::Cover(a) => covers::run(&repo, a.book, a.lang, a.pages)?,
+                BuildSub::Cover(a) => covers::run(&repo, a.book, a.lang, a.pages, a.yes)?,
                 BuildSub::Shrink(a) => {
                     let ext = a
                         .path

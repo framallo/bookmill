@@ -115,6 +115,19 @@ fn pick_opt_f(
 /// (unescaped) line strings — used by the SVG renderer, which escapes for XML
 /// itself and needs the lines separately (SVG has no `<br>`).
 pub(crate) fn two_line_parts(s: &str) -> Vec<String> {
+    // An explicit newline is the author's chosen break — honour it verbatim
+    // instead of re-balancing. Only a single-line title gets auto-split.
+    if s.contains('\n') {
+        let lines: Vec<String> = s
+            .trim()
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect();
+        if !lines.is_empty() {
+            return lines;
+        }
+    }
     let words: Vec<&str> = s.split_whitespace().collect();
     if words.len() < 2 {
         return vec![s.to_string()];
@@ -241,5 +254,34 @@ pub(crate) fn resolve(repo: &RepoConfig, book: &BookConfig, lang: &str) -> Resol
         blurb,
         layout: ml.and_then(|m| m.layout.clone()),
         wrap_layout: ml.and_then(|m| m.wrap.clone()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::two_line_parts;
+
+    /// An explicit newline in the config title is the author's break: it must
+    /// survive verbatim, not be re-balanced into a "nicer" two-line split.
+    #[test]
+    fn explicit_newline_is_the_title_break() {
+        assert_eq!(
+            two_line_parts("No hay plata\nen la isla de las ratas"),
+            vec!["No hay plata", "en la isla de las ratas"]
+        );
+    }
+
+    /// A title with no newline still auto-balances into two lines (unchanged).
+    #[test]
+    fn single_line_title_auto_balances() {
+        let got = two_line_parts("No hay plata en la isla de las ratas");
+        assert_eq!(got.len(), 2);
+        assert_eq!(got.join(" "), "No hay plata en la isla de las ratas");
+    }
+
+    /// Leading/trailing blank lines from TOML `"""` blocks don't become lines.
+    #[test]
+    fn surrounding_blank_lines_are_trimmed() {
+        assert_eq!(two_line_parts("\nUno\nDos\n"), vec!["Uno", "Dos"]);
     }
 }
