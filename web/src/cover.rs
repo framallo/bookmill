@@ -167,6 +167,9 @@ pub struct WrapLayoutResponse {
     pub blurb: Element,
     pub badge: Element,
     pub author: Element,
+    /// The spine. Rotated: `w_pct` is the run's length along the wrap's HEIGHT,
+    /// `x_pct` places it across the spine's width.
+    pub spine: Element,
 }
 
 #[derive(Serialize)]
@@ -180,6 +183,10 @@ pub struct Elements {
     pub title: Element,
     pub subtitle: Element,
     pub author: Element,
+    /// The series badge — a block like any other, so it can be dragged and restyled.
+    /// Optional so a client that doesn't send one leaves the saved badge alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub badge: Option<Element>,
 }
 
 /// One draggable text block, persisted as canvas fractions (resolution-free).
@@ -218,6 +225,14 @@ pub struct Element {
     /// for anything that just wants the string). Absent/unstyled => plain `text`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runs: Option<Vec<bookmill::config::TextRun>>,
+    /// **This language only.** False (the default) means the block belongs to the
+    /// shared design: its geometry lives in `[cover.layout]` / `[cover.wrap]` and
+    /// moving it moves every language. True pins it to `[cover.<lang>.layout]` /
+    /// `[cover.<lang>.wrap]`, which overlays the shared block field by field — so
+    /// this language gets its own position/size and the others keep inheriting.
+    /// Derived on load from whether the language's block carries geometry at all.
+    #[serde(default)]
+    pub lang_only: bool,
 }
 
 /// Build the editor payload for (book, lang).
@@ -311,6 +326,28 @@ pub fn load_cover(repo: &Repo, book: &BookSummary, lang: &str) -> Result<CoverRe
         font_style: "normal".into(),
         ..Default::default()
     });
+    // Badge: seeded from the renderer's own badge defaults (config::BADGE_*), so an
+    // unsaved badge sits exactly where `badge_element` draws it — uppercase, tracked
+    // out, top-center — and dragging it is the first thing that ever changes it.
+    let badge_el = saved
+        .as_ref()
+        .and_then(|e| e.badge.clone())
+        .map(|e| with_text(e, &badge))
+        .unwrap_or(Element {
+        text: badge.clone(),
+        x_pct: 0.5,
+        y_pct: bookmill::config::BADGE_Y_PCT,
+        w_pct: bookmill::config::BADGE_W_PCT,
+        font_pct: bookmill::config::BADGE_FONT_PCT,
+        fill: badge_color.clone(),
+        font_family: "Montserrat".into(),
+        font_style: "normal".into(),
+        line_height: Some(bookmill::config::BADGE_LINE_HEIGHT),
+        letter_spacing: Some(bookmill::config::BADGE_TRACKING),
+        text_transform: Some("upper".into()),
+        opacity: Some(bookmill::config::BADGE_OPACITY),
+        ..Default::default()
+    });
     // Wrap back-panel layout: seed the editor's drag handles from the saved
     // `[cover.<lang>.wrap]` when present, else from defaults matching the renderer's
     // `back_absolute` positions (fractions of the back panel). The back panel is
@@ -355,6 +392,53 @@ pub fn load_cover(repo: &Repo, book: &BookSummary, lang: &str) -> Result<CoverRe
         font_style: "normal".into(),
         ..Default::default()
     });
+    // Spine — seeded to match `cover_svg::emit_spine`'s defaults: title · author on
+    // one line, centred, reading bottom-to-top. `w_pct` runs ALONG the text (i.e.
+    // down the wrap's height), which is why it is not the back panel's `w_frac`.
+    let spine_default = format!(
+        "{}   \u{00b7}   {}",
+        flatten(&title_el.text),
+        flatten(&author_el.text)
+    );
+    let wrap_spine = saved_wrap
+        .as_ref()
+        .and_then(|w| w.spine.clone())
+        .map(|e| with_text(e, &spine_default))
+        .unwrap_or(Element {
+            text: spine_default,
+            x_pct: 0.5,
+            y_pct: 0.5,
+            w_pct: 0.8,
+            font_pct: 14.0 / fh_px,
+            fill: title_el.fill.clone(),
+            font_family: wrap_serif.clone(),
+            font_style: "normal".into(),
+            letter_spacing: Some(2.0 / 14.0),
+            ..Default::default()
+        });
+
+    // Which blocks are pinned to this language? Read straight off the config, so a
+    // hand-written per-language override shows up in the editor as locked.
+    let mut title_el = title_el;
+    let mut sub_el = sub_el;
+    let mut author_el = author_el;
+    let mut badge_el = badge_el;
+    let mut wrap_blurb = wrap_blurb;
+    let mut wrap_badge = wrap_badge;
+    let mut wrap_author = wrap_author;
+    let mut wrap_spine = wrap_spine;
+    for (el, section, key) in [
+        (&mut title_el, "layout", "title"),
+        (&mut sub_el, "layout", "subtitle"),
+        (&mut author_el, "layout", "author"),
+        (&mut badge_el, "layout", "badge"),
+        (&mut wrap_blurb, "wrap", "blurb"),
+        (&mut wrap_badge, "wrap", "badge"),
+        (&mut wrap_author, "wrap", "author"),
+        (&mut wrap_spine, "wrap", "spine"),
+    ] {
+        el.lang_only = is_lang_only(&book_doc, lang, section, key);
+    }
 
     let bgcolor = d.bgcolor;
 
@@ -369,7 +453,12 @@ pub fn load_cover(repo: &Repo, book: &BookSummary, lang: &str) -> Result<CoverRe
         bg_url: format!("/api/asset/{}/{}/bg", book.slug, lang),
         rendered_url: rendered.map(|_| format!("/api/asset/{}/{}/rendered", book.slug, lang)),
         protected,
-        elements: Elements { title: title_el, subtitle: sub_el, author: author_el },
+        elements: Elements {
+            title: title_el,
+            subtitle: sub_el,
+            author: author_el,
+            badge: Some(badge_el),
+        },
         layout_saved: saved.is_some(),
         badge,
         badge_color,
@@ -377,7 +466,12 @@ pub fn load_cover(repo: &Repo, book: &BookSummary, lang: &str) -> Result<CoverRe
         title_mt,
         author_mt,
         blurb,
-        wrap: WrapLayoutResponse { blurb: wrap_blurb, badge: wrap_badge, author: wrap_author },
+        wrap: WrapLayoutResponse {
+            blurb: wrap_blurb,
+            badge: wrap_badge,
+            author: wrap_author,
+            spine: wrap_spine,
+        },
         wrap_saved: saved_wrap.is_some(),
         // Safe default; the axum handler overrides this from the book's editions.
         edit_mode: "wrap".to_string(),
@@ -410,6 +504,18 @@ pub fn save_cover(book: &BookSummary, lang: &str, els: &Elements, bgcolor: &str)
         doc["cover"] = Item::Table(Table::new());
     }
 
+    // Snapshot the shared blocks BEFORE rewriting: a block pinned to one language
+    // must leave its shared counterpart exactly as it found it.
+    let shared_layout: std::collections::BTreeMap<String, Value> = doc["cover"]
+        .get("layout")
+        .and_then(|l| l.as_table())
+        .map(|t| {
+            t.iter()
+                .filter_map(|(k, v)| v.as_value().map(|v| (k.to_string(), v.clone())))
+                .collect()
+        })
+        .unwrap_or_default();
+
     // renderer-honored style fields on [cover]
     doc["cover"]["title_color"] = value(els.title.fill.clone());
     doc["cover"]["sub_color"] = value(els.subtitle.fill.clone());
@@ -428,13 +534,16 @@ pub fn save_cover(book: &BookSummary, lang: &str, els: &Elements, bgcolor: &str)
         }
     }
 
-    // per-language text overrides (only if non-empty)
-    if !els.title.text.trim().is_empty() {
-        doc["cover"][lang]["title"] = value(els.title.text.clone());
-    }
-    if !els.subtitle.text.trim().is_empty() {
-        doc["cover"][lang]["sub"] = value(els.subtitle.text.clone());
-    }
+    // Per-language text overrides — but ONLY where the cover text actually departs
+    // from the book's own [title]/[subtitle] (a line break, styled runs, different
+    // wording). Writing back text that merely echoes the default would grow the file
+    // on every Save and bury the one line that is a real override.
+    let def_title = doc_lang_str(&doc, "title", lang);
+    let def_sub = doc_lang_str(&doc, "subtitle", lang);
+    let t_over = overrides(&els.title, &def_title);
+    let s_over = overrides(&els.subtitle, &def_sub);
+    put_or_clear(&mut doc, lang, "title", t_over.then(|| els.title.text.clone()));
+    put_or_clear(&mut doc, lang, "sub", s_over.then(|| els.subtitle.text.clone()));
 
     // ONE design for every language: the geometry + style go to the SHARED
     // [cover.layout], and only the text (with its styled runs) goes to
@@ -442,26 +551,121 @@ pub fn save_cover(book: &BookSummary, lang: &str, els: &Elements, bgcolor: &str)
     // moving a block while editing EN moves it on ES too — that is the point —
     // while each language keeps its own words. Hand-edit [cover.<lang>.layout] to
     // add a per-language tweak (e.g. a smaller title because the words are longer).
+    // A `lang_only` block is pinned to THIS language: its geometry belongs in
+    // [cover.<lang>.layout], and the shared block must keep whatever it had so the
+    // other languages go on inheriting it. Clearing the flag does the opposite —
+    // the block's current values become the shared design.
+    let blocks: Vec<(&str, &Element, bool)> = vec![
+        ("title", &els.title, t_over),
+        ("subtitle", &els.subtitle, s_over),
+        ("author", &els.author, false),
+    ];
+    let badge = els.badge.clone();
+
     let mut layout = Table::new();
     layout.set_implicit(false);
-    layout.insert("title", Item::Value(element_inline(&geometry_of(&els.title))));
-    layout.insert("subtitle", Item::Value(element_inline(&geometry_of(&els.subtitle))));
-    layout.insert("author", Item::Value(element_inline(&geometry_of(&els.author))));
-    doc["cover"]["layout"] = Item::Table(layout);
-
     let mut lang_layout = Table::new();
     lang_layout.set_implicit(false);
-    // Only blocks that actually carry text — an empty one would just be noise (the
-    // renderer already falls back to [title.<lang>] / [subtitle.<lang>]).
-    for (key, el) in [("title", &els.title), ("subtitle", &els.subtitle)] {
-        if let Some(v) = text_only_inline(el) {
-            lang_layout.insert(key, Item::Value(v));
+
+    for (key, el, text_over) in blocks
+        .into_iter()
+        .chain(badge.as_ref().map(|b| ("badge", b, false)))
+    {
+        if el.lang_only {
+            // Pinned: full block (geometry + text) into the language table…
+            lang_layout.insert(key, Item::Value(element_inline(el)));
+            // …and the shared block stays as it was, so the other language keeps
+            // inheriting it. Seed it only if the book has none yet.
+            if let Some(prev) = shared_layout.get(key) {
+                layout.insert(key, Item::Value(prev.clone()));
+            } else {
+                layout.insert(key, Item::Value(element_inline(&geometry_of(el))));
+            }
+        } else {
+            // Shared: geometry to [cover.layout], and only genuinely-overriding text
+            // to [cover.<lang>.layout]. Any stale per-language geometry is dropped —
+            // that IS what un-pinning means.
+            layout.insert(key, Item::Value(element_inline(&geometry_of(el))));
+            if text_over {
+                if let Some(v) = text_only_inline(el) {
+                    lang_layout.insert(key, Item::Value(v));
+                }
+            }
         }
     }
-    doc["cover"][lang]["layout"] = Item::Table(lang_layout);
+    put_table(doc["cover"].as_table_mut().unwrap(), "layout", layout);
+    put_table(doc["cover"][lang].as_table_mut().unwrap(), "layout", lang_layout);
 
     std::fs::write(&path, doc.to_string()).with_context(|| format!("writing {}", path.display()))?;
     Ok(path)
+}
+
+/// Does this block's text say something the book's own `[title]`/`[subtitle]` does
+/// not? Styled runs always count (the plain string can't carry them); otherwise it
+/// is a real override only when the words differ. Equal text => let it resolve.
+fn overrides(el: &Element, default: &Option<String>) -> bool {
+    if el.runs.as_ref().is_some_and(|rs| rs.iter().any(TextRun::styled)) {
+        return true;
+    }
+    let t = el.text.trim();
+    match default {
+        Some(d) => d.trim() != t,
+        None => !t.is_empty(),
+    }
+}
+
+/// Is this block pinned to one language? A `[cover.<lang>.<section>]` block that
+/// carries only `text` is just per-language wording over the shared design; one that
+/// carries geometry (xPct/yPct/wPct/fontPct/fill/…) is a genuine per-language layout
+/// override, and the editor must neither ignore it nor push it back into the shared
+/// table. `section` is "layout" (front) or "wrap" (back).
+fn is_lang_only(doc: &DocumentMut, lang: &str, section: &str, key: &str) -> bool {
+    doc.get("cover")
+        .and_then(|c| c.get(lang))
+        .and_then(|l| l.get(section))
+        .and_then(|s| s.get(key))
+        .and_then(|i| i.as_inline_table())
+        .is_some_and(|t| t.iter().any(|(k, _)| k != "text"))
+}
+
+/// Collapse hard line breaks — the front title carries a break the spine must not.
+fn flatten(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// `[<section>.<lang>]` as a string — the book's declared title/subtitle.
+fn doc_lang_str(doc: &DocumentMut, section: &str, lang: &str) -> Option<String> {
+    doc.get(section)?.get(lang)?.as_str().map(str::to_string)
+}
+
+/// Write `[cover.<lang>].<key>`, or remove any stale one when `val` is `None` — so a
+/// text edit that gets reverted doesn't leave a redundant line behind.
+fn put_or_clear(doc: &mut DocumentMut, lang: &str, key: &str, val: Option<String>) {
+    let t = doc["cover"][lang].as_table_mut().expect("[cover.<lang>] is a table");
+    match val {
+        Some(v) => {
+            t.insert(key, value(v));
+        }
+        None => {
+            t.remove(key);
+        }
+    }
+}
+
+/// Replace `parent[key]` with a freshly-built table WITHOUT moving it or losing the
+/// comments above it. A brand-new `Table` carries no decor and no position, so a
+/// plain `parent[key] = Item::Table(new)` strips the section's explanatory comment
+/// and lets the renderer re-order it into tree order — which is how repeated Saves
+/// used to churn `bookmill.toml`. Inheriting the old table's decor + position keeps
+/// the file stable: only the values change.
+fn put_table(parent: &mut Table, key: &str, mut new: Table) {
+    if let Some(old) = parent.get(key).and_then(Item::as_table) {
+        *new.decor_mut() = old.decor().clone();
+        if let Some(p) = old.position() {
+            new.set_position(p);
+        }
+    }
+    parent.insert(key, Item::Table(new));
 }
 
 /// The editable back-panel text blocks of the paperback wrap. Each is optional so
@@ -476,11 +680,15 @@ pub struct WrapElements {
     pub badge: Option<Element>,
     #[serde(default)]
     pub author: Option<Element>,
+    /// The spine (rotated: `w_pct` runs along the wrap's height, `x_pct` across the
+    /// spine's width).
+    #[serde(default)]
+    pub spine: Option<Element>,
 }
 
 impl WrapElements {
     fn is_empty(&self) -> bool {
-        self.blurb.is_none() && self.badge.is_none() && self.author.is_none()
+        self.blurb.is_none() && self.badge.is_none() && self.author.is_none() && self.spine.is_none()
     }
 }
 
@@ -518,20 +726,44 @@ pub fn save_wrap_layout(book: &BookSummary, lang: &str, els: &WrapElements) -> R
     // ([cover.<lang>].blurb and the localized series badge), so nothing text-shaped
     // needs to be duplicated here. Present blocks merge over any prior saved layout,
     // so dragging only the blurb doesn't drop a previously-placed badge/author.
+    //
+    // A `lang_only` block instead lands in [cover.<lang>.wrap] and leaves the shared
+    // one untouched — a Spanish blurb runs longer than the English one, so it may
+    // genuinely need its own box while the rest of the back cover stays one design.
     if doc["cover"].get("wrap").and_then(|i| i.as_table()).is_none() {
         let mut t = Table::new();
         t.set_implicit(false);
         doc["cover"]["wrap"] = Item::Table(t);
     }
-    if let Some(e) = &els.blurb {
-        doc["cover"]["wrap"]["blurb"] = Item::Value(element_inline(&geometry_of(e)));
+    let mut lang_wrap = Table::new();
+    lang_wrap.set_implicit(false);
+    // The spine carries its TEXT too: unlike the other blocks it has no per-language
+    // source to fall back to (it is title + author flattened), and the author may
+    // well want it to read differently from the front.
+    let carries_text = |key: &str| key == "spine";
+    for (key, e) in [
+        ("blurb", &els.blurb),
+        ("badge", &els.badge),
+        ("author", &els.author),
+        ("spine", &els.spine),
+    ] {
+        let Some(e) = e else { continue };
+        let inline = if carries_text(key) {
+            element_inline(e)
+        } else {
+            element_inline(&geometry_of(e))
+        };
+        if e.lang_only {
+            lang_wrap.insert(key, Item::Value(inline));
+            // Seed the shared block only if the book has none — otherwise leave it.
+            if doc["cover"]["wrap"].get(key).is_none() {
+                doc["cover"]["wrap"][key] = Item::Value(element_inline(&geometry_of(e)));
+            }
+        } else {
+            doc["cover"]["wrap"][key] = Item::Value(inline);
+        }
     }
-    if let Some(e) = &els.badge {
-        doc["cover"]["wrap"]["badge"] = Item::Value(element_inline(&geometry_of(e)));
-    }
-    if let Some(e) = &els.author {
-        doc["cover"]["wrap"]["author"] = Item::Value(element_inline(&geometry_of(e)));
-    }
+    put_table(doc["cover"][lang].as_table_mut().unwrap(), "wrap", lang_wrap);
 
     std::fs::write(&path, doc.to_string()).with_context(|| format!("writing {}", path.display()))?;
     Ok(path)
@@ -624,24 +856,40 @@ fn element_inline(e: &Element) -> Value {
 /// field. The editor must do the same merge or it would read a text-only language
 /// block, see no geometry, fall back to the flex defaults — and then save those
 /// defaults over the shared design.
-fn read_saved_layout(doc: &DocumentMut, lang: &str) -> Option<Elements> {
+fn read_saved_layout(doc: &DocumentMut, lang: &str) -> Option<SavedLayout> {
+    Some(SavedLayout {
+        title: read_layout_block(doc, lang, "title")?,
+        subtitle: read_layout_block(doc, lang, "subtitle")?,
+        author: read_layout_block(doc, lang, "author")?,
+        // The badge became an element only after these layouts were first written,
+        // so a book saved before that has no `badge` block. `None` means "seed it
+        // from the renderer's badge defaults" — not "this layout is unusable".
+        badge: read_layout_block(doc, lang, "badge"),
+    })
+}
+
+/// The front layout as read back from disk. Like [`Elements`], but the badge is
+/// optional because layouts predating it simply don't have one.
+struct SavedLayout {
+    title: Element,
+    subtitle: Element,
+    author: Element,
+    badge: Option<Element>,
+}
+
+/// One front-layout block, resolved the way the RENDERER resolves it: the shared
+/// `[cover.layout]` is the base and `[cover.<lang>.layout]` overlays it field by
+/// field. The editor must do the same merge or it would read a text-only language
+/// block, see no geometry, fall back to the flex defaults — and then save those
+/// defaults over the shared design.
+fn read_layout_block(doc: &DocumentMut, lang: &str, key: &str) -> Option<Element> {
     let cover = doc.get("cover")?;
     let shared = cover.get("layout");
     let langed = cover.get(lang).and_then(|l| l.get("layout"));
-    if shared.is_none() && langed.is_none() {
-        return None;
-    }
-    let get = |key: &str| -> Option<Element> {
-        merge_el(
-            shared.and_then(|l| l.get(key)).and_then(read_element_partial),
-            langed.and_then(|l| l.get(key)).and_then(read_element_partial),
-        )
-    };
-    Some(Elements {
-        title: get("title")?,
-        subtitle: get("subtitle")?,
-        author: get("author")?,
-    })
+    merge_el(
+        shared.and_then(|l| l.get(key)).and_then(read_element_partial),
+        langed.and_then(|l| l.get(key)).and_then(read_element_partial),
+    )
 }
 
 /// Overlay a per-language block onto the shared one. Only a block that ends up
@@ -652,6 +900,8 @@ fn merge_el(base: Option<PartialElement>, over: Option<PartialElement>) -> Optio
     let pick = |a: Option<f64>, c: Option<f64>| c.or(a);
     let picks = |a: Option<String>, c: Option<String>| c.or(a);
     Some(Element {
+        // Stamped by `load_cover` from the config; the merge itself doesn't know.
+        lang_only: false,
         x_pct: pick(b.x_pct, o.x_pct)?,
         y_pct: pick(b.y_pct, o.y_pct)?,
         w_pct: pick(b.w_pct, o.w_pct).unwrap_or(0.8),
@@ -728,6 +978,7 @@ struct SavedWrap {
     blurb: Option<Element>,
     badge: Option<Element>,
     author: Option<Element>,
+    spine: Option<Element>,
 }
 
 /// Same shared-over-language merge as [`read_saved_layout`], for the back panel:
@@ -746,42 +997,10 @@ fn read_saved_wrap(doc: &DocumentMut, lang: &str) -> Option<SavedWrap> {
         )
     };
     Some(SavedWrap {
+        spine: get("spine"),
         blurb: get("blurb"),
         badge: get("badge"),
         author: get("author"),
-    })
-}
-
-fn read_element(item: &Item) -> Option<Element> {
-    let t = item.as_inline_table()?;
-    let f = |k: &str| t.get(k).and_then(|v| v.as_float());
-    let s = |k: &str| t.get(k).and_then(|v| v.as_str()).map(str::to_string);
-    let b = |k: &str| t.get(k).and_then(|v| v.as_bool());
-    // `text` is either a plain string or an array of styled runs (per-character
-    // styling). Keep both: `runs` drives the render, `text` is the flat string.
-    let runs = read_runs(t.get("text"));
-    let text = match (&runs, s("text")) {
-        (Some(rs), _) => rs.iter().map(|r| r.t.as_str()).collect::<String>(),
-        (None, Some(plain)) => plain,
-        (None, None) => String::new(),
-    };
-    Some(Element {
-        text,
-        runs,
-        x_pct: f("xPct")?,
-        y_pct: f("yPct")?,
-        w_pct: f("wPct").unwrap_or(0.8),
-        font_pct: f("fontPct")?,
-        fill: s("fill").unwrap_or_else(|| "#FFFFFF".into()),
-        font_family: s("fontFamily").unwrap_or_else(|| "Playfair Display".into()),
-        font_style: s("fontStyle").unwrap_or_else(|| "normal".into()),
-        align: s("align"),
-        line_height: f("lineHeight"),
-        letter_spacing: f("letterSpacing"),
-        text_transform: s("textTransform"),
-        stroke: s("stroke"),
-        shadow: b("shadow"),
-        opacity: f("opacity"),
     })
 }
 

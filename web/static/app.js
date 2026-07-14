@@ -7,11 +7,19 @@
 // so the ACTUAL text tracks the pointer in real time (no background re-render).
 // Save persists the fractions and re-renders the authoritative PNG/PDF.
 //
-// ONE DOCUMENT: you edit the full paperback wrap (back · spine · front). Both panels
-// are editable — the back (blurb/badge/author) and the front (title/subtitle/author).
-// The eBook front cover IS the wrap's front panel (they share [cover.layout]), and the
-// audiobook cover is a square crop of it: both are GENERATED from this one document,
-// never edited separately. That's why there are no view tabs.
+// ONE DOCUMENT, SEVERAL CROPS: you edit the full paperback wrap (back · spine · front).
+// Both panels are editable — the back (blurb/badge/author) and the front
+// (title/subtitle/author). Every other cover is a rectangle cut out of this one
+// document, never edited separately, which is why there are no view tabs.
+//
+// The crops do not share an aspect ratio, so they are drawn as dotted guides
+// (`drawGuides`): the eBook front (1600x2560, 0.625) is NARROWER than the print front
+// panel, so it is a crop of it, not the whole thing. Front blocks are therefore laid
+// out in the CORE — the eBook rectangle inside the panel — so a line that fits here
+// fits there. Getting this wrong is subtle: `w_pct` scales with WIDTH and `font_pct`
+// with HEIGHT, so measuring the box against the full panel while the type follows the
+// wrap height makes the box ~6% wide, and a two-line title silently becomes three on
+// the print cover only.
 //
 // The wrap lays out two `groups`, each a set of draggable blocks sharing a coordinate
 // space (the back panel, the front panel). Handles are keyed "<groupId>:<key>" so the
@@ -25,7 +33,7 @@ const W = 1600, H = 2560;            // authoritative front-cover pixel space
 const PAD_X = 120, TOP = 150, BOTTOM = H - 150, CONTENT_W = W - 2 * PAD_X;
 const BADGE_SIZE = 32, BADGE_LH = 1.2;
 const RULE_H = 3, RULE_GAP = 46;
-const KEYS = ['title', 'subtitle', 'author'];
+const KEYS = ['title', 'subtitle', 'author', 'badge'];
 const WRAP_KEYS = ['blurb', 'badge', 'author'];
 const FAMILIES = ['Playfair Display', 'Montserrat', 'Baloo 2', 'Oswald', 'Patrick Hand'];
 
@@ -83,7 +91,6 @@ async function init() {
 
   buildLangSeg();
   $('saveBtn').onclick = save;
-  $('genAudiobook').onclick = genAudiobookCover;
   bindFormatBar();
   wireShortcuts();
   window.addEventListener('resize', () => { positionHandles(); if (editing) { styleInline(); placeInline(); } });
@@ -103,6 +110,21 @@ function buildLangSeg() {
     b.onclick = () => { if (l !== LANG) switchLang(l); };
     seg.appendChild(b);
   });
+}
+
+// Switch language in place, WITHOUT losing unsaved work. The edit you were making
+// is committed to the working model, this language's state is stashed so it is
+// still there when you switch back, and the shared design (positions, sizes,
+// colors, fonts) carries over to the language you are switching to.
+function switchLang(l) {
+  if (editing) commitEdit();
+  workcache[LANG] = { els: clone(els), wrapEls: clone(wrapEls), bgcolor };
+  const carry = workcache[LANG];
+  LANG = l;
+  history.replaceState(null, '', `?book=${encodeURIComponent(SLUG)}&lang=${encodeURIComponent(LANG)}`);
+  $('toPreview').href = `/preview.html?book=${encodeURIComponent(SLUG)}&lang=${encodeURIComponent(LANG)}`;
+  buildLangSeg();
+  loadCover(carry);   // clears the selection itself
 }
 
 // ---- group helpers ---------------------------------------------------------
@@ -131,18 +153,50 @@ function renderPane() {
 
 // ---- load + render ---------------------------------------------------------
 
-async function loadCover() {
+// Unsaved working state, per language. Switching ES/EN must not throw away edits:
+// the LAYOUT is one shared design (moving a block in EN moves it in ES too), so the
+// geometry carries across the toggle, while each language's unsaved TEXT waits here
+// until you come back to it. Cleared for a language once it is saved to disk.
+let workcache = {};
+const clone = (o) => JSON.parse(JSON.stringify(o));
+
+// Everything except the words: the shared design. `text`/`runs` are per-language.
+// A block PINNED to a language (lang_only) is not part of the shared design, so it
+// neither donates its geometry to the other language nor accepts the other's — skip
+// it whichever side is pinned. `lang_only` itself is per-language and never carries.
+function carryGeometry(from, to) {
+  if (!from || !to) return;
+  for (const k of Object.keys(to)) {
+    const f = from[k], t = to[k];
+    if (!f || !t) continue;
+    if (f.lang_only || t.lang_only) continue;
+    for (const key of Object.keys(f)) {
+      if (key === 'text' || key === 'runs' || key === 'lang_only') continue;
+      t[key] = f[key];
+    }
+  }
+}
+
+async function loadCover(carry) {
   status('loading…');
   data = await fetch(`/api/cover/${SLUG}/${LANG}`).then(r => r.json());
-  els = JSON.parse(JSON.stringify(data.elements));
-  wrapEls = data.wrap
-    ? JSON.parse(JSON.stringify(data.wrap))
-    : { blurb: null, badge: null, author: null };
-  if (!data.layout_saved) applyFlexDefaults(data, els);
+  const cached = workcache[LANG];
+  els = clone(cached ? cached.els : data.elements);
+  wrapEls = clone(
+    cached ? cached.wrapEls
+      : (data.wrap || { blurb: null, badge: null, author: null, spine: null })
+  );
+  if (!cached && !data.layout_saved) applyFlexDefaults(data, els);
+  // Unsaved moves/resizes/restyles made in the other language belong to this one
+  // too — one design, two languages.
+  if (carry) {
+    carryGeometry(carry.els, els);
+    carryGeometry(carry.wrapEls, wrapEls);
+  }
 
   $('bookLabel').textContent = SLUG;
   $('protBadge').style.display = data.protected ? '' : 'none';
-  bgcolor = data.bgcolor || '#000000';
+  bgcolor = (carry && carry.bgcolor) || (cached && cached.bgcolor) || data.bgcolor || '#000000';
   $('bgcolor').value = toHex6(bgcolor);
   $('bgSw').style.background = toHex6(bgcolor);
   // The back-cover blurb is edited inline on the canvas now (no sidebar textarea).
@@ -193,8 +247,70 @@ function mountSvg(svg) {
   handles = {};
   groups = buildGroups(svgEl);
   groups.forEach(g => g.keys.forEach(k => makeHandle(g, k)));
+  if (svgEl) drawGuides(svgEl);
   applyAllLive();   // restore any unsaved drags onto the fresh SVG
   positionHandles();
+}
+
+// Dotted crop guides. One design, several crops: the wrap you edit here IS the
+// master, and each output is a rectangle cut out of it. The guides draw those
+// rectangles so you can see, while editing, what each one will actually contain.
+//
+//   trim      what KDP cuts to; everything outside is bleed and gets trimmed off
+//   eBook     the 1600x2560 front cover, a narrower crop than the print front panel
+//   barcode   KDP prints the ISBN barcode here — keep it clear of copy
+//
+// Guides live in a client-side <g> that the server never sees, so they cannot leak
+// into a rendered cover. `pointer-events: none` keeps them out of the drag overlay.
+function drawGuides(svgEl) {
+  const NS = 'http://www.w3.org/2000/svg';
+  const vb = (svgEl.getAttribute('viewBox') || '0 0 0 0').split(/\s+/).map(Number);
+  const vbW = vb[2] || 0, vbH = vb[3] || 0;
+  const num = (a, d) => { const v = parseFloat(svgEl.getAttribute(a)); return isFinite(v) ? v : d; };
+  const backW = num('data-back-w', 0), frontX = num('data-front-x', 0);
+  const coreX = num('data-core-x', frontX), coreW = num('data-core-w', 0);
+  const bleed = num('data-bleed-px', 0);
+  if (!vbW || !coreW) return;
+
+  const g = document.createElementNS(NS, 'g');
+  g.setAttribute('id', 'guides');
+  g.setAttribute('pointer-events', 'none');
+  const px = vbW / 900;                     // guide strokes, in viewBox units
+  const add = (tag, attrs) => {
+    const e = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+    g.appendChild(e);
+    return e;
+  };
+  const box = (x, y, w, h, color, dash) => add('rect', {
+    x, y, width: w, height: h, fill: 'none', stroke: color,
+    'stroke-width': 1.5 * px, 'stroke-dasharray': dash, 'stroke-opacity': 0.9,
+  });
+  const label = (x, y, color, t) => {
+    const e = add('text', {
+      x, y, fill: color, 'font-family': 'ui-monospace, monospace',
+      'font-size': 9 * px, 'font-weight': 600, 'letter-spacing': 0.4 * px,
+    });
+    e.textContent = t;
+    return e;
+  };
+
+  // Trim: the wrap minus its bleed margin.
+  if (bleed > 0) box(bleed, bleed, vbW - 2 * bleed, vbH - 2 * bleed, '#ffffff', `${6 * px} ${5 * px}`);
+  // Spine folds.
+  [backW, frontX].forEach(x => add('line', {
+    x1: x, y1: 0, x2: x, y2: vbH, stroke: '#ffffff',
+    'stroke-width': 1 * px, 'stroke-dasharray': `${3 * px} ${4 * px}`, 'stroke-opacity': 0.55,
+  }));
+  // The eBook crop — the whole point. Anything outside it is print-only.
+  box(coreX, 0, coreW, vbH, '#4DD0E1', `${9 * px} ${6 * px}`);
+  label(coreX + 5 * px, 15 * px, '#4DD0E1', 'eBook 1600×2560');
+  // Barcode keep-out: KDP stamps the ISBN bottom-right of the back cover.
+  const bw = 2 * 96, bh = 1.2 * 96;         // 2in x 1.2in at the wrap's 96dpi
+  box(backW - bleed - bw, vbH - bleed - bh, bw, bh, '#FF7043', `${5 * px} ${5 * px}`);
+  label(backW - bleed - bw + 5 * px, vbH - bleed - bh + 15 * px, '#FF7043', 'barcode');
+
+  svgEl.appendChild(g);
 }
 
 // Debounced live re-render used while editing style/text in the sidebar, so the
@@ -215,6 +331,10 @@ async function runLivePreview() {
   }
 }
 
+// The spine block, exposed as a one-key group. Same object reference as
+// `wrapEls.spine`, so edits land where Save reads them.
+function spineEls() { return { text: wrapEls && wrapEls.spine }; }
+
 // The draggable groups for the current view.
 function buildGroups(svgEl) {
   if (svgEl) {
@@ -225,12 +345,23 @@ function buildGroups(svgEl) {
     const backW = parseFloat(svgEl.getAttribute('data-back-w')) || vbW;
     const frontX = parseFloat(svgEl.getAttribute('data-front-x')) || 0;
     const frontW = parseFloat(svgEl.getAttribute('data-front-w')) || backW;
+    const coreW = parseFloat(svgEl.getAttribute('data-core-w')) || frontW;
+    const coreX = parseFloat(svgEl.getAttribute('data-core-x')) || frontX;
+    const spineW = Math.max(1, frontX - backW);
     return [
       { id: 'back', keys: WRAP_KEYS, els: wrapEls, space: { w: backW, h: vbH, x0: 0, vbW, vbH }, sizeRef: vbH },
-      // Front-panel blocks share the front layout fractions ([cover.<lang>.layout]),
-      // mapped into the wrap's front sub-rect. sizeRef stays the 2560 front canvas so
-      // the size field reads the same here as in the front view.
-      { id: 'front', keys: KEYS, els, space: { w: frontW, h: vbH, x0: frontX, vbW, vbH }, sizeRef: vbH },
+      // The spine reads bottom-to-top, so its block model is rotated: `w_pct` is the
+      // run's length ALONG the spine (a fraction of the wrap height, i.e. space.h),
+      // and `x_pct` places it ACROSS the spine's width (space.w). `vertical` tells
+      // the handle, the inline editor and the toolbar to swap the two axes.
+      { id: 'spine', keys: ['text'], els: spineEls(), space: { w: spineW, h: vbH, x0: backW, vbW, vbH }, sizeRef: vbH, vertical: true },
+      // Front blocks are laid out in the CORE, not the whole front panel: the core is
+      // the eBook front (1600x2560) scaled into the panel, and the panel's extra width
+      // is the crop the print cover adds. Measuring against the core is what makes the
+      // editor agree with both renders — a box that is w_pct of the core here is w_pct
+      // of 1600 on the eBook front, and the type scales by the same factor, so the two
+      // break lines identically. (Against `frontW` the box came out ~6% wide.)
+      { id: 'front', keys: KEYS, els, space: { w: coreW, h: vbH, x0: coreX, vbW, vbH }, sizeRef: vbH },
     ];
   }
   return [];
@@ -250,13 +381,24 @@ function fitSvg(svgEl) {
   svgEl.style.height = h + 'px';
 }
 
+// A handle's label. A block pinned to one language says so, so you can see which
+// parts of the design are shared and which are not without clicking each one.
+function handleTag(g, key) {
+  const base = groups.length > 1 ? `${g.id} · ${key}` : key;
+  const el = g.els[key];
+  return el && el.lang_only ? `${base} · ${LANG.toUpperCase()} only` : base;
+}
+
 function makeHandle(g, key) {
   const id = g.id + ':' + key;
   const h = document.createElement('div');
   h.className = 'handle';
   // In the wrap view the same key exists on both panels; tag the side for clarity.
-  const tag = groups.length > 1 ? `${g.id} · ${key}` : key;
-  h.innerHTML = `<span class="tag">${tag}</span><span class="grip l"></span><span class="grip r"></span>`;
+  const tag = handleTag(g, key);
+  // The width grips drag horizontally, which is meaningless on the rotated spine —
+  // its run length is set from the Box field instead.
+  const grips = g.vertical ? '' : '<span class="grip l"></span><span class="grip r"></span>';
+  h.innerHTML = `<span class="tag">${tag}</span>${grips}`;
   h.querySelectorAll('.grip').forEach(gr =>
     gr.addEventListener('pointerdown', (e) => { e.stopPropagation(); startResize(e, g, key); }));
   h.onpointerdown = (e) => startDrag(e, g, key);
@@ -278,12 +420,19 @@ function positionHandles() {
       const el = g.els[k], hd = handles[g.id + ':' + k];
       if (!hd || !el) return;
       const size = el.font_pct * g.space.h;
-      const bw = el.w_pct * g.space.w;
-      const lines = wrapCount(el.text, size, el.font_style, el.font_family, bw);
-      // Match the renderer: a line's box is size × line-height (cover_svg::line_box),
-      // so the handle wraps the text instead of ending short of it.
       const lh = el.line_height > 0 ? el.line_height : 1.0;
-      const bh = Math.max(lines * size * lh, 26);
+      let bw, bh;
+      if (g.vertical) {
+        // Rotated: the run stretches DOWN the spine, one line box wide across it.
+        bh = el.w_pct * g.space.h;
+        bw = Math.max(size * lh, 18);
+      } else {
+        bw = el.w_pct * g.space.w;
+        const lines = wrapCount(el.text, size, el.font_style, el.font_family, bw);
+        // Match the renderer: a line's box is size × line-height (cover_svg::line_box),
+        // so the handle wraps the text instead of ending short of it.
+        bh = Math.max(lines * size * lh, 26);
+      }
       const cx = g.space.x0 + el.x_pct * g.space.w, cy = el.y_pct * g.space.h;
       hd.style.left = ((cx - bw / 2) * sx) + 'px';
       hd.style.top = ((cy - bh / 2) * sy) + 'px';
@@ -303,6 +452,7 @@ function snapshotBaked() {
   baked = {};
   if (els) for (const k of KEYS) if (els[k]) baked['front:' + k] = { x_pct: els[k].x_pct, y_pct: els[k].y_pct };
   if (wrapEls) for (const k of WRAP_KEYS) if (wrapEls[k]) baked['back:' + k] = { x_pct: wrapEls[k].x_pct, y_pct: wrapEls[k].y_pct };
+  if (wrapEls && wrapEls.spine) baked['spine:text'] = { x_pct: wrapEls.spine.x_pct, y_pct: wrapEls.spine.y_pct };
 }
 
 // Translate one block's `<g data-drag>` layer to its working position (delta from
@@ -448,17 +598,30 @@ function syncBar() {
   $('fFillSw').style.background = toHex6(fill);
 
   // Block-level controls (never per-run).
-  $('fBoxW').value = Math.round(el.w_pct * info.g.space.w);
+  // For the spine the "box" is the run's length down the spine, not across it.
+  $('fBoxW').value = Math.round(el.w_pct * (info.g.vertical ? info.g.space.h : info.g.space.w));
   setSeg('align', el.align || 'center');
   setSeg('case', el.text_transform || 'none');
   $('fLineHeight').value = el.line_height != null ? el.line_height : '';
-  $('fLetterSpacing').value = el.letter_spacing != null ? el.letter_spacing : '';
+  // Tracking is STORED as a multiple of the font size (so it scales with the
+  // canvas) but SHOWN in px, which is how anyone actually thinks about it.
+  $('fLetterSpacing').value = el.letter_spacing != null
+    ? Math.round(el.letter_spacing * blockSize * 10) / 10
+    : '';
   $('fOpacity').value = el.opacity != null ? el.opacity : 1;
   const s = parseStroke(el.stroke);
   $('fStrokeColor').value = s.color;
   $('fStrokeSw').style.background = s.color;
   $('fStrokeWidth').value = s.w || '';
   $('fShadow').classList.toggle('on', el.shadow !== false);
+  // Icon-only, so the tooltip carries the meaning — and it must name the language,
+  // since which one it pins to depends on what you're editing.
+  const lo = $('fLangOnly');
+  const L = LANG.toUpperCase();
+  lo.classList.toggle('on', !!el.lang_only);
+  lo.title = el.lang_only
+    ? `Language override: on — this block is positioned for ${L} only. Click to share it with every language.`
+    : `Language override: off — this block is part of the shared design. Click to position it for ${L} only.`;
 }
 
 function setFamilySelect(fam) {
@@ -506,13 +669,36 @@ function bindFormatBar() {
   $('fBoxW').oninput = () => {
     const i = selInfo(); if (!i) return;
     const v = parseFloat($('fBoxW').value);
-    if (v > 0) { i.el.w_pct = clamp(v / i.g.space.w, 0.04, 1); positionHandles(); afterStyle(); }
+    const ref = i.g.vertical ? i.g.space.h : i.g.space.w;   // the spine measures along its run
+    if (v > 0) { i.el.w_pct = clamp(v / ref, 0.04, 1); positionHandles(); afterStyle(); }
+  };
+  // Pin/unpin this block to the current language. Pinning takes the block out of the
+  // shared design; unpinning makes its CURRENT position the shared one for everybody.
+  $('fLangOnly').onclick = () => {
+    const i = selInfo(); if (!i) return;
+    i.el.lang_only = !i.el.lang_only;
+    syncBar();
+    const hd = handles[current];
+    if (hd) {
+      const t = hd.querySelector('.tag');
+      if (t) t.textContent = handleTag(i.g, i.key);
+      hd.classList.toggle('pinned', i.el.lang_only);
+    }
+    status(i.el.lang_only
+      ? `language override on: ${i.key} is positioned for ${LANG.toUpperCase()} only`
+      : `language override off: ${i.key} is shared — its current position becomes the design for every language`);
   };
   // Center the block in its panel (the front panel or the back panel, not the whole wrap).
   $('fCenterH').onclick = () => centerBlock('x');
   $('fCenterV').onclick = () => centerBlock('y');
   $('fLineHeight').oninput = () => { const e = sel(); if (!e) return; const v = parseFloat($('fLineHeight').value); e.line_height = v > 0 ? v : undefined; afterStyle(); };
-  $('fLetterSpacing').oninput = () => { const e = sel(); if (!e) return; const v = parseFloat($('fLetterSpacing').value); e.letter_spacing = isNaN(v) ? undefined : v; afterStyle(); };
+  $('fLetterSpacing').oninput = () => {
+    const i = selInfo(); if (!i) return;
+    const px = parseFloat($('fLetterSpacing').value);
+    const size = i.el.font_pct * i.g.sizeRef;
+    i.el.letter_spacing = isNaN(px) || !size ? undefined : px / size;   // px in, ems stored
+    afterStyle();
+  };
   $('fOpacity').oninput = () => { const e = sel(); if (!e) return; e.opacity = parseFloat($('fOpacity').value); afterStyle(); };
   const applyStroke = () => {
     const e = sel(); if (!e) return;
@@ -683,7 +869,7 @@ function styleInline() {
   box.style.color = el.fill || '#FFFFFF';
   box.style.textAlign = el.align || 'center';
   box.style.lineHeight = (el.line_height && el.line_height > 0 ? el.line_height : 1.0) * 1.32;
-  box.style.letterSpacing = ((el.letter_spacing || 0) * scale) + 'px';
+  box.style.letterSpacing = ((el.letter_spacing || 0) * size) + 'px';   // ems → screen px
   box.style.textTransform = el.text_transform === 'upper' ? 'uppercase'
     : el.text_transform === 'lower' ? 'lowercase' : 'none';
   box.style.opacity = el.opacity != null ? el.opacity : 1;
@@ -700,8 +886,21 @@ function placeInline() {
   if (!svgEl) return;
   const r = svgEl.getBoundingClientRect();
   const sx = r.width / g.space.vbW, sy = r.height / g.space.vbH;
-  const bw = el.w_pct * g.space.w;
   const cx = g.space.x0 + el.x_pct * g.space.w, cy = el.y_pct * g.space.h;
+  if (g.vertical) {
+    // Lay the editor out horizontally, then rotate it about its centre onto the
+    // spine — so typing feels normal while the text sits where it will print.
+    const w = el.w_pct * g.space.h * sy;
+    const h = box.offsetHeight || 24;
+    box.style.width = w + 'px';
+    box.style.left = (cx * sx - w / 2) + 'px';
+    box.style.top = (cy * sy - h / 2) + 'px';
+    box.style.transformOrigin = 'center center';
+    box.style.transform = 'rotate(-90deg)';
+    return;
+  }
+  box.style.transform = '';
+  const bw = el.w_pct * g.space.w;
   const h = box.offsetHeight || 40;
   box.style.left = ((cx - bw / 2) * sx) + 'px';
   box.style.width = (bw * sx) + 'px';
@@ -951,27 +1150,15 @@ function wireShortcuts() {
 
 // ---- save ------------------------------------------------------------------
 
-async function genAudiobookCover() {
-  const btn = $('genAudiobook');
-  btn.disabled = true; status('generating audiobook cover…');
-  try {
-    const r = await fetch(`/api/cover/${SLUG}/${LANG}/audiobook`, { method: 'POST' })
-      .then((res) => res.ok ? res.json() : res.text().then((t) => { throw new Error(t); }));
-    const img = $('audiobookImg'); img.src = r.url; img.style.display = '';
-    status('audiobook cover saved');
-  } catch (e) {
-    status('audiobook cover failed: ' + ((e && e.message) || e));
-  } finally { btn.disabled = false; }
-}
-
 // The editor's working layout, in the shape both the live-preview POST and the
-// Save POST expect. The front layout (title/subtitle/author) is always included;
-// the wrap view also carries the back panel (blurb/badge/author).
+// Save POST expect. The front layout (title/subtitle/author/badge) is always
+// included; the wrap view also carries the back panel (blurb/badge/author).
 function currentBody() {
   const body = {
     title: els.title,
     subtitle: els.subtitle,
     author: els.author,
+    badge: els.badge || undefined,
     bgcolor: bgcolor || '#000000',
   };
   body.blurb = (wrapEls.blurb && wrapEls.blurb.text) || '';
@@ -979,6 +1166,7 @@ function currentBody() {
     blurb: wrapEls.blurb || undefined,
     badge: wrapEls.badge || undefined,
     author: wrapEls.author || undefined,
+    spine: wrapEls.spine || undefined,
   };
   return body;
 }
@@ -991,10 +1179,11 @@ async function save() {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     }).then(r => r.json());
     data.layout_saved = true;
+    delete workcache[LANG];   // this language now matches disk
     snapshotBaked();                        // the re-render bakes the working fractions → deltas reset to 0
     await renderStage();                    // reload the authoritative SVG
-    status(r.ok ? 'saved + rendered' : 'saved (render failed)');
-    a11y.announce(r.ok ? 'Cover saved and re-rendered' : 'Cover saved, but render failed');
+    status(r.ok ? 'saved · front, wrap + audiobook rendered' : 'saved (render failed)');
+    a11y.announce(r.ok ? 'Cover saved; front, wrap and audiobook covers rendered' : 'Cover saved, but render failed');
   } catch (e) {
     status('error: ' + e);
     a11y.announce('Cover save failed');

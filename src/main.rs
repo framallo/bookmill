@@ -2,6 +2,7 @@
 //! v1: config model + discovery + validation + Ratatui TUI. Build/cover/audiobook
 //! engines are scaffolded (orchestrator-first; native engines land next).
 
+mod a11y;
 mod audiobook;
 mod build;
 mod config;

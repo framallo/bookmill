@@ -130,10 +130,20 @@ pub fn run(repo: &Repo, book: Option<String>, json: bool) -> Result<()> {
         for job in &jobs {
             rep.cur_lang = Some(job.lang.clone());
             match job.out {
-                Out::RetailEpub | Out::KdpEpub => epub_check(repo, job, &mut rep),
-                Out::RetailPdf => pdf_geometry_check(repo, job, &mut rep),
+                Out::RetailEpub | Out::KdpEpub => {
+                    epub_check(repo, job, &mut rep);
+                    // Accessibility audit of the built EPUB (alt text, a11y metadata,
+                    // languages, nav) + DAISY Ace, when it's installed.
+                    epub_a11y_check(repo, job, &mut rep);
+                    ace_check(repo, job, &mut rep);
+                }
+                Out::RetailPdf => {
+                    pdf_geometry_check(repo, job, &mut rep);
+                    pdf_a11y_check(repo, job, &mut rep);
+                }
                 Out::KdpPdf => {
                     pdf_geometry_check(repo, job, &mut rep);
+                    pdf_a11y_check(repo, job, &mut rep);
                     // Audit interior image DPI on the KDP print PDF only.
                     image_dpi_check(repo, job, &mut rep);
                     // Catch "insufficient bleed" (a full-page plate that leaves a
@@ -247,6 +257,130 @@ fn run_epubcheck(epub: &Path, quiet: bool) -> Result<(usize, bool)> {
         }
     }
     Ok((warns, out.status.success()))
+}
+
+// ---------- Accessibility ----------
+
+/// Accessibility audit of a built EPUB (see [`crate::a11y`]): schema.org metadata,
+/// `dc:language`, a language on every content document, a nav TOC — and, above all,
+/// **alt text on every image**. Missing metadata / alt text / language is an error;
+/// the merely *recommended* landmarks and page-list warn.
+fn epub_a11y_check(repo: &Repo, job: &Job, rep: &mut Report) {
+    let path = build::job_output_path(repo, job);
+    let label = format!("{} {} · {}", job.slug, job.lang, job.out.name());
+    if !path.exists() {
+        rep.warn(format!("a11y {label}: EPUB not built (skipped)"));
+        return;
+    }
+    match crate::a11y::audit_epub(&path) {
+        Ok(findings) => emit(findings, &label, rep),
+        Err(e) => rep.warn(format!("a11y {label}: audit failed: {e:#}")),
+    }
+}
+
+/// Accessibility audit of a built PDF: a title and a language (an untitled,
+/// language-less PDF fails every checker) and whether it is tagged.
+fn pdf_a11y_check(repo: &Repo, job: &Job, rep: &mut Report) {
+    let path = build::job_output_path(repo, job);
+    let ed = job.edition.clone().unwrap_or_else(|| job.target.clone());
+    let label = format!("{} {} · {} · {}", job.slug, job.lang, ed, job.out.name());
+    if !path.exists() {
+        return; // the geometry check already noted a missing artifact
+    }
+    emit(crate::a11y::audit_pdf(&path), &label, rep);
+}
+
+/// Map the audit's findings onto the report's ✓ / ! / ✗ tally.
+fn emit(findings: Vec<crate::a11y::Finding>, label: &str, rep: &mut Report) {
+    use crate::a11y::Level;
+    for f in findings {
+        let m = f.msg.replacen("a11y ", &format!("a11y {label} "), 1);
+        match f.level {
+            Level::Ok => rep.ok(m),
+            Level::Warn => rep.warn(m),
+            Level::Err => rep.bad(m),
+        }
+    }
+}
+
+/// Run **DAISY Ace** on the built EPUB when it is installed, surfacing its
+/// violations. Optional, like `epubcheck`: absent from `$PATH` → skipped with a
+/// note, never a hard dependency.
+fn ace_check(repo: &Repo, job: &Job, rep: &mut Report) {
+    let path = build::job_output_path(repo, job);
+    let label = format!("{} {} · {}", job.slug, job.lang, job.out.name());
+    if !path.exists() {
+        return; // already noted
+    }
+    let outdir = std::env::temp_dir().join(format!("bookmill-ace-{}-{}", job.slug, job.lang));
+    let out = match Command::new("ace")
+        .arg("-o")
+        .arg(&outdir)
+        .arg("-f") // overwrite a previous report dir
+        .arg(&path)
+        .output()
+    {
+        Ok(o) => o,
+        Err(_) => {
+            rep.say(&format!("    (ace not on $PATH — accessibility checker skipped for {label})"));
+            return;
+        }
+    };
+    // Ace writes its findings to <outdir>/report.json; `assertions` is empty when clean.
+    let report = outdir.join("report.json");
+    let violations = std::fs::read_to_string(&report)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .map(|j| ace_violations(&j));
+    let _ = std::fs::remove_dir_all(&outdir);
+    match violations {
+        Some(v) if v.is_empty() => rep.ok(format!("a11y {label}: DAISY Ace clean")),
+        Some(v) => {
+            for m in v {
+                rep.warn(format!("a11y {label}: ace: {m}"));
+            }
+        }
+        None => {
+            let text = String::from_utf8_lossy(&out.stderr);
+            rep.warn(format!(
+                "a11y {label}: ace produced no report{}",
+                if text.trim().is_empty() { String::new() } else { format!(": {}", text.trim()) }
+            ))
+        }
+    }
+}
+
+/// Pull the human-readable violations out of an Ace `report.json`
+/// (`assertions[].assertions[].earl:test.dct:title` + the failure message).
+fn ace_violations(j: &serde_json::Value) -> Vec<String> {
+    let mut v = Vec::new();
+    let Some(outer) = j.get("assertions").and_then(|a| a.as_array()) else {
+        return v;
+    };
+    for o in outer {
+        let Some(inner) = o.get("assertions").and_then(|a| a.as_array()) else {
+            continue;
+        };
+        for a in inner {
+            let rule = a
+                .get("earl:test")
+                .and_then(|t| t.get("dct:title"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("(rule)");
+            let impact = a
+                .get("earl:test")
+                .and_then(|t| t.get("earl:impact"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
+            let detail = a
+                .get("earl:result")
+                .and_then(|r| r.get("dct:description"))
+                .and_then(|d| d.as_str())
+                .unwrap_or("");
+            v.push(format!("{rule} [{impact}] {detail}").trim().to_string());
+        }
+    }
+    v
 }
 
 // ---------- PDF geometry ----------

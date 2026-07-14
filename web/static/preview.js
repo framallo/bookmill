@@ -7,8 +7,37 @@
 // where available (e.g. low-DPI images), each jumpable.
 
 const $ = (id) => document.getElementById(id);
-const PAGE_H = 440; // displayed page height in px (both pages share it)
 const GAP = 10;
+const PAPER = '#ffffff';   // the page stock — blank pages are paper, not background
+
+// The preview fills the window. Height is whatever is left under the nav bar once
+// the legend + status line are accounted for; a spread that would then overflow
+// sideways is scaled down to fit the width instead. Both views use this, so
+// switching between the wrap and an interior spread keeps the same scale.
+const CHROME_BELOW = 78;   // legend + status + bottom padding
+const MIN_H = 260;
+function avail() {
+  const host = $('stage');
+  const top = host.getBoundingClientRect().top;
+  return {
+    w: Math.max(MIN_H, host.parentElement.clientWidth - 40),
+    h: Math.max(MIN_H, window.innerHeight - top - CHROME_BELOW),
+  };
+}
+// Largest w x h of the given aspect that fits the free area.
+function fit(aspect) {
+  const a = avail();
+  let h = a.h, w = h * aspect;
+  if (w > a.w) { w = a.w; h = w / aspect; }
+  return { w, h };
+}
+// Same, for a two-page spread: `GAP` px of gutter that does NOT scale with height.
+function fitSpread(pageAspect) {
+  const a = avail();
+  let h = a.h, w = 2 * pageAspect * h + GAP;
+  if (w > a.w) { h = (a.w - GAP) / (2 * pageAspect); w = a.w; }
+  return { w, h };
+}
 
 let meta = null;        // /api/preview metadata (geometry, pages, dpi)
 // spread index: 0 = the full paperback WRAP (back·spine·front); 1 = [—, p1];
@@ -56,6 +85,12 @@ async function init() {
   $('resClose').onclick = () => $('resultsPanel').classList.remove('open');
   $('counts').onclick = () => $('resultsPanel').classList.toggle('open');
   wireShortcuts();
+  // The preview is sized to the window, so a resize has to re-fit it.
+  let rt = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(rt);
+    rt = setTimeout(() => { if (meta && meta.pdfExists) draw(); }, 120);
+  });
   load();
 }
 
@@ -187,12 +222,7 @@ async function drawWrap() {
     const svgEl = host.querySelector('svg');
     if (svgEl) {
       const vb = (svgEl.getAttribute('viewBox') || '0 0 1200 880').split(/\s+/).map(Number);
-      const aspect = (vb[2] || 1200) / (vb[3] || 880);
-      // Match the interior two-page spread's height (PAGE_H) so switching between
-      // wrap and interior doesn't jump in scale. Shrink to fit width if needed.
-      let h = PAGE_H, w = h * aspect;
-      const availW = host.parentElement.clientWidth - 40;
-      if (w > availW) { w = availW; h = w / aspect; }
+      const { w, h } = fit((vb[2] || 1200) / (vb[3] || 880));
       svgEl.removeAttribute('width'); svgEl.removeAttribute('height');
       svgEl.style.width = w + 'px';
       svgEl.style.height = h + 'px';
@@ -211,8 +241,8 @@ function drawInterior() {
   const P = meta.pages || 1;
 
   const aspect = g ? g.pageW / g.pageH : 6.125 / 9.25;
-  const pageWpx = PAGE_H * aspect;
-  const W = pageWpx * 2 + GAP, H = PAGE_H;
+  const { w: W, h: H } = fitSpread(aspect);
+  const pageWpx = H * aspect;
 
   const host = $('stage');
   if (stage) stage.destroy();
@@ -240,15 +270,18 @@ function updateNav(leftLabel, P) {
 }
 
 function drawPage(art, guides, page, ox, pageWpx, H, side, slug, lang) {
-  // empty slot (e.g. left page of the first spread, or past the last page)
+  // An empty slot is not "nothing" — it is a blank sheet of paper the reader will
+  // hold (the verso facing page 1, or the tail of an odd-length book). Paint it
+  // white so the spread reads like the printed book, not like a hole in the UI.
   if (!page) {
+    art.add(new Konva.Rect({ x: ox, y: 0, width: pageWpx, height: H, fill: PAPER }));
     guides.add(new Konva.Rect({ x: ox, y: 0, width: pageWpx, height: H, stroke: '#222b36', strokeWidth: 1, dash: [4, 4] }));
     return;
   }
   // page background + raster — both on `art` (the BOTTOM layer) so the opaque
   // background sits under the page image, not over it. `guides` is the top layer
   // (strokes/tints only); putting the fill there hid the raster and the error text.
-  art.add(new Konva.Rect({ x: ox, y: 0, width: pageWpx, height: H, fill: '#15191f' }));
+  art.add(new Konva.Rect({ x: ox, y: 0, width: pageWpx, height: H, fill: PAPER }));
   const pageUrl = `/api/preview/${slug}/${lang}/page/${page}?t=${Date.now()}`;
   Konva.Image.fromURL(pageUrl, (img) => {
     img.setAttrs({ x: ox, y: 0, width: pageWpx, height: H });
@@ -345,7 +378,7 @@ async function loadWarnings() {
   $('reload').disabled = true;
   $('resultsPanel').classList.add('open');
   $('counts').innerHTML = '';
-  $('issues').innerHTML = '<p class="muted">validate --deep — this can take a minute…</p>';
+  $('issues').innerHTML = '<p class="muted">validating — this can take a minute…</p>';
   try {
     const res = await fetch(`/api/warnings/${slug}/${lang}`);
     if (!res.ok) throw new Error(await res.text());

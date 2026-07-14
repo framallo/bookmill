@@ -348,23 +348,34 @@ impl CoverRenderer {
         let cx = W / 2.0;
         let content_w = W - 2.0 * pad_x;
 
-        // background image (cover-fit). When a wraparound photo exists the front
-        // is its right slice; else bg.jpg centered.
-        let (bg_file, pos_right) = match &r.wrap_bg {
-            Some(w) => (w.clone(), true),
-            None => (r.bg.clone(), false),
+        // Background image (cover-fit).
+        //
+        // With a wraparound photo the eBook front is a CROP of the print front panel:
+        // one design, two aspect ratios (0.625 here vs the panel's trim ratio). To
+        // show the SAME window of the art, the photo is laid out on the full panel
+        // width — the MASTER, `master_w` — and the 1600-wide viewBox crops it. The art
+        // is anchored to the master's right edge, which is also the wrap's right edge,
+        // so the window does not move when the spine width (page count) changes.
+        // See `wrap_svg`: the panel's core is this front, scaled by fh/2560.
+        //
+        // No wraparound photo => bg.jpg, cover-fit and centered, as before.
+        let master_w = (H * (r.trim_w + r.bleed) / (r.trim_h + 2.0 * r.bleed)).max(W);
+        let (bg_file, img_x, img_w, par) = match &r.wrap_bg {
+            Some(w) => (w.clone(), -(master_w - W) / 2.0, master_w, "xMaxYMid slice"),
+            None => (r.bg.clone(), 0.0, W, "xMidYMid slice"),
         };
         let mut defs = String::new();
         let mut image = String::new();
         let filt_id = filter_def(&mut defs, &r.filt, "imgfilt");
-        let par = if pos_right { "xMaxYMid slice" } else { "xMidYMid slice" };
         // No art on disk => no <image>; the template's {{BGCOLOR}} rect shows
         // through and the cover renders on a solid colour.
         if let Some(href) =
             data_uri_opt(&cover_dir.join(&bg_file)).with_context(|| format!("embedding {bg_file}"))?
         {
             image.push_str(&format!(
-                "<image x=\"0\" y=\"0\" width=\"{W}\" height=\"{H}\" preserveAspectRatio=\"{par}\" xlink:href=\"{href}\"{}/>",
+                "<image x=\"{}\" y=\"0\" width=\"{}\" height=\"{H}\" preserveAspectRatio=\"{par}\" xlink:href=\"{href}\"{}/>",
+                fmt(img_x),
+                fmt(img_w),
                 attr_filter(&filt_id)
             ));
         }
@@ -375,9 +386,9 @@ impl CoverRenderer {
         // front-only; the wrap keeps its own math. Absent => unchanged flex layout.
         let mut text = String::new();
         if r.layout.as_ref().map_or(false, |l| {
-            l.title.is_some() || l.subtitle.is_some() || l.author.is_some()
+            l.title.is_some() || l.subtitle.is_some() || l.author.is_some() || l.badge.is_some()
         }) {
-            self.front_absolute(&mut text, &mut defs, r, W, H, top, cx);
+            self.front_absolute(&mut text, &mut defs, r, W, H);
             return Ok(FRONT_SVG_TMPL
                 .replace("{{DEFS}}", &defs)
                 .replace("{{BGCOLOR}}", &xml_attr(&r.bgcolor))
@@ -531,29 +542,26 @@ impl CoverRenderer {
         r: &Resolved,
         w: f64,
         h: f64,
-        top: f64,
-        cx: f64,
     ) {
         let l = r.layout.as_ref();
 
-        // Series badge — not an editor element; stays at the default top center.
-        self.emit_line(
+        // Series badge (absolute; default: top center, where the flex badge sat).
+        let badge = badge_element(r, l.and_then(|l| l.badge.as_ref()), front_badge_geom());
+        self.emit_abs_element(
             text,
-            &up(&r.badge),
-            cx,
-            top + baseline(32.0, 1.2, self.vmetrics("Montserrat", 400, false)),
-            &TextStyle {
-                family: "Montserrat",
-                weight: 400,
-                size: 32.0,
-                italic: false,
-                letter_spacing: 9.0,
-                fill: &r.badge_color,
-                opacity: 0.95,
-                stroke: &r.badge_stroke,
-                shadow_id: "",
-                anchor: "middle",
-            },
+            defs,
+            Some(&badge),
+            front_badge_geom(),
+            &r.badge,
+            &r.badge_color,
+            "Montserrat",
+            "normal",
+            "none",
+            "bdgsh",
+            w,
+            h,
+            0.0,
+            Some("front:badge"),
         );
 
         // Title (absolute).
@@ -621,6 +629,70 @@ impl CoverRenderer {
             0.0,
             Some("front:author"),
         );
+    }
+
+    /// The spine, as an editable block. Its text reads bottom-to-top, so the usual
+    /// block model is rotated: `wPct` is the run's length ALONG the spine (a fraction
+    /// of the wrap height) and `xPct` places it ACROSS the spine's width.
+    ///
+    /// Centering: `rotate(-90)` maps the text's local +y onto the page's +x, so the
+    /// glyphs' own baseline offset pushes them off the spine's centre line. Shifting
+    /// the baseline by half the em box (asc - desc) puts the glyph box — not the
+    /// baseline — on the centre, which is what "centred on the spine" means.
+    fn emit_spine(&self, body: &mut String, r: &Resolved, spine_x: f64, spine_w: f64, fh: f64) {
+        let el = r.wrap_layout.as_ref().and_then(|w| w.spine.as_ref());
+        let def_text = format!("{}   \u{00b7}   {}", one_line(&r.title), one_line(&r.author));
+
+        let x_pct = el.and_then(|e| e.x_pct).unwrap_or(0.5);
+        let y_pct = el.and_then(|e| e.y_pct).unwrap_or(0.5);
+        let font_pct = el.and_then(|e| e.font_pct).unwrap_or(14.0 / fh);
+        let fill = el.and_then(|e| e.fill.clone()).unwrap_or_else(|| r.title_color.clone());
+        let family = el
+            .and_then(|e| e.font_family.clone())
+            .unwrap_or_else(|| r.serif.clone());
+        let style = el
+            .and_then(|e| e.font_style.clone())
+            .unwrap_or_else(|| "normal".to_string());
+        let ls_em = el.and_then(|e| e.letter_spacing).unwrap_or(2.0 / 14.0);
+        let opacity = el.and_then(|e| e.opacity).unwrap_or(1.0).clamp(0.0, 1.0);
+
+        let mut content = el
+            .and_then(|e| e.text.clone())
+            .map(|t| t.plain())
+            .filter(|t| !t.trim().is_empty())
+            .unwrap_or(def_text);
+        content = one_line(&content);
+        match el.and_then(|e| e.text_transform.as_deref()) {
+            Some("upper") => content = content.to_uppercase(),
+            Some("lower") => content = content.to_lowercase(),
+            _ => {}
+        }
+
+        let size = font_pct * fh;
+        let italic = style.contains("italic");
+        let weight: u16 = if style.contains("bold") { 700 } else { 400 };
+        let (asc, desc) = self.vmetrics(&family, weight, italic);
+        let cx = spine_x + x_pct * spine_w;
+        let cy = y_pct * fh;
+        let dy = (asc - desc) / 2.0 * size; // baseline → glyph-box centre (see above)
+
+        body.push_str("<g data-drag=\"spine:text\">");
+        body.push_str(&format!(
+            "<text transform=\"translate({},{}) rotate(-90)\" x=\"0\" y=\"{}\" text-anchor=\"middle\" \
+             font-family=\"'{}'\" font-size=\"{}\" font-weight=\"{weight}\"{} letter-spacing=\"{}\" \
+             fill=\"{}\" opacity=\"{}\">{}</text>",
+            fmt(cx),
+            fmt(cy),
+            fmt(dy),
+            xml_attr(&family),
+            fmt(size),
+            if italic { " font-style=\"italic\"" } else { "" },
+            fmt(ls_em * size),
+            xml_attr(&fill),
+            fmt(opacity),
+            esc(&content)
+        ));
+        body.push_str("</g>");
     }
 
     /// Emit one absolutely-positioned text block, taking each field from `el` when
@@ -715,7 +787,7 @@ impl CoverRenderer {
         }
         let has_runs = runs.iter().any(|r| r.styled());
         let lh = el.and_then(|e| e.line_height).filter(|v| *v > 0.0).unwrap_or(1.0);
-        let ls = el.and_then(|e| e.letter_spacing).unwrap_or(0.0);
+        let ls_em = el.and_then(|e| e.letter_spacing).unwrap_or(0.0);
         let opacity = el.and_then(|e| e.opacity).unwrap_or(1.0).clamp(0.0, 1.0);
         let el_stroke = el.and_then(|e| e.stroke.clone());
         let draw_shadow = el.and_then(|e| e.shadow).unwrap_or(true);
@@ -726,6 +798,9 @@ impl CoverRenderer {
         };
 
         let size = font_pct * h;
+        // Tracking is stored as a multiple of the font size, so the same element
+        // renders proportionally on the eBook front (h = 2560) and the wrap (h = 888).
+        let ls = ls_em * size;
         let block_cx = x0 + x_pct * w;
         let box_w = (w_pct * w).max(1.0);
         // Alignment shifts the text anchor point to the box's left/right edge; the
@@ -1233,12 +1308,14 @@ impl CoverRenderer {
             style: &r.blurb_emph_style,
         };
 
-        // Badge (absolute; default: top-center, small caps like the flex badge).
+        // Badge (absolute; default: top-center, tracked-out caps like the flex badge).
+        let bgeom = (0.5, 0.085, w_frac, 13.0 / fh);
+        let badge = badge_element(r, wl.and_then(|w| w.badge.as_ref()), bgeom);
         self.emit_abs_element(
             body,
             defs,
-            wl.and_then(|w| w.badge.as_ref()),
-            (0.5, 0.085, w_frac, 13.0 / fh),
+            Some(&badge),
+            bgeom,
             &r.badge,
             &r.badge_color,
             "Montserrat",
@@ -1304,6 +1381,19 @@ impl CoverRenderer {
         let front_x = back_w + spine_w;
         let front_w = (r.trim_w + r.bleed) * DPI;
 
+        // The CORE: the eBook front (1600x2560), scaled by `k` and centered in the
+        // print front panel. The two surfaces have different aspect ratios, so one is
+        // a crop of the other — laying the front text out in the core (never in the
+        // full panel) is what makes them break lines identically, because every length
+        // maps through the single factor `k`. A box that is wPct of the eBook width is
+        // then wPct of the core width, and type that is fontPct of the eBook height is
+        // fontPct of the core height. Laying it out in `front_w` instead stretched the
+        // box ~6% wider relative to the type (front_w/1600 != fh/2560), which is what
+        // used to tip a two-line title into three lines on the print cover only.
+        let k = fh / 2560.0;
+        let core_w = (1600.0 * k).min(front_w);
+        let core_x = front_x + (front_w - core_w) / 2.0;
+
         let mut defs = String::new();
         let mut body = String::new();
 
@@ -1312,8 +1402,12 @@ impl CoverRenderer {
         let filt_id = filter_def(&mut defs, &r.filt, "imgfilt");
         if let Some(w) = &r.wrap_bg {
             let href = data_uri(&cover_dir.join(w))?;
+            // Right-anchored, not centered: the front panel is flush with the wrap's
+            // right edge, so anchoring the art there fixes the panel's window into the
+            // photo regardless of the spine width. That window is what the eBook front
+            // reproduces (see `front_svg`), which is what keeps the two in register.
             wrapbg.push_str(&format!(
-                "<image x=\"0\" y=\"0\" width=\"{fw}\" height=\"{fh}\" preserveAspectRatio=\"xMidYMid slice\" xlink:href=\"{href}\"{}/>",
+                "<image x=\"0\" y=\"0\" width=\"{fw}\" height=\"{fh}\" preserveAspectRatio=\"xMaxYMid slice\" xlink:href=\"{href}\"{}/>",
                 attr_filter(&filt_id)
             ));
         } else {
@@ -1457,16 +1551,7 @@ impl CoverRenderer {
         // KDP allows spine text only at >=100 pages (matches make-covers.py); below
         // that the spine stays blank but keeps its accent border rules.
         if pages >= 100 {
-            let scx = spine_x + spine_w / 2.0;
-            let scy = fh / 2.0;
-            let spine_text = format!("{}   \u{00b7}   {}", r.title, r.author);
-            body.push_str(&format!(
-                "<text transform=\"translate({scx},{scy}) rotate(-90)\" text-anchor=\"middle\" \
-                 font-family=\"'{}'\" font-size=\"14\" letter-spacing=\"2\" fill=\"{}\">{}</text>",
-                xml_attr(&r.serif),
-                xml_attr(&r.title_color),
-                esc(&spine_text)
-            ));
+            self.emit_spine(&mut body, r, spine_x, spine_w, fh);
         }
 
         // ---- FRONT panel ------------------------------------------------
@@ -1492,6 +1577,18 @@ impl CoverRenderer {
         body.push_str(&format!(
             "<rect x=\"{front_x}\" y=\"0\" width=\"{front_w}\" height=\"{fh}\" fill=\"url(#grad)\"/>"
         ));
+        // Accent keyline, inset in the CORE — the same rect the eBook front draws
+        // (front.svg.tmpl: 56,56 1488x2448), scaled by `k`. It sits inside the crop,
+        // so both surfaces show it in the same place instead of only the eBook.
+        body.push_str(&format!(
+            "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"none\" stroke=\"{}\" stroke-width=\"{}\" stroke-opacity=\"0.45\"/>",
+            fmt(core_x + 56.0 * k),
+            fmt(56.0 * k),
+            fmt(1488.0 * k),
+            fmt(2448.0 * k),
+            xml_attr(&r.accent),
+            fmt(2.0 * k)
+        ));
 
         // front title size
         let ft_px = r.wrap_title_px.unwrap_or((r.title_size * 0.30).round());
@@ -1512,6 +1609,94 @@ impl CoverRenderer {
         let fgap2 = (fbottom - ftop - fixed).max(0.0);
 
         let mut fy = ftop;
+        let has_layout = r.layout.as_ref().map_or(false, |l| {
+            l.title.is_some() || l.subtitle.is_some() || l.author.is_some() || l.badge.is_some()
+        });
+        if has_layout {
+            // Web-editor absolute layout ([cover.<lang>.layout]) mapped into the CORE
+            // (see above), not the full panel: the print front is then the eBook front
+            // scaled by `k`, down to the line breaks. Every default below is the eBook
+            // front's own default divided by 2560 — the core's height in eBook units —
+            // for the same reason.
+            let l = r.layout.as_ref();
+            let badge = badge_element(r, l.and_then(|l| l.badge.as_ref()), front_badge_geom());
+            self.emit_abs_element(
+                &mut body,
+                &mut defs,
+                Some(&badge),
+                front_badge_geom(),
+                &r.badge,
+                &r.badge_color,
+                "Montserrat",
+                "normal",
+                "none",
+                "fbdgsh",
+                core_w,
+                fh,
+                core_x,
+                Some("front:badge"),
+            );
+            let (t_top, t_h, t_cx) = self.emit_abs_element(
+                &mut body,
+                &mut defs,
+                l.and_then(|l| l.title.as_ref()),
+                (0.5, 0.62, 0.80, r.title_size / 2560.0),
+                &r.title,
+                &r.title_color,
+                &r.serif,
+                "bold",
+                &ft_shadow_css,
+                "ftsh",
+                core_w,
+                fh,
+                core_x,
+                Some("front:title"),
+            );
+            if r.rule {
+                let rule_y = t_top + t_h + 46.0 * k;
+                body.push_str(&format!(
+                    "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{}\" opacity=\"0.85\"/>",
+                    fmt(t_cx - 110.0 * k),
+                    fmt(rule_y),
+                    fmt(220.0 * k),
+                    fmt(3.0 * k),
+                    r.accent
+                ));
+            }
+            let fsub_style = if r.sub_italic == "italic" { "italic" } else { "normal" };
+            self.emit_abs_element(
+                &mut body,
+                &mut defs,
+                l.and_then(|l| l.subtitle.as_ref()),
+                (0.5, 0.76, 0.85, 48.0 / 2560.0),
+                &r.sub,
+                &r.sub_color,
+                &r.sub_font,
+                fsub_style,
+                &r.sub_shadow,
+                "fssh",
+                core_w,
+                fh,
+                core_x,
+                Some("front:subtitle"),
+            );
+            self.emit_abs_element(
+                &mut body,
+                &mut defs,
+                l.and_then(|l| l.author.as_ref()),
+                (0.5, 0.93, 0.80, 42.0 / 2560.0),
+                &r.author,
+                &r.author_color,
+                "Montserrat",
+                "normal",
+                "none",
+                "faush",
+                core_w,
+                fh,
+                core_x,
+                Some("front:author"),
+            );
+        } else {
         self.emit_line(
             &mut body,
             &up(&r.badge),
@@ -1530,75 +1715,6 @@ impl CoverRenderer {
                 anchor: "middle",
             },
         );
-        let has_layout = r.layout.as_ref().map_or(false, |l| {
-            l.title.is_some() || l.subtitle.is_some() || l.author.is_some()
-        });
-        if has_layout {
-            // Web-editor absolute layout ([cover.<lang>.layout]) mapped into the
-            // front panel: offset by front_x, sized to front_w x fh, so the wrap
-            // front matches the eBook front (which is the edited surface). Without
-            // this the wrap kept its own flex math and the title landed off-band.
-            let l = r.layout.as_ref();
-            let (t_top, t_h, t_cx) = self.emit_abs_element(
-                &mut body,
-                &mut defs,
-                l.and_then(|l| l.title.as_ref()),
-                (0.5, 0.62, 0.80, ft_px / fh),
-                &r.title,
-                &r.title_color,
-                &r.serif,
-                "bold",
-                &ft_shadow_css,
-                "ftsh",
-                front_w,
-                fh,
-                front_x,
-                Some("front:title"),
-            );
-            if r.rule {
-                let rule_y = t_top + t_h + 0.18 * DPI;
-                body.push_str(&format!(
-                    "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"2\" fill=\"{}\" opacity=\"0.85\"/>",
-                    fmt(t_cx - 0.6 * DPI),
-                    fmt(rule_y),
-                    fmt(1.2 * DPI),
-                    r.accent
-                ));
-            }
-            let fsub_style = if r.sub_italic == "italic" { "italic" } else { "normal" };
-            self.emit_abs_element(
-                &mut body,
-                &mut defs,
-                l.and_then(|l| l.subtitle.as_ref()),
-                (0.5, 0.76, 0.85, 18.0 / fh),
-                &r.sub,
-                &r.sub_color,
-                &r.sub_font,
-                fsub_style,
-                &r.sub_shadow,
-                "fssh",
-                front_w,
-                fh,
-                front_x,
-                Some("front:subtitle"),
-            );
-            self.emit_abs_element(
-                &mut body,
-                &mut defs,
-                l.and_then(|l| l.author.as_ref()),
-                (0.5, 0.93, 0.80, 15.0 / fh),
-                &r.author,
-                &r.author_color,
-                "Montserrat",
-                "normal",
-                "none",
-                "faush",
-                front_w,
-                fh,
-                front_x,
-                Some("front:author"),
-            );
-        } else {
         fy += fbadge_h + fgap1;
         let ftvm = self.vmetrics(&r.serif, 800, false);
         let ftshadow = shadow_def(&mut defs, &ft_shadow_css, "ftsh");
@@ -1683,6 +1799,9 @@ impl CoverRenderer {
             .replace("{{BACK_W_PX}}", &fmt(back_w))
             .replace("{{FRONT_X_PX}}", &fmt(front_x))
             .replace("{{FRONT_W_PX}}", &fmt(front_w))
+            .replace("{{CORE_X_PX}}", &fmt(core_x))
+            .replace("{{CORE_W_PX}}", &fmt(core_w))
+            .replace("{{BLEED_PX}}", &fmt(r.bleed * DPI))
             .replace("{{BGCOLOR}}", &xml_attr(&r.bgcolor))
             .replace("{{DEFS}}", &defs)
             .replace("{{WRAPBG}}", &wrapbg)
@@ -1693,6 +1812,48 @@ impl CoverRenderer {
 // ---------------------------------------------------------------------------
 // Layout / text helpers
 // ---------------------------------------------------------------------------
+
+/// The series badge as an editable block, so the editor can drag and restyle it
+/// like any other text. The base carries the look the badge has always had
+/// (Montserrat in `badge_color`, uppercase, tracked out, 0.95 opacity), which is
+/// why an untouched cover still renders as before; a saved badge overlays it field
+/// by field. `geom` is the panel's default (x, y, w, font) as fractions — the front
+/// panels share [`config::BADGE_Y_PCT`] & co; the back panel has its own.
+fn badge_element(r: &Resolved, saved: Option<&CoverElement>, geom: (f64, f64, f64, f64)) -> CoverElement {
+    let (x_pct, y_pct, w_pct, font_pct) = geom;
+    let base = CoverElement {
+        x_pct: Some(x_pct),
+        y_pct: Some(y_pct),
+        w_pct: Some(w_pct),
+        font_pct: Some(font_pct),
+        fill: Some(r.badge_color.clone()),
+        font_family: Some("Montserrat".to_string()),
+        font_style: Some("normal".to_string()),
+        line_height: Some(crate::config::BADGE_LINE_HEIGHT),
+        letter_spacing: Some(crate::config::BADGE_TRACKING),
+        text_transform: Some("upper".to_string()),
+        opacity: Some(crate::config::BADGE_OPACITY),
+        stroke: Some(r.badge_stroke.clone()),
+        ..Default::default()
+    };
+    match saved {
+        Some(o) => base.over(o),
+        None => base,
+    }
+}
+
+/// The shared front-panel badge geometry (eBook front and the wrap's front panel
+/// are the same design, so they seed from the same fractions).
+fn front_badge_geom() -> (f64, f64, f64, f64) {
+    use crate::config::{BADGE_FONT_PCT, BADGE_W_PCT, BADGE_Y_PCT};
+    (0.5, BADGE_Y_PCT, BADGE_W_PCT, BADGE_FONT_PCT)
+}
+
+/// Flatten hard line breaks — a spine is one line, but a cover title carries the
+/// break the front panel wants ("No hay plata\nen la isla de las ratas").
+fn one_line(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
 
 /// CSS line box height for a font size + line-height multiple.
 fn line_box(size: f64, lh: f64) -> f64 {

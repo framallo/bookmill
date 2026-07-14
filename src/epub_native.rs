@@ -27,8 +27,11 @@ const CODE_CSS: &str = include_str!("../templates/epub-code.css");
 use anyhow::{Context, Result};
 use comrak::plugins::syntect::SyntectAdapter;
 use comrak::{markdown_to_html, markdown_to_html_with_plugins, Options, Plugins};
-use epub_builder::{EpubBuilder, EpubContent, EpubVersion, ReferenceType, ZipLibrary};
+use epub_builder::{
+    EpubBuilder, EpubContent, EpubVersion, MetadataOpfV3, ReferenceType, ZipLibrary,
+};
 use std::collections::BTreeSet;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 /// Build one EPUB (one language / one retail-or-KDP flavor) to `out`.
@@ -54,6 +57,15 @@ pub fn run(
     b.metadata("generator", "bookmill").map_err(anyhow::Error::msg)?;
     b.metadata("toc_name", if lang == "es" { "Índice" } else { "Contents" })
         .map_err(anyhow::Error::msg)?;
+    // Listing copy → `dc:description` / `dc:subject`. Retailers read both straight
+    // off the OPF. Only emitted when the book actually has a `[listing.<lang>]`
+    // blurb/keywords — never invented.
+    if let Some(d) = &meta.description {
+        b.metadata("description", d.as_str()).map_err(anyhow::Error::msg)?;
+    }
+    for kw in &meta.subjects {
+        b.metadata("subject", kw.as_str()).map_err(anyhow::Error::msg)?;
+    }
 
     // Stylesheet: the repo's css/epub.css (optional) followed by the bundled
     // code-highlight CSS, so fenced code is styled in every book with no per-repo
@@ -111,6 +123,10 @@ pub fn run(
 
     // Chapters: one content document each, depth-1 nav entry per chapter.
     let mut added_imgs: BTreeSet<String> = BTreeSet::new();
+    // Accessibility metadata is DERIVED, never asserted: count the images actually
+    // rendered and how many carry real alt text, so the OPF can't claim a feature the
+    // book doesn't have. See `a11y_metadata`.
+    let (mut imgs, mut imgs_with_alt) = (0usize, 0usize);
     for (i, ch) in chaps.iter().enumerate() {
         let md = std::fs::read_to_string(ch)
             .with_context(|| format!("reading {}", ch.display()))?;
@@ -138,6 +154,9 @@ pub fn run(
         // before comrak) re-applied to the rendered <img> by matching src.
         let html = apply_img_styles(&html, &img_styles(&md));
         let body = if captions { figcaption_plates(&html) } else { html };
+        let (n, with_alt) = count_imgs(&body);
+        imgs += n;
+        imgs_with_alt += with_alt;
         let title = nav_title.unwrap_or_else(|| chapter_fallback_title(ch, i));
         let doc = xhtml_doc(lang, &title, &body);
         let href = format!("chapter-{:03}.xhtml", i + 1);
@@ -149,13 +168,171 @@ pub fn run(
         b.add_content(content).map_err(anyhow::Error::msg)?;
     }
 
+    // Accessibility metadata (EPUB Accessibility 1.1 / schema.org). The EU
+    // Accessibility Act makes this mandatory for ebooks sold in the EU from June
+    // 2025, and retailers surface it in the listing. Emitted LAST because it is
+    // computed from what the chapters actually contained.
+    for (property, content) in a11y_metadata(lang, imgs, imgs_with_alt) {
+        b.add_metadata_opf(Box::new(MetadataOpfV3::new(property, content)));
+    }
+
     if let Some(parent) = out.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let f = std::fs::File::create(out)
         .with_context(|| format!("creating {}", out.display()))?;
     b.generate(f).map_err(anyhow::Error::msg)?;
+
+    // Accessibility fixes the builder's fixed nav template cannot express (see
+    // `a11y_fixup`): a language on the generated nav/TOC documents, plus the
+    // title-page / copyright-page landmarks.
+    let mut marks: Vec<(&str, &str, String)> = vec![(
+        "titlepage",
+        "title.xhtml",
+        if lang == "es" { "Portada" } else { "Title Page" }.to_string(),
+    )];
+    if cepub.is_some() {
+        marks.push((
+            "copyright-page",
+            "copyright.xhtml",
+            if lang == "es" { "Créditos" } else { "Copyright" }.to_string(),
+        ));
+    }
+    a11y_fixup(out, lang, &marks)
+        .with_context(|| format!("accessibility fixup of {}", out.display()))?;
     Ok(())
+}
+
+/// Post-pass over the generated EPUB zip, applying the two accessibility fixes the
+/// `epub-builder` nav template cannot express:
+///
+///   * **a language on `nav.xhtml` / `toc.xhtml`** — the crate's template hardcodes a
+///     bare `<html xmlns=…>`, so those two generated documents were the only ones in
+///     the book with no `lang`/`xml:lang` (every chapter already gets one from
+///     [`xhtml_doc`]).
+///   * **extra `landmarks` entries.** `epub-builder` only emits a landmark for a
+///     document carrying *both* a `ReferenceType` and a nav title — but giving the
+///     title page a nav title would also push it into the visible TOC (`add_content`
+///     adds any titled document to the TOC). We want the landmark *without* the TOC
+///     entry, so the title/copyright landmarks are injected here instead.
+///
+/// Rezips mimetype-first/STORED, mirroring [`crate::epub_shrink`] (which runs after
+/// this and preserves what we write).
+///
+/// Note: no `cover` landmark is emitted — a landmark must point at a content
+/// document, and the cover is embedded as an image resource (declared in the OPF with
+/// `properties="cover-image"`, which is how EPUB3 readers surface it), not as a page.
+/// Synthesising a cover *page* just to satisfy the landmark would change the reading
+/// order of every book, so we don't.
+fn a11y_fixup(epub: &Path, lang: &str, marks: &[(&str, &str, String)]) -> Result<()> {
+    let bytes = std::fs::read(epub).with_context(|| format!("reading {}", epub.display()))?;
+    let mut zin = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).context("opening epub zip")?;
+
+    struct Entry {
+        name: String,
+        is_dir: bool,
+        data: Vec<u8>,
+    }
+    let mut entries: Vec<Entry> = Vec::with_capacity(zin.len());
+    for i in 0..zin.len() {
+        let mut f = zin.by_index(i)?;
+        let (name, is_dir) = (f.name().to_string(), f.is_dir());
+        let mut data = Vec::new();
+        if !is_dir {
+            f.read_to_end(&mut data)?;
+        }
+        entries.push(Entry { name, is_dir, data });
+    }
+
+    for e in entries.iter_mut() {
+        let base = e.name.rsplit('/').next().unwrap_or(&e.name);
+        if !matches!(base, "nav.xhtml" | "toc.xhtml") {
+            continue;
+        }
+        let Ok(s) = std::str::from_utf8(&e.data) else { continue };
+        let mut html = html_lang(s, lang);
+        if base == "nav.xhtml" {
+            html = inject_landmarks(&html, marks);
+        }
+        e.data = html.into_bytes();
+    }
+
+    // Rezip: mimetype first + STORED, the rest DEFLATED, original order.
+    let tmp = epub.with_extension("epub.a11y");
+    {
+        let file = std::fs::File::create(&tmp)
+            .with_context(|| format!("creating {}", tmp.display()))?;
+        let mut zout = zip::ZipWriter::new(std::io::BufWriter::new(file));
+        let stored =
+            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let deflated = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        if let Some(mt) = entries.iter().find(|e| e.name == "mimetype") {
+            zout.start_file("mimetype", stored)?;
+            zout.write_all(&mt.data)?;
+        }
+        for e in &entries {
+            if e.name == "mimetype" {
+                continue;
+            }
+            if e.is_dir {
+                zout.add_directory(e.name.trim_end_matches('/'), deflated)?;
+            } else {
+                zout.start_file(&e.name, deflated)?;
+                zout.write_all(&e.data)?;
+            }
+        }
+        zout.finish()?;
+    }
+    std::fs::rename(&tmp, epub).with_context(|| format!("replacing {}", epub.display()))?;
+    Ok(())
+}
+
+/// Add `lang`/`xml:lang` to a document's `<html>` tag. A tag that already declares a
+/// language is left alone (we never overwrite an explicit one).
+fn html_lang(html: &str, lang: &str) -> String {
+    let Some(start) = html.find("<html") else { return html.to_string() };
+    let Some(end_rel) = html[start..].find('>') else { return html.to_string() };
+    let end = start + end_rel;
+    let tag = &html[start..end];
+    if tag.contains("lang=") {
+        return html.to_string();
+    }
+    let lang = xml_escape(lang);
+    format!(
+        "{}{} lang=\"{lang}\" xml:lang=\"{lang}\"{}",
+        &html[..start],
+        tag,
+        &html[end..]
+    )
+}
+
+/// Insert `<li>` landmark entries at the head of the `landmarks` nav's `<ol>`.
+/// A nav with no `<ol>` (no landmarks at all) is returned unchanged — we add to an
+/// existing list rather than inventing the structure.
+fn inject_landmarks(nav: &str, marks: &[(&str, &str, String)]) -> String {
+    if marks.is_empty() {
+        return nav.to_string();
+    }
+    let Some(lm) = nav.find("epub:type = \"landmarks\"").or_else(|| nav.find("epub:type=\"landmarks\"")) else {
+        return nav.to_string();
+    };
+    let Some(ol_rel) = nav[lm..].find("<ol>") else { return nav.to_string() };
+    let at = lm + ol_rel + "<ol>".len();
+    let mut items = String::new();
+    for (etype, href, label) in marks {
+        // Don't duplicate a landmark the builder already emitted for this document.
+        if nav.contains(&format!("href=\"{href}\"")) && nav[lm..].contains(&format!("href=\"{href}\"")) {
+            continue;
+        }
+        items.push_str(&format!(
+            "\n      <li><a epub:type=\"{}\" href=\"{}\">{}</a></li>",
+            xml_escape(etype),
+            xml_escape(href),
+            xml_escape(label),
+        ));
+    }
+    format!("{}{}{}", &nav[..at], items, &nav[at..])
 }
 
 /// comrak options: GFM features used by the books (tables, footnotes, …) with
@@ -234,6 +411,92 @@ fn clean_chapter(md: &str) -> (String, Option<String>) {
         out.push('\n');
     }
     (out, nav_title)
+}
+
+/// Images in the rendered body, and how many carry non-empty alt text.
+fn count_imgs(html: &str) -> (usize, usize) {
+    let (mut n, mut with_alt) = (0, 0);
+    let mut rest = html;
+    while let Some(pos) = rest.find("<img ") {
+        let Some(end_rel) = rest[pos..].find('>') else { break };
+        let tag = &rest[pos..pos + end_rel];
+        n += 1;
+        if attr_value(tag, "alt").is_some_and(|a| !a.trim().is_empty()) {
+            with_alt += 1;
+        }
+        rest = &rest[pos + end_rel..];
+    }
+    (n, with_alt)
+}
+
+/// Accessibility metadata for the OPF, **derived from the book's actual content**.
+///
+/// The rule that matters: never claim a feature the book doesn't have. A text-only
+/// novel is `textual` and needs no more. A book with pictures is also `visual`, and
+/// may only advertise `alternativeText` — and a text-only reading path
+/// (`accessModeSufficient=textual`) — when *every* image really carries alt text.
+///
+/// Deliberately omitted: `dcterms:conformsTo` (a WCAG conformance claim) and
+/// `a11y:certifiedBy`. Those assert an audit that nobody has performed; publishing
+/// them unearned would be a false accessibility claim.
+fn a11y_metadata(lang: &str, imgs: usize, imgs_with_alt: usize) -> Vec<(String, String)> {
+    let all_described = imgs == 0 || imgs == imgs_with_alt;
+    let mut m: Vec<(String, String)> = Vec::new();
+    let mut push = |p: &str, v: &str| m.push((p.to_string(), v.to_string()));
+
+    push("schema:accessMode", "textual");
+    if imgs > 0 {
+        push("schema:accessMode", "visual");
+    }
+    // How the content can be consumed END TO END. Text alone suffices when there are
+    // no images, or when every image is described.
+    if all_described {
+        push("schema:accessModeSufficient", "textual");
+    }
+    if imgs > 0 {
+        push("schema:accessModeSufficient", "textual,visual");
+    }
+
+    push("schema:accessibilityFeature", "structuralNavigation");
+    push("schema:accessibilityFeature", "tableOfContents");
+    push("schema:accessibilityFeature", "readingOrder");
+    if imgs > 0 && all_described {
+        push("schema:accessibilityFeature", "alternativeText");
+    }
+    // Reflowable text, no flashing, no motion, no audio.
+    push("schema:accessibilityHazard", "none");
+
+    let summary = match (lang, imgs, all_described) {
+        ("es", 0, _) => "Publicación de texto reflujable, sin imágenes. Estructura de \
+             encabezados y tabla de contenidos navegable; compatible con lectores de \
+             pantalla y con la ampliación o el cambio de tipografía. Sin riesgos de \
+             destellos ni movimiento."
+            .to_string(),
+        ("es", _, true) => "Publicación de texto reflujable. Todas las ilustraciones \
+             llevan texto alternativo, por lo que el libro puede leerse solo con texto. \
+             Estructura de encabezados y tabla de contenidos navegable; compatible con \
+             lectores de pantalla. Sin riesgos de destellos ni movimiento."
+            .to_string(),
+        ("es", _, false) => "Publicación de texto reflujable con ilustraciones. Algunas \
+             imágenes no tienen texto alternativo. Estructura de encabezados y tabla de \
+             contenidos navegable. Sin riesgos de destellos ni movimiento."
+            .to_string(),
+        (_, 0, _) => "Reflowable text publication with no images. Navigable heading \
+             structure and table of contents; works with screen readers and with \
+             resized or substituted fonts. No flashing or motion hazards."
+            .to_string(),
+        (_, _, true) => "Reflowable text publication. Every illustration carries \
+             alternative text, so the book can be read as text alone. Navigable heading \
+             structure and table of contents; works with screen readers. No flashing or \
+             motion hazards."
+            .to_string(),
+        (_, _, false) => "Reflowable text publication with illustrations. Some images \
+             lack alternative text. Navigable heading structure and table of contents. \
+             No flashing or motion hazards."
+            .to_string(),
+    };
+    m.push(("schema:accessibilitySummary".to_string(), summary));
+    m
 }
 
 /// Turn each standalone plate-image paragraph (`<p><img … alt="…"/></p>`) into a
@@ -547,6 +810,85 @@ fn mime_for(ext: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn props(m: &[(String, String)], key: &str) -> Vec<String> {
+        m.iter()
+            .filter(|(p, _)| p == key)
+            .map(|(_, v)| v.clone())
+            .collect()
+    }
+
+    #[test]
+    fn a11y_text_only_book_is_textual_and_claims_no_images() {
+        let m = a11y_metadata("es", 0, 0);
+        assert_eq!(props(&m, "schema:accessMode"), ["textual"]);
+        assert_eq!(props(&m, "schema:accessModeSufficient"), ["textual"]);
+        assert!(!props(&m, "schema:accessibilityFeature").contains(&"alternativeText".into()));
+        assert_eq!(props(&m, "schema:accessibilityHazard"), ["none"]);
+    }
+
+    #[test]
+    fn a11y_illustrated_book_is_visual_and_claims_alt_text_when_every_image_has_it() {
+        let m = a11y_metadata("en", 12, 12);
+        assert_eq!(props(&m, "schema:accessMode"), ["textual", "visual"]);
+        // text alone is enough to read it, because every image is described
+        assert!(props(&m, "schema:accessModeSufficient").contains(&"textual".into()));
+        assert!(props(&m, "schema:accessibilityFeature").contains(&"alternativeText".into()));
+    }
+
+    #[test]
+    fn a11y_never_claims_alt_text_a_book_does_not_have() {
+        // One undescribed image is enough to lose BOTH the alternativeText feature
+        // and the text-only reading path. Claiming either would be a false
+        // accessibility claim, which is worse than declaring the gap honestly.
+        let m = a11y_metadata("en", 12, 11);
+        assert!(!props(&m, "schema:accessibilityFeature").contains(&"alternativeText".into()));
+        assert_eq!(props(&m, "schema:accessModeSufficient"), ["textual,visual"]);
+        assert!(m
+            .iter()
+            .any(|(p, v)| p == "schema:accessibilitySummary" && v.contains("lack alternative text")));
+    }
+
+    #[test]
+    fn adds_lang_to_the_generated_nav_which_the_builder_template_omits() {
+        // epub-builder's nav/toc template hardcodes a bare <html>, so those two were
+        // the only documents in the book with no language.
+        let nav = "<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"x\">\n<body/>\n</html>";
+        let out = html_lang(nav, "es");
+        assert!(out.contains("lang=\"es\" xml:lang=\"es\""));
+    }
+
+    #[test]
+    fn never_overwrites_a_language_that_is_already_declared() {
+        let doc = "<html lang=\"en\" xml:lang=\"en\"><body/></html>";
+        assert_eq!(html_lang(doc, "es"), doc);
+    }
+
+    #[test]
+    fn injects_titlepage_and_copyright_landmarks_without_touching_the_toc() {
+        let nav = "<nav epub:type = \"toc\" id=\"toc\">\n<ol>\n<li><a href=\"chapter-001.xhtml\">Uno</a></li>\n</ol>\n</nav>\n\
+<nav epub:type = \"landmarks\">\n    <ol>\n      <li><a epub:type=\"bodymatter\" href=\"chapter-001.xhtml\">Uno</a></li>\n    </ol>\n  </nav>";
+        let marks = vec![
+            ("titlepage", "title.xhtml", "Portada".to_string()),
+            ("copyright-page", "copyright.xhtml", "Créditos".to_string()),
+        ];
+        let out = inject_landmarks(nav, &marks);
+        assert!(out.contains("<a epub:type=\"titlepage\" href=\"title.xhtml\">Portada</a>"));
+        assert!(out.contains("<a epub:type=\"copyright-page\" href=\"copyright.xhtml\">Créditos</a>"));
+        // the existing bodymatter landmark survives ...
+        assert!(out.contains("epub:type=\"bodymatter\""));
+        // ... and the TOC gains no entries (that is the whole reason we inject here
+        // rather than titling the documents, which would list them in the contents).
+        let toc = &out[..out.find("landmarks").unwrap()];
+        assert!(!toc.contains("title.xhtml") && !toc.contains("copyright.xhtml"));
+    }
+
+    #[test]
+    fn landmark_injection_is_a_no_op_without_a_landmarks_nav() {
+        let nav = "<nav epub:type = \"toc\"><ol><li><a href=\"c1.xhtml\">Uno</a></li></ol></nav>";
+        let marks = vec![("titlepage", "title.xhtml", "Portada".to_string())];
+        assert_eq!(inject_landmarks(nav, &marks), nav);
+    }
 
     #[test]
     fn strips_heading_attrs_and_captures_title() {

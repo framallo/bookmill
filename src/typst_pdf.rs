@@ -44,7 +44,7 @@ use typst::utils::LazyHash;
 use typst::{Library, LibraryExt, World};
 use typst_kit::fonts::FontStore;
 use typst_layout::PagedDocument;
-use typst_pdf::PdfOptions;
+use typst_pdf::{PdfOptions, PdfStandard, PdfStandards};
 
 /// Render a book (one language / one PDF flavor) to `out` by compiling the
 /// generated Typst markup with the `typst` crate (no external CLI).
@@ -67,7 +67,7 @@ pub fn run(
     lang: &str,
     out: &Path,
 ) -> Result<()> {
-    let doc = build_doc(repo, meta, cpdf, chaps, openright, plate_framed, plate_width, captions, retail, grayscale, proof, cover, geometry, lang)?;
+    let (doc, described) = build_doc(repo, meta, cpdf, chaps, openright, plate_framed, plate_width, captions, retail, grayscale, proof, cover, geometry, lang)?;
     let odir = out.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(odir)?;
     // Keep the generated markup on disk for debugging only — it is NOT handed to
@@ -86,18 +86,63 @@ pub fn run(
             join_diags(diags.iter().map(|d| d.message.to_string()))
         )
     })?;
-    let pdf = typst_pdf::pdf(&document, &PdfOptions::default()).map_err(|diags| {
-        anyhow!(
-            "typst PDF export failed for {}:\n{}",
-            out.display(),
-            join_diags(diags.iter().map(|d| d.message.to_string()))
-        )
-    })?;
+    // Export. Typst tags every PDF it writes (structure tree, `/Lang` from
+    // `#set text(lang:)`, `/Title` from `#set document`); asking for **PDF/UA-1** on
+    // top makes it *validate* that tagging — above all, that every image carries alt
+    // text. So UA-1 is requested only when the book's images really are all described
+    // (`described`), the same "derive, never assert" rule the EPUB metadata follows.
+    // If the validated export still trips on something, fall back to the plain (still
+    // tagged) PDF and say so, rather than failing a build that used to work.
+    let ua1 = described.then(ua1_standards).flatten();
+    let mut opts = PdfOptions::default();
+    if let Some(std) = ua1.clone() {
+        opts.standards = std;
+    }
+    let plain = |d: &PagedDocument| {
+        typst_pdf::pdf(d, &PdfOptions::default()).map_err(|diags| {
+            anyhow!(
+                "typst PDF export failed for {}:\n{}",
+                out.display(),
+                join_diags(diags.iter().map(|d| d.message.to_string()))
+            )
+        })
+    };
+    let pdf = match typst_pdf::pdf(&document, &opts) {
+        Ok(bytes) => bytes,
+        Err(diags) if ua1.is_some() => {
+            eprintln!(
+                "  (pdf: PDF/UA-1 validation failed for {}; writing a tagged PDF with no UA-1 \
+                 claim: {})",
+                out.display(),
+                join_diags(diags.iter().map(|d| d.message.to_string()))
+            );
+            plain(&document)?
+        }
+        Err(_) => plain(&document)?,
+    };
     std::fs::write(out, pdf).with_context(|| format!("writing {}", out.display()))?;
     // Drop the memoization cache so repeated builds in one process don't grow it
     // unbounded (each book is a distinct document; nothing is reused).
     comemo::evict(0);
     Ok(())
+}
+
+/// The PDF/UA-1 export configuration, or `None` if this Typst build can't express it.
+fn ua1_standards() -> Option<PdfStandards> {
+    PdfStandards::new(&[PdfStandard::Ua_1]).ok()
+}
+
+/// True when every image this build renders carries alt text.
+///
+/// Decorative **spot** tailpieces are exempt: they ship as PDF *artifacts* (see
+/// [`emit_blocks`]), which is exactly what a decorative image should be, and an
+/// artifact needs no alt. Gates the PDF/UA-1 claim — we never assert a standard the
+/// content doesn't earn.
+fn all_images_described(blocks: &[Block]) -> bool {
+    blocks.iter().all(|b| match b {
+        Block::Image { spot, alt, .. } => *spot || !alt.trim().is_empty(),
+        _ => true,
+    })
 }
 
 fn join_diags(msgs: impl Iterator<Item = String>) -> String {
@@ -299,7 +344,7 @@ fn build_doc(
     cover: Option<&Path>,
     geometry: Option<PageGeometry>,
     lang: &str,
-) -> Result<String> {
+) -> Result<(String, bool)> {
     let g = geometry.unwrap_or(PageGeometry {
         pw: 6.0,
         ph: 9.0,
@@ -376,11 +421,11 @@ bottom: {bottom:.4}in, inside: {inside:.4}in, outside: {outside:.4}in))\n",
         // each via its `{width= height= fit= border=}` attributes (see emit_blocks).
         let pw = (plate_width.clamp(0.1, 1.0) * 100.0).round() as u32;
         s.push_str(&format!(
-            "#let plate(p, c: none, w: {pw}%, h: auto, ft: \"contain\", b: true) = [\n  \
+            "#let plate(p, c: none, w: {pw}%, h: auto, ft: \"contain\", b: true, a: none) = [\n  \
 #pagebreak(to: \"even\", weak: true)\n  \
 #v(1fr)\n  \
 #align(center, box(stroke: if b {{ 0.75pt + islatitle }} else {{ none }}, inset: 0pt, \
-image(p, width: w, height: h, fit: ft)))\n  \
+image(p, width: w, height: h, fit: ft, alt: a)))\n  \
 #if c != none [\n    #v(0.85em)\n    \
 #align(center, block(width: w, \
 text(size: 9.5pt, style: \"italic\", fill: luma(70))[#c]))\n  ]\n  \
@@ -392,17 +437,20 @@ text(size: 9.5pt, style: \"italic\", fill: luma(70))[#c]))\n  ]\n  \
         // (`c`/`w`/`h`/`ft`/`b`) are accepted + ignored — a full-bleed plate always
         // fills the page, so per-image width/fit/border can't apply.
         s.push_str(
-            "#let plate(p, c: none, w: none, h: none, ft: none, b: none) = [\n  \
+            "#let plate(p, c: none, w: none, h: none, ft: none, b: none, a: none) = [\n  \
 #pagebreak(to: \"even\", weak: true)\n  \
 #set page(margin: 0pt, header: none, footer: none)\n  \
-#image(p, width: 100%, height: 100%, fit: \"cover\")\n  #pagebreak()\n]\n",
+#image(p, width: 100%, height: 100%, fit: \"cover\", alt: a)\n  #pagebreak()\n]\n",
         );
     }
-    // small centered tailpiece (spot)
+    // Small centered tailpiece (spot). Fit inside a 2.4in box (preserve aspect),
+    // mirroring pandoc's keepaspectratio — a tall vignette stays narrow so it keeps
+    // ≥300dpi. Wrapped in `pdf.artifact`: a spot is purely decorative (the EPUB drops
+    // it entirely), and a decorative image belongs in the tag tree as an artifact, not
+    // as an undescribed figure — that's what keeps it out of a screen reader's way.
     s.push_str(
-        // Fit inside a 2.4in box (preserve aspect), mirroring pandoc's
-        // keepaspectratio — a tall vignette stays narrow so it keeps ≥300dpi.
-        "#let spot(p) = { v(1.5em); align(center, image(p, width: 2.4in, height: 2.4in, fit: \"contain\")); v(1em) }\n",
+        "#let spot(p) = { v(1.5em); pdf.artifact(kind: \"other\", \
+align(center, image(p, width: 2.4in, height: 2.4in, fit: \"contain\"))); v(1em) }\n",
     );
     // centered scene break
     s.push_str(
@@ -434,9 +482,17 @@ text(weight: \"bold\", size: 13pt, it.body))\n",
     if retail {
         if let Some(cv) = cover {
             let p = typst_img_path(&repo.root, &cv.display().to_string());
+            // The cover art is content, not decoration: describe it, so a reader that
+            // opens on page 1 is told what it is rather than meeting a silent figure.
+            let calt = if lang == "es" {
+                format!("Cubierta del libro: {}", meta.title)
+            } else {
+                format!("Book cover: {}", meta.title)
+            };
             s.push_str(&format!(
-                "#page(margin: 0pt, footer: none, header: none)[#image({}, width: 100%, height: 100%, fit: \"cover\")]\n",
-                ty_str(&p)
+                "#page(margin: 0pt, footer: none, header: none)[#image({}, width: 100%, height: 100%, fit: \"cover\", alt: {})]\n",
+                ty_str(&p),
+                ty_str(&calt)
             ));
         }
     }
@@ -480,15 +536,21 @@ text(weight: \"bold\", size: 13pt, it.body))\n",
     s.push_str("#set page(numbering: \"1\")\n#counter(page).update(1)\n\n");
 
     // ---- chapters ----
+    // `described` gates the PDF/UA-1 claim (see `all_images_described`). A proof
+    // build renders no images at all, so it is trivially described.
+    let mut described = true;
     for ch in chaps {
         let txt = std::fs::read_to_string(ch)
             .with_context(|| format!("reading {}", ch.display()))?;
         let blocks = parse_blocks(&txt);
+        if !proof {
+            described &= all_images_described(&blocks);
+        }
         emit_blocks(&mut s, &blocks, &repo.root, captions, grayscale, proof);
         s.push('\n');
     }
 
-    Ok(s)
+    Ok((s, described))
 }
 
 /// Emit a chapter's blocks, applying the heading+plate reorder: a chapter that
@@ -538,6 +600,9 @@ fn emit_blocks(s: &mut String, blocks: &[Block], root: &Path, captions: bool, gr
                     if let Some(h) = height { a += &format!(", h: {h}"); }
                     if let Some(f) = fit { a += &format!(", ft: \"{f}\""); }
                     if *border == Some(false) { a += ", b: false"; }
+                    // Alt text for the tag tree (independent of `c`, the *visible*
+                    // caption: a full-bleed plate shows no caption but is still described).
+                    if !alt.trim().is_empty() { a += &format!(", a: {}", ty_str(alt.trim())); }
                     s.push_str(&format!("#plate({}, c: {}{a})\n", ty_str(&p), cap));
                     emit_heading(s, *level, text, *unnumbered);
                     i += 2;
@@ -574,6 +639,7 @@ fn emit_blocks(s: &mut String, blocks: &[Block], root: &Path, captions: bool, gr
                     let mut args = format!("width: {w}");
                     if let Some(h) = height { args += &format!(", height: {h}"); }
                     if let Some(f) = fit { args += &format!(", fit: \"{f}\""); }
+                    if !alt.trim().is_empty() { args += &format!(", alt: {}", ty_str(alt.trim())); }
                     let al = align.as_deref().unwrap_or("center");
                     s.push_str(&format!("#align({al}, image({}, {args}))\n", ty_str(&p)));
                 }
@@ -1089,6 +1155,45 @@ fn typst_img_path(root: &Path, src: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A plate/inline image block with the given alt (`spot` = decorative tailpiece).
+    fn img(alt: &str, spot: bool) -> Block {
+        Block::Image {
+            src: "x.png".into(),
+            alt: alt.into(),
+            spot,
+            width: None,
+            height: None,
+            fit: None,
+            align: None,
+            border: None,
+            bw: None,
+        }
+    }
+
+    #[test]
+    fn pdf_ua_claim_requires_every_content_image_to_be_described() {
+        // Every image described -> the book earns the PDF/UA-1 claim.
+        assert!(all_images_described(&[img("Un león", false), img("Una rata", false)]));
+        // A single undescribed image loses it: Typst *enforces* UA-1, and we would
+        // rather ship an honest tagged PDF than assert a standard the book fails.
+        assert!(!all_images_described(&[img("Un león", false), img("", false)]));
+        assert!(!all_images_described(&[img("   ", false)]));
+    }
+
+    #[test]
+    fn decorative_spot_needs_no_alt_because_it_ships_as_an_artifact() {
+        // A spot tailpiece is marked `pdf.artifact` (the EPUB drops it outright), and
+        // an artifact needs no alt — so an alt-less spot must not block the UA-1 claim.
+        assert!(all_images_described(&[img("", true)]));
+        assert!(all_images_described(&[img("Viñeta", true), img("Un león", false)]));
+    }
+
+    #[test]
+    fn text_only_book_is_trivially_described() {
+        assert!(all_images_described(&[Block::Para("solo texto".into())]));
+        assert!(all_images_described(&[]));
+    }
 
     #[test]
     fn is_bw_variant_path_detects_bw_dir() {

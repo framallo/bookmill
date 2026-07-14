@@ -129,6 +129,8 @@ fn build_sample(
         subtitle: base.subtitle.clone(),
         author: base.author.clone(),
         rights: base.rights.clone(),
+        description: base.description.clone(),
+        subjects: base.subjects.clone(),
     };
 
     // Opening chapters + a localized "end of the sample" closing note.

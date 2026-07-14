@@ -157,9 +157,11 @@ function renderActive(d) {
   html += `<div id="out-${LANG}"><p class="muted"><span class="spin"></span> loading…</p></div>`;
   html += `<div class="outlog" id="outlog-${LANG}"></div>`;
   html += `</details>`;
-  html += `<details class="disc"><summary>Publish readiness</summary>`;
-  html += `<div class="rhead"><button class="btn sm" id="${rid}-btn">Check readiness</button>`;
-  html += `<span class="pills" id="${rid}-pills"></span>`;
+  // The readiness button sits in the summary row, right-aligned — same shape as
+  // "Generate all" above it, so the two section headers read the same way.
+  html += `<details class="disc">`;
+  html += `<summary class="discsum"><span>Publish readiness</span><button class="btn sm rcheck" id="${rid}-btn">Check readiness</button></summary>`;
+  html += `<div class="rhead"><span class="pills" id="${rid}-pills"></span>`;
   html += `<span class="verdict" id="${rid}-verdict" style="display:none"></span></div>`;
   html += `<div id="${rid}-body"><p class="muted">Runs epubcheck + geometry + DPI + cover + house rules.</p></div>`;
   html += `</details>`;
@@ -171,7 +173,14 @@ function renderActive(d) {
   const ga = document.querySelector(`[data-genall="${LANG}"]`);
   if (ga) ga.onclick = (e) => { e.preventDefault(); e.stopPropagation(); generateAll(d.slug, LANG); };
   const rb = $(`${rid}-btn`);
-  if (rb) rb.onclick = () => checkReadiness(d.slug, LANG);
+  if (rb) rb.onclick = (e) => {
+    // It lives inside <summary>, so a bare click would toggle the disclosure.
+    e.preventDefault();
+    e.stopPropagation();
+    const det = rb.closest('details');
+    if (det) det.open = true;              // results are about to land — show them
+    checkReadiness(d.slug, LANG);
+  };
   loadOutputs(d.slug, LANG);
 
   const seg = $('langSeg');

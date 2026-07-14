@@ -53,6 +53,7 @@
   .handle.sel { border-style:solid; border-color:var(--accent); background:rgba(212,169,55,.16); }
   .handle.editing { display:none; }
   /* the name tag rides with the affordance — hidden at rest, shown on hover/select */
+  .handle.pinned { outline:1px dashed rgba(224,182,74,.55); outline-offset:1px; }
   .handle .tag { position:absolute; top:-19px; left:-1px; font:600 10px/1.4 system-ui; letter-spacing:.4px;
                  text-transform:uppercase; color:#1a1206; background:var(--accent); padding:1px 6px;
                  border-radius:4px 4px 0 0; opacity:0; transition:opacity .09s; pointer-events:none; }
@@ -78,7 +79,6 @@
 
   #status { font-size:12px; color:var(--muted); margin-left:10px; white-space:nowrap; }
   .pill { background:rgba(224,182,74,.1); color:var(--accent); border-color:rgba(224,182,74,.28); }
-  #audiobookImg { position:fixed; right:14px; bottom:14px; width:220px; border:1px solid var(--line); border-radius:8px; z-index:19; }
 </style>
 </head>
 <body>
@@ -94,9 +94,8 @@
   <span class="spacer"></span>
   <span class="seg" id="langSeg" title="Language"></span>
   <span id="protBadge" class="pill" style="display:none">protected</span>
-  <!-- One document: you edit the full wrap. The eBook front is its front panel and
-       the audiobook cover is a square crop of that — both generated, not edited. -->
-  <button class="btn" id="genAudiobook" title="Square crop of the front panel (3000×3000)">Audiobook cover</button>
+  <!-- One document: you edit the full wrap. Save renders every cover the book
+       needs from it — eBook front, paperback wrap, and the square audiobook crop. -->
   <button class="btn primary" id="saveBtn">Save</button>
   <a class="navlink" id="toPreview" href="#">preview →</a>
 </header>
@@ -139,6 +138,13 @@
     <svg viewBox="0 0 20 20"><path d="M2 10h16" stroke-dasharray="2 2"/><rect x="7" y="4" width="6" height="12" rx="1"/></svg>
   </button>
   <span class="fb-sep"></span>
+  <!-- Language override: pin this block to the current language. Off = one shared
+       design (moving it moves both languages). On = this language gets its own
+       position/size and the other keeps inheriting the shared block. -->
+  <button class="fb" id="fLangOnly" title="Language override" aria-label="Language override">
+    <svg viewBox="0 0 20 20"><path d="M7 3h6M8 3v5l-3 3v1h10v-1l-3-3V3"/><path d="M10 12v5"/></svg>
+  </button>
+  <span class="fb-sep"></span>
   <button class="fb" data-case="none" title="Normal case" aria-label="Normal case">Aa</button>
   <button class="fb" data-case="upper" title="Uppercase" aria-label="Uppercase">AA</button>
   <button class="fb" data-case="lower" title="Lowercase" aria-label="Lowercase">aa</button>
@@ -171,7 +177,6 @@
   <div id="stage"></div>
 </main>
 
-<img id="audiobookImg" style="display:none" alt="audiobook cover" />
 
 <button class="helpbtn" id="helpBtn" title="Keyboard shortcuts (?)">?</button>
 <div class="help-overlay" id="helpOverlay">

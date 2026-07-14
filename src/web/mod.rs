@@ -722,11 +722,13 @@ async fn api_cover_svg_preview(
         title: Some(to_cover_el(&body.title)),
         subtitle: Some(to_cover_el(&body.subtitle)),
         author: Some(to_cover_el(&body.author)),
+        badge: body.badge.as_ref().map(to_cover_el),
     };
     let wrap_layout = body.wrap.as_ref().map(|w| bookmill::config::CoverWrapLayout {
         blurb: w.blurb.as_ref().map(to_cover_el),
         badge: w.badge.as_ref().map(to_cover_el),
         author: w.author.as_ref().map(to_cover_el),
+        spine: w.spine.as_ref().map(to_cover_el),
     });
     let bg = (!body.bgcolor.trim().is_empty()).then(|| body.bgcolor.clone());
     let svg = bookmill::editor_cover_svg_preview(
@@ -747,6 +749,10 @@ struct SaveBody {
     title: Element,
     subtitle: Element,
     author: Element,
+    /// The series badge. Optional so an older client that doesn't send one still
+    /// saves; absent => the renderer's badge defaults stand.
+    #[serde(default)]
+    badge: Option<Element>,
     #[serde(default)]
     bgcolor: String,
     /// Optional back-cover blurb (paperback wrap). When present it is written to
@@ -768,7 +774,12 @@ async fn api_save(
     let act = st.active.read().unwrap();
     let b = act.repo.find_book(&book).map_err(err)?;
     check_lang(&b.languages, &lang)?;
-    let els = Elements { title: body.title, subtitle: body.subtitle, author: body.author };
+    let els = Elements {
+        title: body.title,
+        subtitle: body.subtitle,
+        author: body.author,
+        badge: body.badge,
+    };
     let bgcolor = if body.bgcolor.trim().is_empty() { "#000000".to_string() } else { body.bgcolor };
 
     let path = cover::save_cover(&b, &lang, &els, &bgcolor).map_err(err)?;
@@ -792,10 +803,24 @@ async fn api_save(
     let pages = (!kdp_pdf.exists()).then_some(st.default_pages);
 
     let render = render::render_cover(&act.repo.root, &b.slug, &lang, pages);
-    let (ok, log) = match render {
+    let (ok, mut log) = match render {
         Ok(log) => (true, log),
         Err(e) => (false, format!("{e:#}")),
     };
+
+    // The audiobook cover is a square crop of the front panel — a derived artifact,
+    // not a design. Saving emits every cover the book needs, so it is made here
+    // rather than behind its own button.
+    if ok {
+        if let Some(src) = cover::best_rendered_path(&act.repo, &b, &lang) {
+            let dst = cover::audiobook_cover_path(&b, &lang);
+            match make_square_cover(&src, &dst, AUDIOBOOK_SIDE) {
+                Ok(_) => log.push_str(&format!("\naudiobook cover → {}", dst.display())),
+                Err(e) => log.push_str(&format!("\naudiobook cover failed: {e:#}")),
+            }
+        }
+    }
+
     let rendered = cover::best_rendered_path(&act.repo, &b, &lang)
         .map(|_| format!("/api/asset/{}/{}/rendered?t={}", b.slug, lang, now_ms()));
 

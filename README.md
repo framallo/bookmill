@@ -4,7 +4,7 @@
 
 # bookmill
 
-**A single-binary book publishing pipeline — Markdown in, KDP-ready EPUB, print PDF, covers, and audiobooks out.**
+**A single-binary book publishing pipeline. Markdown in; KDP-ready EPUB, print PDF, covers, and audiobooks out.**
 
 ![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange?logo=rust&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-blue)
@@ -12,12 +12,12 @@
 
 </div>
 
-bookmill turns a Markdown manuscript repo into publishable books — **EPUB, print
-PDF, paperback wrap cover, eBook cover, and audiobook** — for many books ×
-editions × languages, all from one layered `bookmill.toml`. It replaces a
-Make + pandoc + Python cover-script setup with a single Rust tool: every interior
-is rendered by native Rust, covers are Chrome-free, and a scaffolder writes
-buildable projects for you.
+bookmill turns a Markdown manuscript repo into publishable books (EPUB, print PDF,
+paperback wrap cover, eBook cover, audiobook) for many books × editions ×
+languages, all from one layered `bookmill.toml`. It replaces a Make + pandoc +
+Python cover-script setup with a single Rust tool: every interior is rendered by
+native Rust, covers are Chrome-free, and a scaffolder writes buildable projects
+for you.
 
 ```
 manuscript (Markdown)  ──bookmill──▶  EPUB · print PDF · wrap cover · eBook cover · audiobook
@@ -26,14 +26,14 @@ manuscript (Markdown)  ──bookmill──▶  EPUB · print PDF · wrap cover 
 
 ## Features
 
-- **Fully native interiors — no pandoc, no LaTeX.** PDF via the in-process
+- **Fully native interiors: no pandoc, no LaTeX.** PDF via the in-process
   [Typst](https://typst.app) crate (no `typst` binary), EPUB via
   epub-builder + comrak, and a `.docx` review doc via docx-rs.
 - **Chrome-free covers.** Front PNG, paperback wrap PDF, and eBook JPG rendered
-  with native [`resvg`](https://github.com/linebender/resvg); Chrome is an opt-in
+  with native [`resvg`](https://github.com/linebender/resvg). Chrome is an opt-in
   fallback only.
 - **Editions are distribution channels.** KDP paperback / hardcover / eBook,
-  Gumroad, and regional POD — each resolves its own trim, bleed, margins, and
+  Gumroad, and regional POD. Each resolves its own trim, bleed, margins, and
   cover from config.
 - **Convention over configuration.** One `bookmill.toml` per repo + one per book,
   deep-merged repo → book → edition → language. No per-book `meta.md`.
@@ -41,11 +41,14 @@ manuscript (Markdown)  ──bookmill──▶  EPUB · print PDF · wrap cover 
   (Kokoro TTS on the Apple Neural Engine), with a per-chapter content-hash cache.
 - **Three ways to drive it.** A CLI, an interactive terminal UI (`bookmill tui`),
   and a native macOS desktop app (library grid + cover editor + previewer).
-- **Scaffolder.** `bookmill create` writes a project that builds out of the
-  box — repo + book config, a starter chapter, and shared build assets.
+- **Scaffolder.** `bookmill create` writes a project that builds out of the box:
+  repo + book config, a starter chapter, and shared build assets.
 - **Rich chapter images.** Size, fit, align, and frame any image from the
   markdown itself with pandoc-style `{width= height= fit= align= border=}`
-  attributes — a book-level default plus per-image overrides.
+  attributes, as a book-level default plus per-image overrides.
+- **Accessible by default.** The EPUB ships schema.org a11y metadata and the PDF
+  is tagged and claims PDF/UA-1, both derived from the book's own content rather
+  than asserted. `validate --deep` audits it.
 
 ## Install
 
@@ -68,7 +71,7 @@ make run                      # dev window for the desktop app on your book repo
 ```
 
 > [!NOTE]
-> **`bookmill build` (interiors + covers) needs no external tools** — verified by
+> **`bookmill build` (interiors + covers) needs no external tools**, verified by
 > building with an empty `PATH`. Only optional, non-build commands shell out to a
 > single tool each: `epubcheck` (Java) for `validate --deep`, `pdftoppm`
 > (poppler) for the interior previewer, `kab` for `audiobook`, and the repo's
@@ -99,13 +102,13 @@ bookmill build my-book --format all  # retail + KDP EPUB and PDF
 |---|---|
 | `bookmill create [flags]` | Scaffold a new project (**init**) or add a book to an existing repo (**add-book**) |
 | `bookmill list [--json]` | List discovered books |
-| `bookmill validate [book] [--deep]` | Config / listing / house-rule check (+ epubcheck, PDF geometry, cover resolution with `--deep`) |
+| `bookmill validate [book] [--deep]` | Config / listing / house-rule check (+ epubcheck, PDF geometry, cover resolution, **accessibility audit** with `--deep`) |
 | `bookmill build [book] [--format\|--edition] [--lang]` | Build interiors (EPUB / PDF / KDP / print / docx / all) |
 | `bookmill build cover [book] [--lang]` | Render front PNG + paperback wrap PDF + eBook JPG |
-| `bookmill build shrink <file> [--px\|--dpi]` | Shrink images in place — EPUB (native, `--px`) or PDF (Ghostscript, `--dpi`) |
+| `bookmill build shrink <file> [--px\|--dpi]` | Shrink images in place: EPUB (native, `--px`) or PDF (Ghostscript, `--dpi`) |
 | `bookmill audiobook [book] [--lang] [--voice] [--speed]` | Render a chaptered `.m4b` (kab engine) |
 | `bookmill words [book] [--lang]` | Word counts (native, over the resolved content) + page counts (from the built interior PDF) |
-| `bookmill lint [book] [--lang]` | Prose lint — grammar + Spanish tildes (LanguageTool via `scripts/lint-prose.py`) |
+| `bookmill lint [book] [--lang]` | Prose lint: grammar + Spanish tildes (LanguageTool via `scripts/lint-prose.py`) |
 | `bookmill kdp [book]` | Scaffold `kdp/<slug>.md` when missing, else check it against KDP limits (via `scripts/kdp-metadata.py`) |
 | `bookmill web [--port] [--pages]` | Launch the cover-editor web UI (localhost) |
 | `bookmill tui` | Interactive terminal UI |
@@ -123,7 +126,7 @@ or `all`.
 Auto-detects two modes: **init** (no repo found → scaffold a brand-new project)
 and **add-book** (run inside a bookmill repo → add one book). It is driven by
 **archetypes** (`templates/archetypes.toml`, overridable per project) over two
-free dimensions — `scope` (single / series) × `languages` (one / many) — so
+free dimensions, `scope` (single / series) × `languages` (one / many), so
 everything from a single monolingual book to a multilingual series works.
 
 ```bash
@@ -135,7 +138,7 @@ bookmill create --archetype series-multilang --slug no-silver \
 bookmill create --slug second-book --title en="Second Book" --yes
 ```
 
-Add a new archetype or language convention by editing `archetypes.toml` — no code
+Add a new archetype or language convention by editing `archetypes.toml`. No code
 change needed.
 
 ## Configuration
@@ -158,7 +161,7 @@ append = ["es/epilogo.md"]
 A chapter that opens with a standalone image renders it as a full-page **plate**
 on the facing (verso) page; other standalone images render inline. Any image
 takes an optional pandoc-style `{…}` attribute block after `![alt](src)` to
-control how it's placed — a book-level default (`[pdf].plate_width`) plus
+control how it's placed, as a book-level default (`[pdf].plate_width`) plus
 per-image overrides:
 
 | Attribute | Values | Applies to |
@@ -194,32 +197,72 @@ is a config edit, not a code change.
 
 The **retail PDF** (`gumroad`) can be auto-downsampled so the paid download stays
 small while the print interior keeps full-res images. Set `[pdf].digital_pdf_dpi`
-(or `[editions.<name>].digital_pdf_dpi` to override) — e.g. `digital_pdf_dpi = 150`
-turns a full-bleed color picture book from ~200 MB into a few MB. It runs
-Ghostscript on `Out::RetailPdf` only; a missing `gs` warns and keeps the full-res
-PDF (it never fails the build). Off (`None`) by default.
+(or `[editions.<name>].digital_pdf_dpi` to override). For example,
+`digital_pdf_dpi = 150` turns a full-bleed color picture book from ~200 MB into a
+few MB. It runs Ghostscript on `Out::RetailPdf` only; a missing `gs` warns and
+keeps the full-res PDF (it never fails the build). Off (`None`) by default.
 
 If a built print interior is **out of a target's page range** (e.g. a 17pp
 companion under KDP paperback's 24pp minimum), `bookmill build` **warns and skips
-that print edition for that language** — the digital editions and every other
-book still build, so one too-short book never blocks the whole run. `validate
---deep` still surfaces it.
+that print edition for that language**. The digital editions and every other book
+still build, so one too-short book never blocks the whole run. `validate --deep`
+still surfaces it.
 
 ### Post-build documents (markdown, free sample, README)
 
 Every interior build also drops three documents into `output/` for each book +
-language it touched (best-effort — a failure warns but never fails the build):
+language it touched (best-effort: a failure warns but never fails the build):
 
 | File | What |
 |---|---|
-| `output/<slug>/<lang>/<slug>-<lang>.md` | The **combined manuscript** — YAML front matter (title/subtitle/author/rights) + all chapters concatenated in reading order |
-| `output/<slug>/<lang>/<slug>-<lang>-sample.{epub,pdf}` | A **free sample** — the opening chapters + a localized "end of the sample" note, as a shareable EPUB + PDF (title marked *(Sample)* / *(Muestra)*) |
+| `output/<slug>/<lang>/<slug>-<lang>.md` | The **combined manuscript**: YAML front matter (title/subtitle/author/rights) + all chapters concatenated in reading order |
+| `output/<slug>/<lang>/<slug>-<lang>-sample.{epub,pdf}` | A **free sample**: the opening chapters + a localized "end of the sample" note, as a shareable EPUB + PDF (title marked *(Sample)* / *(Muestra)*) |
 | `output/<slug>/README.md` | A **README** describing the book: author/series/date, editions, status/ASINs, and per language the title, word & page counts, reading age, keywords, BISAC, blurb, and the files built |
 
 The sample size is `[sample].chapters` (leading content files); unset defaults to
 ~the first 15% (min 1, capped at half the book). `[sample].enabled = false` skips
 it. The sample EPUB is image-shrunk like the retail EPUB, and the sample PDF
 honors `[pdf].digital_pdf_dpi`, so a picture-book preview stays a couple of MB.
+
+### Accessibility
+
+Accessible output is built, then audited. The governing rule is **derive, never
+assert**: bookmill claims only what the book contains.
+
+Every EPUB build emits schema.org / EPUB Accessibility metadata into the OPF
+(`accessMode`, `accessModeSufficient`, `accessibilityFeature`,
+`accessibilityHazard`, and a localized `accessibilitySummary`), all computed from
+the content. A text-only novel declares `textual`; an illustrated book declares
+`visual` too, and claims `alternativeText` only if every image has alt text.
+Content documents, the nav, and the TOC all carry `lang`/`xml:lang`, and the
+`titlepage` / `copyright-page` landmarks are emitted without polluting the visible
+TOC. `dc:description` and `dc:subject` come from `[listing.<lang>]`.
+
+Typst tags every PDF, and **PDF/UA-1 is requested only when every content image
+carries alt text**. If UA-1 export fails (a heading-level skip will do it), the
+build falls back to a plain tagged PDF and says so, so a book that built yesterday
+never stops building. Decorative tailpieces (`.spot`) are marked as artifacts and
+need no alt.
+
+`validate --deep` reports, per book × edition × language: OPF a11y metadata,
+`<img>` without alt text (naming the file and `src`), `dc:language`, `lang` on
+every content doc, a populated nav TOC, PDF title and `/Lang`, PDF tagging,
+landmarks, and heading-level skips. It shells out to
+[`ace`](https://daisy.github.io/ace/) when it is on `$PATH`, the same way `--deep`
+uses `epubcheck`.
+
+> [!IMPORTANT]
+> bookmill never emits `dcterms:conformsTo` (WCAG conformance) or
+> `a11y:certifiedBy`. Those are claims about an audit that a human performed, and
+> bookmill has not performed one. It also emits no `page-list`, because there is no
+> honest EPUB→print page mapping when the print PDF is a separate layout.
+> `validate --deep` warns about both rather than faking them.
+>
+> Two known gaps it will tell you about. A **heading-level skip** (`#` → `###`)
+> costs the book its UA-1 claim. And the **digital/retail PDF is untagged** when
+> `digital_pdf_dpi` is set, because Ghostscript rebuilds the file and destroys the
+> structure tree (even with `-dPreserveMarkedContent`). `/Lang` is restored; the
+> tagging is not recoverable through that path.
 
 ### Audiobooks
 
@@ -240,9 +283,36 @@ code  = "e"         # ane_book language code
 Override ad hoc with `--voice` / `--speed`. The engine is a `TtsEngine` trait, so
 other backends slot in behind the same interface.
 
+## Cover editor
+
+`bookmill web` opens a browser cover editor that drags, sizes, and styles every
+text block on the **front** and the **paperback wrap**: title, subtitle, author,
+the series badge, the back-cover blurb, and the **spine** (text and position,
+centered on the spine's glyph box rather than its baseline). Save renders every
+cover the book needs. There is no separate audiobook-cover button; the square
+audiobook art falls out of the same save.
+
+Coordinates are stored as **fractions** (centre `xPct`/`yPct`, box `wPct`, size
+`fontPct`, letter-spacing as a multiple of font size), so one design drives both
+the 1600×2560 eBook front and the wrap at print scale.
+
+Because `fontPct` is a fraction of **page height**, the eBook front is the binding
+surface: it is taller relative to its width than the wrap's front panel, so a title
+size that still fits across the wrap can overflow the front and wrap onto an extra
+line. Size the title against the front, then check the wrap.
+
+One design is shared by every language. A block pinned with the **language
+override** toggle (the pushpin) is written to `[cover.<lang>.layout]` instead of
+the shared `[cover.layout]`, so the English title can sit at its own size and
+position without disturbing the Spanish one. Unpinned blocks keep their geometry
+shared and vary only their text per language.
+
+Saving rewrites `bookmill.toml` in place with `toml_edit`: section order and
+comments survive, and a save that changes nothing is a byte-for-byte no-op.
+
 ## Desktop app
 
-The same UI (library grid, cover editor, previewer) ships as a native macOS app —
+The same UI (library grid, cover editor, previewer) ships as a native macOS app:
 a [Tauri v2](https://tauri.app) shell (`desktop/`) that embeds the `bookmill` CLI
 as a sidecar, spawns `bookmill web` on an ephemeral port, and points a `WKWebView`
 at it. Launch **bookmill** from Applications / Spotlight and it prompts for your
@@ -257,7 +327,7 @@ make dmg      # build the installable .dmg
 > [!IMPORTANT]
 > The interior previewer needs `pdftoppm` (poppler) on the app's `$PATH`. A
 > `brew install --cask bookmill` distribution is planned but **not available
-> yet** — it needs a signed + notarized release and a Homebrew tap. See
+> yet**: it needs a signed + notarized release and a Homebrew tap. See
 > [`docs/DESKTOP.md`](docs/DESKTOP.md).
 
 ## Project layout
@@ -277,7 +347,9 @@ src/
   epub_shrink.rs native EPUB image shrinker
   pdf_shrink.rs  digital-PDF image downsampler (Ghostscript)
   book_docs.rs   post-build markdown + free sample + per-book README
-  deep.rs        validate --deep (epubcheck + geometry + cover res)
+  a11y.rs        accessibility audit (EPUB OPF/alt/lang/nav + PDF tagging/UA-1)
+  pdfmeta.rs     PDF catalog metadata fixups (e.g. restore /Lang after Ghostscript)
+  deep.rs        validate --deep (epubcheck + geometry + cover res + a11y)
   tui.rs         Ratatui terminal UI
 templates/       archetypes for `create`, scaffold assets, cover templates
 web/             standalone cover-editor crate (superseded by `bookmill web`)
@@ -287,12 +359,12 @@ examples/sample-repo/   self-contained demo repo
 
 ## Documentation
 
-- [`docs/DESKTOP.md`](docs/DESKTOP.md) — desktop app build, packaging, and cask notes
-- [`docs/edition-options.md`](docs/edition-options.md) — edition / geometry reference
-- [`docs/kdp-requirements.md`](docs/kdp-requirements.md) — KDP print & cover rules
-- [`docs/epub-shrink-tuning.md`](docs/epub-shrink-tuning.md) — image-shrink codec tuning
-- [`docs/web-ui-design.md`](docs/web-ui-design.md) — cover-editor UI design
-- [`examples/sample-repo/`](examples/sample-repo/) — a minimal, buildable project
+- [`docs/DESKTOP.md`](docs/DESKTOP.md): desktop app build, packaging, and cask notes
+- [`docs/edition-options.md`](docs/edition-options.md): edition / geometry reference
+- [`docs/kdp-requirements.md`](docs/kdp-requirements.md): KDP print & cover rules
+- [`docs/epub-shrink-tuning.md`](docs/epub-shrink-tuning.md): image-shrink codec tuning
+- [`docs/web-ui-design.md`](docs/web-ui-design.md): cover-editor UI design
+- [`examples/sample-repo/`](examples/sample-repo/): a minimal, buildable project
 
 > [!NOTE]
 > Build, covers, and validation are in daily production use. The whole build +

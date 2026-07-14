@@ -26,6 +26,72 @@ pub fn page_count(pdf: &Path) -> Option<u32> {
     Some(doc.get_pages().len() as u32)
 }
 
+/// The document title (`/Info /Title`, or the XMP `dc:title`). `None` if absent —
+/// an untitled PDF fails every accessibility check, so the validator errors on it.
+pub fn title(pdf: &Path) -> Option<String> {
+    let doc = Document::load(pdf).ok()?;
+    let info = doc.trailer.get(b"Info").ok()?;
+    let dict = match info {
+        Object::Reference(id) => doc.get_object(*id).ok()?.as_dict().ok()?,
+        Object::Dictionary(d) => d,
+        _ => return None,
+    };
+    let t = dict.get(b"Title").ok()?;
+    let s = decode_text(t)?;
+    (!s.trim().is_empty()).then_some(s)
+}
+
+/// The document's natural language (`/Root /Lang`). `None` if unset — a PDF with no
+/// language makes a screen reader guess the pronunciation of every word.
+pub fn catalog_lang(pdf: &Path) -> Option<String> {
+    let doc = Document::load(pdf).ok()?;
+    let root = doc.trailer.get(b"Root").ok()?.as_reference().ok()?;
+    let cat = doc.get_object(root).ok()?.as_dict().ok()?;
+    let s = decode_text(cat.get(b"Lang").ok()?)?;
+    (!s.trim().is_empty()).then_some(s)
+}
+
+/// True when the PDF carries a structure tree (`/Root /StructTreeRoot`) — i.e. it is
+/// a *tagged* PDF, the prerequisite for any real PDF accessibility.
+pub fn is_tagged(pdf: &Path) -> bool {
+    let Ok(doc) = Document::load(pdf) else { return false };
+    let Ok(root) = doc.trailer.get(b"Root").and_then(|r| r.as_reference()) else {
+        return false;
+    };
+    doc.get_object(root)
+        .and_then(|o| o.as_dict())
+        .map(|c| c.has(b"StructTreeRoot"))
+        .unwrap_or(false)
+}
+
+/// Set `/Lang` on the document catalog, in place.
+///
+/// Used to restore the language after the Ghostscript digital-PDF shrink, which
+/// rebuilds the file and drops both the structure tree and `/Lang` (the tag tree is
+/// unrecoverable; `/Lang` is one catalog entry, and a language-less PDF fails every
+/// accessibility check). Setting it states only what is true: the document's language.
+pub fn set_catalog_lang(pdf: &Path, lang: &str) -> Option<()> {
+    let mut doc = Document::load(pdf).ok()?;
+    let root = doc.trailer.get(b"Root").ok()?.as_reference().ok()?;
+    let cat = doc.get_object_mut(root).ok()?.as_dict_mut().ok()?;
+    cat.set("Lang", Object::string_literal(lang));
+    doc.save(pdf).ok()?;
+    Some(())
+}
+
+/// Decode a PDF text object (literal string, possibly UTF-16BE with a BOM).
+fn decode_text(o: &Object) -> Option<String> {
+    let b = o.as_str().ok()?;
+    if b.starts_with(&[0xFE, 0xFF]) {
+        let u16s: Vec<u16> = b[2..]
+            .chunks_exact(2)
+            .map(|c| u16::from_be_bytes([c[0], c[1]]))
+            .collect();
+        return String::from_utf16(&u16s).ok();
+    }
+    Some(String::from_utf8_lossy(b).into_owned())
+}
+
 /// First page's size in points `(width, height)` from its `MediaBox`
 /// (`[x0 y0 x1 y1]` → `x1-x0`, `y1-y0`). The `MediaBox` may be inherited from an
 /// ancestor in the page tree, so we walk up the tree when the page dict lacks it.

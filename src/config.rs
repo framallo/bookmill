@@ -349,6 +349,10 @@ pub struct CoverWrapLayout {
     pub blurb: Option<CoverElement>,
     pub badge: Option<CoverElement>,
     pub author: Option<CoverElement>,
+    /// The spine. Its text runs bottom-to-top, so `wPct` is measured ALONG the text
+    /// (a fraction of the wrap's height) while `xPct` places it ACROSS the spine's
+    /// width. KDP only prints spine text at 100+ pages; below that it stays blank.
+    pub spine: Option<CoverElement>,
 }
 
 impl CoverWrapLayout {
@@ -362,9 +366,23 @@ impl CoverWrapLayout {
             blurb: CoverElement::merge(b.blurb.as_ref(), o.blurb.as_ref()),
             badge: CoverElement::merge(b.badge.as_ref(), o.badge.as_ref()),
             author: CoverElement::merge(b.author.as_ref(), o.author.as_ref()),
+            spine: CoverElement::merge(b.spine.as_ref(), o.spine.as_ref()),
         })
     }
 }
+
+/// Default geometry of the series badge, as fractions of the eBook front canvas
+/// (1600×2560): the badge sat at y = 150 + half a 32px/1.2 line box, 32px tall.
+/// The wrap's front panel and the editor seed from these same numbers so one badge
+/// element means one badge design across every surface.
+pub const BADGE_Y_PCT: f64 = (150.0 + 32.0 * 1.2 / 2.0) / 2560.0;
+pub const BADGE_W_PCT: f64 = 0.80;
+pub const BADGE_FONT_PCT: f64 = 32.0 / 2560.0;
+/// Badge tracking, as a multiple of its font size (the old fixed 9px at 32px).
+pub const BADGE_TRACKING: f64 = 9.0 / 32.0;
+/// Badge line-height, matching the flex badge's line box.
+pub const BADGE_LINE_HEIGHT: f64 = 1.2;
+pub const BADGE_OPACITY: f64 = 0.95;
 
 /// Absolute eBook-front cover layout (`[cover.<lang>.layout]`) authored by the
 /// web cover editor (`web/src/cover.rs`). One optional [`CoverElement`] per
@@ -376,6 +394,10 @@ pub struct CoverLayout {
     pub title: Option<CoverElement>,
     pub subtitle: Option<CoverElement>,
     pub author: Option<CoverElement>,
+    /// The series badge ("Serie Isla de la Libertad"). Governs the badge on both
+    /// the eBook front and the wrap's front panel; the back panel's badge is its
+    /// own block under `[cover.wrap]`.
+    pub badge: Option<CoverElement>,
 }
 
 impl CoverLayout {
@@ -390,6 +412,7 @@ impl CoverLayout {
             title: CoverElement::merge(b.title.as_ref(), o.title.as_ref()),
             subtitle: CoverElement::merge(b.subtitle.as_ref(), o.subtitle.as_ref()),
             author: CoverElement::merge(b.author.as_ref(), o.author.as_ref()),
+            badge: CoverElement::merge(b.badge.as_ref(), o.badge.as_ref()),
         })
     }
 }
@@ -428,7 +451,9 @@ pub struct CoverElement {
     /// line-height multiplier for multi-line blocks (default 1.0).
     #[serde(rename = "lineHeight")]
     pub line_height: Option<f64>,
-    /// letter-spacing (tracking) in px at the block's font size (default 0).
+    /// letter-spacing (tracking) as a **multiple of the block's font size**
+    /// (default 0). Scale-free like `fontPct`, so one badge element tracks the
+    /// same on the 2560px eBook front and the 888px wrap.
     #[serde(rename = "letterSpacing")]
     pub letter_spacing: Option<f64>,
     /// case transform: "upper" | "lower" | "none" (default none).

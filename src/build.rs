@@ -708,6 +708,12 @@ fn build_one(
                         pdf.display()
                     ),
                 }
+                // Ghostscript rebuilds the file and drops both the structure tree and
+                // `/Lang`. The tag tree can't be put back (gs's pdfwrite does not carry
+                // it — even with -dPreserveMarkedContent), but the language can, and a
+                // PDF with no language makes a screen reader guess every word's
+                // pronunciation. Restore it; `bookmill validate` reports the lost tagging.
+                crate::pdfmeta::set_catalog_lang(&pdf, lang);
             }
         }
         Out::KdpPdf => {
@@ -758,6 +764,11 @@ pub struct BookMeta {
     pub subtitle: Option<String>,
     pub author: String,
     pub rights: String,
+    /// Listing blurb (`[listing.<lang>].blurb`) → EPUB `dc:description`. Retailers
+    /// read it straight off the OPF, so it is worth shipping when we have it.
+    pub description: Option<String>,
+    /// Listing keywords (`[listing.<lang>].keywords`) → EPUB `dc:subject`.
+    pub subjects: Vec<String>,
 }
 
 /// Resolve title/subtitle/author/rights for a (book, lang) from config.
@@ -781,7 +792,13 @@ pub fn resolve_book_meta(repo: &Repo, book: &BookConfig, lang: &str) -> Result<B
         .rights
         .clone()
         .unwrap_or_else(|| localized_rights(lang, &author, &year));
-    Ok(BookMeta { title, subtitle, author, rights })
+    // Listing copy, when the book has a [listing.<lang>] block: the blurb becomes
+    // dc:description and the keywords become dc:subject. Absent → simply omitted;
+    // we never invent listing copy.
+    let listing = book.listing.get(lang);
+    let description = listing.and_then(|l| l.blurb.clone());
+    let subjects = listing.map(|l| l.keywords.clone()).unwrap_or_default();
+    Ok(BookMeta { title, subtitle, author, rights, description, subjects })
 }
 
 /// Localized "all rights reserved" line, matching the old meta.md wording.

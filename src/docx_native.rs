@@ -298,6 +298,8 @@ mod tests {
             subtitle: None,
             author: "A".into(),
             rights: "r".into(),
+            description: None,
+            subjects: Vec::new(),
         };
         // Minimal repo stub via the real loader is overkill; call the converter
         // pieces directly through `run` requires a Repo, so just exercise the AST
