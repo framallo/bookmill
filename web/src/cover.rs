@@ -255,7 +255,24 @@ pub fn load_cover(repo: &Repo, book: &BookSummary, lang: &str) -> Result<CoverRe
     // Existing saved layout, if any, wins over computed defaults.
     let saved = read_saved_layout(&book_doc, lang);
 
-    let title_el = saved.as_ref().map(|e| e.title.clone()).unwrap_or(Element {
+    // A saved block legitimately carries NO text: the shared `[cover.layout]` holds
+    // geometry only, and `[cover.<lang>.layout]` overrides the text of just the
+    // blocks that need it (usually only the title's line break). The text of the
+    // rest resolves per-language from [title]/[subtitle]/author — which is exactly
+    // what the renderer's `def_text` does. Do the same here, or the editor opens
+    // with an empty subtitle/author box.
+    let (d_title, d_sub, d_author) = (d.title.clone(), d.sub.clone(), d.author.clone());
+    let with_text = |mut e: Element, fallback: &str| -> Element {
+        if e.runs.is_none() && e.text.trim().is_empty() {
+            e.text = fallback.to_string();
+        }
+        e
+    };
+
+    let title_el = saved
+        .as_ref()
+        .map(|e| with_text(e.title.clone(), &d_title))
+        .unwrap_or(Element {
         text: d.title,
         x_pct: 0.5,
         y_pct: 0.62,
@@ -266,7 +283,10 @@ pub fn load_cover(repo: &Repo, book: &BookSummary, lang: &str) -> Result<CoverRe
         font_style: "bold".into(),
         ..Default::default()
     });
-    let sub_el = saved.as_ref().map(|e| e.subtitle.clone()).unwrap_or(Element {
+    let sub_el = saved
+        .as_ref()
+        .map(|e| with_text(e.subtitle.clone(), &d_sub))
+        .unwrap_or(Element {
         text: d.sub,
         x_pct: 0.5,
         y_pct: 0.76,
@@ -277,7 +297,10 @@ pub fn load_cover(repo: &Repo, book: &BookSummary, lang: &str) -> Result<CoverRe
         font_style: d.sub_style,
         ..Default::default()
     });
-    let author_el = saved.as_ref().map(|e| e.author.clone()).unwrap_or(Element {
+    let author_el = saved
+        .as_ref()
+        .map(|e| with_text(e.author.clone(), &d_author))
+        .unwrap_or(Element {
         text: d.author,
         x_pct: 0.5,
         y_pct: 0.93,
@@ -299,7 +322,7 @@ pub fn load_cover(repo: &Repo, book: &BookSummary, lang: &str) -> Result<CoverRe
     let bcontent_w = back_w_px - 2.0 * 0.55 * DPI; // matches wrap_svg bpad_x
     let w_frac = (bcontent_w / back_w_px).max(0.05);
     let saved_wrap = read_saved_wrap(&book_doc, lang);
-    let wrap_blurb = saved_wrap.as_ref().and_then(|w| w.blurb.clone()).unwrap_or(Element {
+    let wrap_blurb = saved_wrap.as_ref().and_then(|w| w.blurb.clone()).map(|e| with_text(e, &blurb)).unwrap_or(Element {
         text: blurb.clone(),
         x_pct: 0.5,
         y_pct: 0.42,
@@ -310,7 +333,7 @@ pub fn load_cover(repo: &Repo, book: &BookSummary, lang: &str) -> Result<CoverRe
         font_style: "normal".into(),
         ..Default::default()
     });
-    let wrap_badge = saved_wrap.as_ref().and_then(|w| w.badge.clone()).unwrap_or(Element {
+    let wrap_badge = saved_wrap.as_ref().and_then(|w| w.badge.clone()).map(|e| with_text(e, &badge)).unwrap_or(Element {
         text: badge.clone(),
         x_pct: 0.5,
         y_pct: 0.085,
@@ -321,7 +344,7 @@ pub fn load_cover(repo: &Repo, book: &BookSummary, lang: &str) -> Result<CoverRe
         font_style: "normal".into(),
         ..Default::default()
     });
-    let wrap_author = saved_wrap.as_ref().and_then(|w| w.author.clone()).unwrap_or(Element {
+    let wrap_author = saved_wrap.as_ref().and_then(|w| w.author.clone()).map(|e| with_text(e, &author_el.text.clone())).unwrap_or(Element {
         text: author_el.text.clone(),
         x_pct: 0.5,
         y_pct: 0.94,
