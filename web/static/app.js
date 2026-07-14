@@ -37,11 +37,14 @@ let els = null;                      // front layout {title,subtitle,author} fra
 let wrapEls = null;                  // wrap back-panel {blurb,badge,author} fractions
 let current = null;                  // selected "groupId:key", or '__bg__', or null
 let handles = {};                    // "groupId:key" -> overlay div
-// Draggable groups for the current view. Each: { id, keys, els, space, sizeRef }.
+// Draggable groups. Each: { id, keys, els, space, sizeRef }.
 // `space` maps stored fractions to viewBox px: center = (x0 + x_pct·w, y_pct·h),
 // wrap width = w_pct·w, size = font_pct·h. `sizeRef` is the height the size FIELD
-// reports/edits against (front elements always report against the 2560 canvas so the
-// number is stable whether shown in the front view or the wrap's front panel).
+// reports/edits against — the SAME for every group (the wrap's height), so the size
+// number means one thing across the whole document. It used to be 2560 (the front
+// canvas) for front blocks and 888 (the wrap) for back ones, so two authors that
+// render at the same size read as "42" and "13" — and setting them to one number
+// blew the back one up. Both panels are one document now; one reference.
 let groups = [];
 // The block positions the CURRENTLY-INJECTED SVG was rendered at (server bakes
 // text at the saved fractions). Keyed "groupId:key" -> {x_pct,y_pct}. Live drag
@@ -227,7 +230,7 @@ function buildGroups(svgEl) {
       // Front-panel blocks share the front layout fractions ([cover.<lang>.layout]),
       // mapped into the wrap's front sub-rect. sizeRef stays the 2560 front canvas so
       // the size field reads the same here as in the front view.
-      { id: 'front', keys: KEYS, els, space: { w: frontW, h: vbH, x0: frontX, vbW, vbH }, sizeRef: H },
+      { id: 'front', keys: KEYS, els, space: { w: frontW, h: vbH, x0: frontX, vbW, vbH }, sizeRef: vbH },
     ];
   }
   return [];
@@ -275,7 +278,10 @@ function positionHandles() {
       const size = el.font_pct * g.space.h;
       const bw = el.w_pct * g.space.w;
       const lines = wrapCount(el.text, size, el.font_style, el.font_family, bw);
-      const bh = Math.max(lines * size, 26);
+      // Match the renderer: a line's box is size × line-height (cover_svg::line_box),
+      // so the handle wraps the text instead of ending short of it.
+      const lh = el.line_height > 0 ? el.line_height : 1.0;
+      const bh = Math.max(lines * size * lh, 26);
       const cx = g.space.x0 + el.x_pct * g.space.w, cy = el.y_pct * g.space.h;
       hd.style.left = ((cx - bw / 2) * sx) + 'px';
       hd.style.top = ((cy - bh / 2) * sy) + 'px';
@@ -923,8 +929,6 @@ async function save() {
     const r = await fetch(`/api/cover/${SLUG}/${LANG}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     }).then(r => r.json());
-    const log = $('log');
-    log.style.display = ''; log.textContent = (r.ok ? '✓ ' : '✗ ') + 'saved ' + r.saved + '\n\n' + (r.renderLog || '');
     data.layout_saved = true;
     snapshotBaked();                        // the re-render bakes the working fractions → deltas reset to 0
     await renderStage();                    // reload the authoritative SVG
@@ -991,20 +995,30 @@ function twoLineParts(s) {
 }
 
 const _measureCtx = document.createElement('canvas').getContext('2d');
+// How many lines the renderer will lay this block out on. Mirrors cover_svg.rs's
+// `wrap`: an explicit \n is a HARD break and a blank line stays blank (that's what
+// separates the blurb's paragraphs). Splitting on /\s+/ instead — as this used to —
+// swallowed both, so a 4-paragraph blurb measured far shorter than it renders and
+// the drag handle didn't cover its own text.
 function wrapCount(text, size, style, family, maxW) {
-  const words = (text || '').split(/\s+/).filter(Boolean);
-  if (!words.length) return 1;
   const italic = (style || '').includes('italic') ? 'italic ' : '';
   const weight = (style || '').includes('bold') ? 700 : 500;
   const fam = family ? `'${family}', ` : '';
   _measureCtx.font = `${italic}${weight} ${size}px ${fam}Montserrat, sans-serif`;
-  let lines = 1, cur = '';
-  for (const w of words) {
-    const trial = cur ? cur + ' ' + w : w;
-    if (_measureCtx.measureText(trial).width <= maxW || !cur) cur = trial;
-    else { lines++; cur = w; }
+
+  let lines = 0;
+  for (const hard of String(text || '').trim().split('\n')) {
+    if (!hard.trim()) { lines++; continue; }        // paragraph gap
+    const words = hard.split(/\s+/).filter(Boolean);
+    let cur = '';
+    lines++;
+    for (const w of words) {
+      const trial = cur ? cur + ' ' + w : w;
+      if (_measureCtx.measureText(trial).width <= maxW || !cur) cur = trial;
+      else { lines++; cur = w; }
+    }
   }
-  return lines;
+  return Math.max(lines, 1);
 }
 
 function parseMargin(s, refW) {

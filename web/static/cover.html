@@ -67,9 +67,6 @@
   #inline:focus { outline-color:var(--accent); }
   .editing-hidden { visibility:hidden; }
 
-  #log { position:fixed; right:14px; bottom:14px; max-width:420px; max-height:190px; overflow:auto; z-index:20;
-         white-space:pre-wrap; font:11px/1.4 ui-monospace,Menlo,monospace; color:var(--muted);
-         background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:9px; box-shadow:0 6px 24px rgba(0,0,0,.5); }
   #status { font-size:12px; color:var(--muted); margin-left:10px; white-space:nowrap; }
   .pill { background:rgba(224,182,74,.1); color:var(--accent); border-color:rgba(224,182,74,.28); }
   #audiobookImg { position:fixed; right:14px; bottom:14px; width:220px; border:1px solid var(--line); border-radius:8px; z-index:19; }
@@ -91,7 +88,7 @@
   <!-- One document: you edit the full wrap. The eBook front is its front panel and
        the audiobook cover is a square crop of that — both generated, not edited. -->
   <button class="btn" id="genAudiobook" title="Square crop of the front panel (3000×3000)">Audiobook cover</button>
-  <button class="btn primary" id="saveBtn">Save &amp; re-render</button>
+  <button class="btn primary" id="saveBtn">Save</button>
   <a class="navlink" id="toPreview" href="#">preview →</a>
 </header>
 
@@ -153,7 +150,6 @@
   <div id="stage"></div>
 </main>
 
-<div id="log" style="display:none"></div>
 <img id="audiobookImg" style="display:none" alt="audiobook cover" />
 
 <button class="helpbtn" id="helpBtn" title="Keyboard shortcuts (?)">?</button>
@@ -165,7 +161,7 @@
       <tr><td>Select text, then <kbd>B</kbd>/<kbd>I</kbd>/color</td><td>Style just that run</td></tr>
       <tr><td><kbd>⌘</kbd>/<kbd>Ctrl</kbd>+<kbd>B</kbd> / <kbd>I</kbd></td><td>Bold / italic the selection</td></tr>
       <tr><td><kbd>⌘</kbd>/<kbd>Ctrl</kbd>+<kbd>Enter</kbd></td><td>Finish editing</td></tr>
-      <tr><td><kbd>⌘</kbd>/<kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>Save &amp; re-render</td></tr>
+      <tr><td><kbd>⌘</kbd>/<kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>Save</td></tr>
       <tr><td><kbd>←</kbd> <kbd>↑</kbd> <kbd>→</kbd> <kbd>↓</kbd></td><td>Nudge selected box (<kbd>Shift</kbd> = larger)</td></tr>
       <tr><td><kbd>Esc</kbd></td><td>Finish editing / deselect</td></tr>
       <tr><td><kbd>?</kbd></td><td>Toggle this help</td></tr>
