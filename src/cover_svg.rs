@@ -10,7 +10,7 @@
 //! Fonts are `include_bytes!`'d from `templates/cover/fonts/` (see that dir's
 //! README) so covers render with no system fonts and no network.
 
-use crate::config::{BookConfig, CoverElement, RepoConfig};
+use crate::config::{BookConfig, CoverElement, CoverText, RepoConfig, TextRun};
 use crate::cover_tmpl::{resolve, two_line_parts, Resolved};
 use anyhow::{bail, Context, Result};
 use std::path::Path;
@@ -676,10 +676,10 @@ impl CoverRenderer {
         drag: Option<&str>,
     ) -> (f64, f64, f64) {
         let (def_x, def_y, def_w, def_font) = def;
-        let x_pct = el.map(|e| e.x_pct).unwrap_or(def_x);
-        let y_pct = el.map(|e| e.y_pct).unwrap_or(def_y);
-        let w_pct = el.map(|e| e.w_pct).unwrap_or(def_w);
-        let font_pct = el.map(|e| e.font_pct).unwrap_or(def_font);
+        let x_pct = el.and_then(|e| e.x_pct).unwrap_or(def_x);
+        let y_pct = el.and_then(|e| e.y_pct).unwrap_or(def_y);
+        let w_pct = el.and_then(|e| e.w_pct).unwrap_or(def_w);
+        let font_pct = el.and_then(|e| e.font_pct).unwrap_or(def_font);
         let fill = el.and_then(|e| e.fill.clone()).unwrap_or_else(|| def_fill.to_string());
         let family = el
             .and_then(|e| e.font_family.clone())
@@ -687,18 +687,33 @@ impl CoverRenderer {
         let style = el
             .and_then(|e| e.font_style.clone())
             .unwrap_or_else(|| def_style.to_string());
-        let mut content = el
+        // Content is a run list: a plain string is a single unstyled run. `styled`
+        // runs (bold/italic/fill/family/size) are what per-character styling means.
+        let ctext = el
             .and_then(|e| e.text.clone())
-            .filter(|t| !t.trim().is_empty())
-            .unwrap_or_else(|| def_text.to_string());
+            .filter(|t| !t.plain().trim().is_empty())
+            .unwrap_or_else(|| CoverText::Plain(def_text.to_string()));
+        let mut runs = ctext.runs();
+        let mut content = ctext.plain();
 
         // Optional per-element formatting (web editor). Each falls back to the
         // renderer's prior default so untouched layouts are byte-identical.
         match el.and_then(|e| e.text_transform.as_deref()) {
-            Some("upper") => content = content.to_uppercase(),
-            Some("lower") => content = content.to_lowercase(),
+            Some("upper") => {
+                content = content.to_uppercase();
+                for r in &mut runs {
+                    r.t = r.t.to_uppercase();
+                }
+            }
+            Some("lower") => {
+                content = content.to_lowercase();
+                for r in &mut runs {
+                    r.t = r.t.to_lowercase();
+                }
+            }
             _ => {}
         }
+        let has_runs = runs.iter().any(|r| r.styled());
         let lh = el.and_then(|e| e.line_height).filter(|v| *v > 0.0).unwrap_or(1.0);
         let ls = el.and_then(|e| e.letter_spacing).unwrap_or(0.0);
         let opacity = el.and_then(|e| e.opacity).unwrap_or(1.0).clamp(0.0, 1.0);
@@ -768,6 +783,51 @@ impl CoverRenderer {
                     ew,
                     ei,
                 );
+            }
+            if drag.is_some() {
+                out.push_str("</g>");
+            }
+            return (block_top, total_h, block_cx);
+        }
+
+        // Styled-run path (per-character styling): any run overriding the block's
+        // bold/italic/fill/family/size. Line height is the tallest run on the line,
+        // so a bigger run never overlaps its neighbours.
+        if has_runs {
+            let rlines = self.wrap_runs(&runs, &family, weight, italic, size, box_w);
+            let line_h = |l: &Vec<Word>| {
+                let m = l
+                    .iter()
+                    .flatten()
+                    .map(|p| p.size)
+                    .fold(size, f64::max);
+                line_box(m, lh)
+            };
+            let total_h: f64 = rlines.iter().map(line_h).sum();
+            let block_top = y_pct * h - total_h / 2.0;
+            let mut y = block_top;
+            for l in &rlines {
+                let lh_px = line_h(l);
+                let m = l.iter().flatten().map(|p| p.size).fold(size, f64::max);
+                self.emit_runs_line(
+                    out,
+                    l,
+                    tx,
+                    y + baseline(m, lh, vm),
+                    &TextStyle {
+                        family: &family,
+                        weight,
+                        size,
+                        italic,
+                        letter_spacing: ls,
+                        fill: &fill,
+                        opacity,
+                        stroke: &stroke_str,
+                        shadow_id: &shadow,
+                        anchor,
+                    },
+                );
+                y += lh_px;
             }
             if drag.is_some() {
                 out.push_str("</g>");
@@ -849,6 +909,174 @@ impl CoverRenderer {
             return vec![vec![]];
         }
         out
+    }
+
+    /// Greedy-wrap a **styled run list** to `max_w`, honouring explicit newlines.
+    ///
+    /// Runs may split mid-word (per-character styling), so this tokenizes at the
+    /// character level: a *word* is a run of non-whitespace characters and may
+    /// itself be made of several styled pieces. Each piece is measured with its
+    /// own face and size, so wrapping is correct for mixed metrics.
+    // `cur_w` is reset right after a flush on a hard break; the macro makes that
+    // look like a dead store to the lint.
+    #[allow(clippy::too_many_arguments, unused_assignments)]
+    fn wrap_runs(
+        &self,
+        runs: &[TextRun],
+        base_family: &str,
+        base_weight: u16,
+        base_italic: bool,
+        base_size: f64,
+        max_w: f64,
+    ) -> Vec<Vec<Word>> {
+        // ---- tokenize into words (each a Vec<RRun>) + hard breaks ----
+        let mut words: Vec<Word> = Vec::new(); // words of the current line
+        let mut lines: Vec<Vec<Word>> = Vec::new();
+        let mut cur_word: Word = Vec::new();
+        let mut cur_w = 0.0f64; // width of the current line
+        let space_w = self.text_width(" ", base_family, base_weight, base_italic, base_size);
+
+        // Flush the in-progress word onto the current line, wrapping if needed.
+        macro_rules! flush_word {
+            () => {
+                if !cur_word.is_empty() {
+                    let ww: f64 = cur_word
+                        .iter()
+                        .map(|p: &RRun| {
+                            self.text_width(&p.t, &p.family, p.weight, p.italic, p.size)
+                        })
+                        .sum();
+                    let sep = if words.is_empty() { 0.0 } else { space_w };
+                    if !words.is_empty() && cur_w + sep + ww > max_w {
+                        lines.push(std::mem::take(&mut words));
+                        cur_w = ww;
+                    } else {
+                        cur_w += sep + ww;
+                    }
+                    words.push(std::mem::take(&mut cur_word));
+                }
+            };
+        }
+
+        for r in runs {
+            let family = r.family.clone().unwrap_or_else(|| base_family.to_string());
+            let weight = match r.bold {
+                Some(true) => 700,
+                Some(false) => 400,
+                None => base_weight,
+            };
+            let italic = r.italic.unwrap_or(base_italic);
+            let size = base_size * r.size.unwrap_or(1.0);
+            for ch in r.t.chars() {
+                if ch == '\n' {
+                    flush_word!();
+                    lines.push(std::mem::take(&mut words));
+                    cur_w = 0.0;
+                } else if ch.is_whitespace() {
+                    flush_word!();
+                } else {
+                    // append to the current word, merging into the last piece when
+                    // the style is unchanged (keeps the tspan count minimal).
+                    match cur_word.last_mut() {
+                        Some(p)
+                            if p.family == family
+                                && p.weight == weight
+                                && p.italic == italic
+                                && p.size == size
+                                && p.fill == r.fill =>
+                        {
+                            p.t.push(ch)
+                        }
+                        _ => cur_word.push(RRun {
+                            t: ch.to_string(),
+                            family: family.clone(),
+                            weight,
+                            italic,
+                            size,
+                            fill: r.fill.clone(),
+                        }),
+                    }
+                }
+            }
+        }
+        flush_word!();
+        lines.push(words);
+        // Drop leading/trailing blank lines from TOML `"""` blocks; keep interior
+        // blanks (they are the paragraph gaps).
+        while lines.first().is_some_and(|l| l.is_empty()) {
+            lines.remove(0);
+        }
+        while lines.last().is_some_and(|l| l.is_empty()) {
+            lines.pop();
+        }
+        if lines.is_empty() {
+            lines.push(Vec::new());
+        }
+        lines
+    }
+
+    /// Emit one wrapped line of styled runs as a `<text>` with one `<tspan>` per
+    /// styled piece. Pieces inherit the block's fill/size unless they override it.
+    fn emit_runs_line(&self, out: &mut String, line: &[Word], cx: f64, baseline_y: f64, base: &TextStyle) {
+        let base_fam = self.svg_family(base.family, base.weight, base.italic);
+        let mut attrs = format!(
+            "x=\"{}\" y=\"{}\" text-anchor=\"{}\" xml:space=\"preserve\" font-family=\"'{}'\" font-size=\"{}\" fill=\"{}\"",
+            fmt(cx),
+            fmt(baseline_y),
+            base.anchor,
+            xml_attr(base_fam),
+            fmt(base.size),
+            xml_attr(base.fill),
+        );
+        if base.italic {
+            attrs.push_str(" font-style=\"italic\"");
+        }
+        if base.letter_spacing != 0.0 {
+            attrs.push_str(&format!(" letter-spacing=\"{}\"", fmt(base.letter_spacing)));
+        }
+        if base.opacity < 1.0 {
+            attrs.push_str(&format!(" opacity=\"{}\"", fmt(base.opacity)));
+        }
+        if !base.stroke.is_empty() && base.stroke != "0px transparent" {
+            if let Some((w, c)) = parse_stroke(base.stroke) {
+                attrs.push_str(&format!(
+                    " stroke=\"{}\" stroke-width=\"{}\" paint-order=\"stroke\" stroke-linejoin=\"round\"",
+                    xml_attr(&c),
+                    fmt(w)
+                ));
+            }
+        }
+        if !base.shadow_id.is_empty() {
+            attrs.push_str(&format!(" filter=\"url(#{})\"", base.shadow_id));
+        }
+
+        let mut inner = String::new();
+        for (wi, word) in line.iter().enumerate() {
+            for (pi, p) in word.iter().enumerate() {
+                // the inter-word space rides on the word's first piece
+                let seg = if wi > 0 && pi == 0 { format!(" {}", p.t) } else { p.t.clone() };
+                let mut t = String::new();
+                let fam = self.svg_family(&p.family, p.weight, p.italic);
+                if fam != base_fam {
+                    t.push_str(&format!(" font-family=\"'{}'\"", xml_attr(fam)));
+                }
+                if p.italic != base.italic {
+                    t.push_str(if p.italic {
+                        " font-style=\"italic\""
+                    } else {
+                        " font-style=\"normal\""
+                    });
+                }
+                if (p.size - base.size).abs() > 0.01 {
+                    t.push_str(&format!(" font-size=\"{}\"", fmt(p.size)));
+                }
+                if let Some(f) = &p.fill {
+                    t.push_str(&format!(" fill=\"{}\"", xml_attr(f)));
+                }
+                inner.push_str(&format!("<tspan{t}>{}</tspan>", esc(&seg)));
+            }
+        }
+        out.push_str(&format!("<text {attrs}>{inner}</text>"));
     }
 
     /// Emphasis-aware greedy wrap of ONE hard line (no newlines).
@@ -1525,6 +1753,22 @@ struct TextStyle<'a> {
     shadow_id: &'a str,
     anchor: &'a str,
 }
+
+/// A styled run **resolved against its block's base style** — the unit the SVG
+/// emitter turns into one `<tspan>`. `fill: None` means "inherit the block's".
+#[derive(Clone, Debug)]
+struct RRun {
+    t: String,
+    family: String,
+    weight: u16,
+    italic: bool,
+    size: f64,
+    fill: Option<String>,
+}
+
+/// One wrappable word. A word can carry several styles because a run may split
+/// mid-word — that is exactly what per-character styling allows.
+type Word = Vec<RRun>;
 
 /// Inline emphasis for a wrapped text block: which phrases to highlight and the
 /// style (color/font-style/family) applied to their word-runs. Used only for the

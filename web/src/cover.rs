@@ -11,6 +11,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use bookmill::config::TextRun;
 use toml_edit::{value, DocumentMut, Item, Table, Value};
 
 pub const CANVAS_W: f64 = 1600.0;
@@ -212,6 +213,11 @@ pub struct Element {
     pub shadow: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opacity: Option<f64>,
+    /// Per-character styling: the block's text as **styled runs**. When present it
+    /// is the source of truth for the text (`text` stays the plain concatenation,
+    /// for anything that just wants the string). Absent/unstyled => plain `text`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runs: Option<Vec<bookmill::config::TextRun>>,
 }
 
 /// Build the editor payload for (book, lang).
@@ -533,7 +539,12 @@ fn element_inline(e: &Element) -> Value {
     t.insert("fill", e.fill.clone().into());
     t.insert("fontFamily", e.font_family.clone().into());
     t.insert("fontStyle", e.font_style.clone().into());
-    t.insert("text", e.text.clone().into());
+    // Styled runs win over the flat string; a block with no per-run styling keeps
+    // writing `text = "…"` so existing configs stay readable and diffable.
+    match &e.runs {
+        Some(rs) if rs.iter().any(|r| r.styled()) => t.insert("text", runs_value(rs)),
+        _ => t.insert("text", e.text.clone().into()),
+    };
     // Optional formatting — only written when set, so untouched blocks stay terse.
     if let Some(v) = &e.align {
         t.insert("align", v.clone().into());
@@ -590,8 +601,17 @@ fn read_element(item: &Item) -> Option<Element> {
     let f = |k: &str| t.get(k).and_then(|v| v.as_float());
     let s = |k: &str| t.get(k).and_then(|v| v.as_str()).map(str::to_string);
     let b = |k: &str| t.get(k).and_then(|v| v.as_bool());
+    // `text` is either a plain string or an array of styled runs (per-character
+    // styling). Keep both: `runs` drives the render, `text` is the flat string.
+    let runs = read_runs(t.get("text"));
+    let text = match (&runs, s("text")) {
+        (Some(rs), _) => rs.iter().map(|r| r.t.as_str()).collect::<String>(),
+        (None, Some(plain)) => plain,
+        (None, None) => String::new(),
+    };
     Some(Element {
-        text: s("text").unwrap_or_default(),
+        text,
+        runs,
         x_pct: f("xPct")?,
         y_pct: f("yPct")?,
         w_pct: f("wPct").unwrap_or(0.8),
@@ -607,6 +627,52 @@ fn read_element(item: &Item) -> Option<Element> {
         shadow: b("shadow"),
         opacity: f("opacity"),
     })
+}
+
+/// Parse `text = [{ t = "…", bold = true, fill = "#D4A937" }, …]` into runs.
+/// Returns `None` when `text` is a plain string (or absent).
+fn read_runs(item: Option<&toml_edit::Value>) -> Option<Vec<TextRun>> {
+    let arr = item?.as_array()?;
+    let mut out = Vec::new();
+    for v in arr.iter() {
+        let t = v.as_inline_table()?;
+        out.push(TextRun {
+            t: t.get("t").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+            bold: t.get("bold").and_then(|v| v.as_bool()),
+            italic: t.get("italic").and_then(|v| v.as_bool()),
+            fill: t.get("fill").and_then(|v| v.as_str()).map(str::to_string),
+            family: t.get("family").and_then(|v| v.as_str()).map(str::to_string),
+            size: t.get("size").and_then(|v| v.as_float()),
+        });
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// Serialize styled runs back to a TOML array of inline tables. Only set style
+/// keys are written, so an unstyled run stays `{ t = "…" }`.
+fn runs_value(runs: &[TextRun]) -> toml_edit::Value {
+    let mut arr = toml_edit::Array::new();
+    for r in runs {
+        let mut it = toml_edit::InlineTable::new();
+        it.insert("t", r.t.clone().into());
+        if let Some(v) = r.bold {
+            it.insert("bold", v.into());
+        }
+        if let Some(v) = r.italic {
+            it.insert("italic", v.into());
+        }
+        if let Some(v) = &r.fill {
+            it.insert("fill", v.clone().into());
+        }
+        if let Some(v) = &r.family {
+            it.insert("family", v.clone().into());
+        }
+        if let Some(v) = r.size {
+            it.insert("size", v.into());
+        }
+        arr.push(toml_edit::Value::InlineTable(it));
+    }
+    toml_edit::Value::Array(arr)
 }
 
 // --------------------------------------------------------------------------

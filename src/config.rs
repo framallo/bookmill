@@ -2,7 +2,7 @@
 //! Single source of truth for metadata, listing, layout, and content selection.
 
 use anyhow::{bail, Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -301,6 +301,14 @@ pub struct CoverConfig {
     pub trim_w: Option<f64>,
     pub trim_h: Option<f64>,
     pub bleed: Option<f64>,
+    /// **Shared** eBook-front layout (`[cover.layout]`) — one design for every
+    /// language. `[cover.<lang>.layout]` overlays it field-by-field, so ES and EN
+    /// render the same cover and differ only where a language actually needs a
+    /// tweak (its own text, a smaller title because the words are longer).
+    pub layout: Option<CoverLayout>,
+    /// **Shared** back-panel layout (`[cover.wrap]`), overlaid the same way by
+    /// `[cover.<lang>.wrap]`.
+    pub wrap: Option<CoverWrapLayout>,
     /// per-language overrides: [cover.es], [cover.en]
     #[serde(flatten, default)]
     pub lang: BTreeMap<String, CoverLang>,
@@ -343,6 +351,21 @@ pub struct CoverWrapLayout {
     pub author: Option<CoverElement>,
 }
 
+impl CoverWrapLayout {
+    /// Overlay a per-language wrap layout onto the shared one, block by block.
+    pub fn merge(base: Option<&Self>, over: Option<&Self>) -> Option<Self> {
+        if base.is_none() && over.is_none() {
+            return None;
+        }
+        let (b, o) = (base.cloned().unwrap_or_default(), over.cloned().unwrap_or_default());
+        Some(Self {
+            blurb: CoverElement::merge(b.blurb.as_ref(), o.blurb.as_ref()),
+            badge: CoverElement::merge(b.badge.as_ref(), o.badge.as_ref()),
+            author: CoverElement::merge(b.author.as_ref(), o.author.as_ref()),
+        })
+    }
+}
+
 /// Absolute eBook-front cover layout (`[cover.<lang>.layout]`) authored by the
 /// web cover editor (`web/src/cover.rs`). One optional [`CoverElement`] per
 /// draggable text block. Coordinates are fractions of the **1600×2560 eBook
@@ -355,30 +378,49 @@ pub struct CoverLayout {
     pub author: Option<CoverElement>,
 }
 
+impl CoverLayout {
+    /// Overlay a per-language front layout onto the shared one, block by block.
+    /// `None` on both sides stays `None` (→ the renderer's default flex stack).
+    pub fn merge(base: Option<&Self>, over: Option<&Self>) -> Option<Self> {
+        if base.is_none() && over.is_none() {
+            return None;
+        }
+        let (b, o) = (base.cloned().unwrap_or_default(), over.cloned().unwrap_or_default());
+        Some(Self {
+            title: CoverElement::merge(b.title.as_ref(), o.title.as_ref()),
+            subtitle: CoverElement::merge(b.subtitle.as_ref(), o.subtitle.as_ref()),
+            author: CoverElement::merge(b.author.as_ref(), o.author.as_ref()),
+        })
+    }
+}
+
 /// One absolutely-positioned cover text block. Field names/units match exactly
 /// what the web editor persists (`element_inline` in `web/src/cover.rs`):
 ///   * `xPct`/`yPct` — the block's **center**, as a fraction of canvas width/height.
 ///   * `wPct` — wrap-box width, as a fraction of canvas **width**.
 ///   * `fontPct` — font size, as a fraction of canvas **height**.
 ///   * `fill` / `fontFamily` / `fontStyle` / `text` — style + content overrides.
-/// Numeric fields default leniently so a hand-edited partial block never fails the
-/// build; the editor always writes complete values.
-#[derive(Debug, Deserialize, Clone)]
+///
+/// **Every field is optional** so a `[cover.<lang>.layout]` block can override a
+/// single property of the shared `[cover.layout]` and inherit the rest — that is
+/// what keeps the ES and EN covers the same design with only the text (and the
+/// occasional size tweak) differing. See [`CoverElement::over`].
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct CoverElement {
-    #[serde(rename = "xPct", default = "half")]
-    pub x_pct: f64,
-    #[serde(rename = "yPct", default = "half")]
-    pub y_pct: f64,
-    #[serde(rename = "wPct", default = "default_w_pct")]
-    pub w_pct: f64,
-    #[serde(rename = "fontPct", default = "default_font_pct")]
-    pub font_pct: f64,
+    #[serde(rename = "xPct")]
+    pub x_pct: Option<f64>,
+    #[serde(rename = "yPct")]
+    pub y_pct: Option<f64>,
+    #[serde(rename = "wPct")]
+    pub w_pct: Option<f64>,
+    #[serde(rename = "fontPct")]
+    pub font_pct: Option<f64>,
     pub fill: Option<String>,
     #[serde(rename = "fontFamily")]
     pub font_family: Option<String>,
     #[serde(rename = "fontStyle")]
     pub font_style: Option<String>,
-    pub text: Option<String>,
+    pub text: Option<CoverText>,
     // ---- optional formatting (web editor). All default to the renderer's prior
     // behavior when absent, so existing layouts render unchanged. ----
     /// horizontal alignment within the block box: "left" | "center" | "right".
@@ -400,14 +442,120 @@ pub struct CoverElement {
     pub opacity: Option<f64>,
 }
 
-fn half() -> f64 {
-    0.5
+impl CoverElement {
+    /// Field-by-field overlay: `self` is the shared base, `over` the per-language
+    /// override. Any field the override sets wins; everything else is inherited.
+    /// This is what "same cover, minor tweaks per language" means in practice.
+    pub fn over(&self, over: &CoverElement) -> CoverElement {
+        macro_rules! pick {
+            ($f:ident) => {
+                over.$f.clone().or_else(|| self.$f.clone())
+            };
+        }
+        CoverElement {
+            x_pct: pick!(x_pct),
+            y_pct: pick!(y_pct),
+            w_pct: pick!(w_pct),
+            font_pct: pick!(font_pct),
+            fill: pick!(fill),
+            font_family: pick!(font_family),
+            font_style: pick!(font_style),
+            text: pick!(text),
+            align: pick!(align),
+            line_height: pick!(line_height),
+            letter_spacing: pick!(letter_spacing),
+            text_transform: pick!(text_transform),
+            stroke: pick!(stroke),
+            shadow: pick!(shadow),
+            opacity: pick!(opacity),
+        }
+    }
+
+    /// Overlay two optional elements (either side may be absent).
+    pub fn merge(base: Option<&CoverElement>, over: Option<&CoverElement>) -> Option<CoverElement> {
+        match (base, over) {
+            (Some(b), Some(o)) => Some(b.over(o)),
+            (Some(b), None) => Some(b.clone()),
+            (None, Some(o)) => Some(o.clone()),
+            (None, None) => None,
+        }
+    }
 }
-fn default_w_pct() -> f64 {
-    0.8
+
+/// A cover text block's content: either a plain string, or a list of **styled
+/// runs** (the per-character styling model — a run is a span of characters that
+/// share a style, which is how `canvas-editor`'s per-element styles collapse into
+/// something a human can still read and diff in TOML).
+///
+/// ```toml
+/// text = "No hay plata"                                  # plain
+/// text = [                                               # styled runs
+///   { t = "No hay " },
+///   { t = "plata", bold = true, fill = "#D4A937" },
+/// ]
+/// ```
+/// The renderer emits one `<tspan>` per run and measures each with its own face,
+/// so wrapping accounts for mixed metrics.
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+#[serde(untagged)]
+pub enum CoverText {
+    Plain(String),
+    Runs(Vec<TextRun>),
 }
-fn default_font_pct() -> f64 {
-    0.03
+
+impl CoverText {
+    /// The unstyled text, for measuring/fallbacks/`words`-style consumers.
+    pub fn plain(&self) -> String {
+        match self {
+            CoverText::Plain(s) => s.clone(),
+            CoverText::Runs(rs) => rs.iter().map(|r| r.t.as_str()).collect(),
+        }
+    }
+
+    /// Normalize to runs (a plain string is one unstyled run).
+    pub fn runs(&self) -> Vec<TextRun> {
+        match self {
+            CoverText::Plain(s) => vec![TextRun { t: s.clone(), ..Default::default() }],
+            CoverText::Runs(rs) => rs.clone(),
+        }
+    }
+
+    /// True when no run carries a style — lets the renderer keep its simple
+    /// single-face path (and the editor keep writing a plain string).
+    pub fn is_plain(&self) -> bool {
+        match self {
+            CoverText::Plain(_) => true,
+            CoverText::Runs(rs) => rs.iter().all(|r| !r.styled()),
+        }
+    }
+}
+
+/// One styled run within a cover text block. `t` is the text; every style field is
+/// an optional override of the block's own style.
+#[derive(Debug, Deserialize, Serialize, Clone, Default, PartialEq)]
+#[serde(default)]
+pub struct TextRun {
+    /// the run's characters
+    pub t: String,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    /// per-run color (else the block's fill)
+    pub fill: Option<String>,
+    /// per-run font family (else the block's family)
+    pub family: Option<String>,
+    /// per-run size as a **multiple of the block's font size** (1.0 = same).
+    pub size: Option<f64>,
+}
+
+impl TextRun {
+    /// True when this run overrides any of the block's style.
+    pub fn styled(&self) -> bool {
+        self.bold.is_some()
+            || self.italic.is_some()
+            || self.fill.is_some()
+            || self.family.is_some()
+            || self.size.is_some()
+    }
 }
 
 // ---------- audiobook design ([audiobook]) ----------
@@ -903,6 +1051,64 @@ pub fn validate_color_compat(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A per-language layout overrides only the fields it sets; everything else
+    /// is inherited from the shared `[cover.layout]`. This is what keeps the ES
+    /// and EN covers one design.
+    #[test]
+    fn lang_layout_overlays_shared_field_by_field() {
+        let shared: CoverElement = toml::from_str(
+            r##"xPct = 0.5
+               yPct = 0.14
+               fontPct = 0.045
+               fill = "#D4A937"
+               fontFamily = "Playfair Display""##,
+        )
+        .unwrap();
+        // EN only changes the text and nudges the size down.
+        let over: CoverElement =
+            toml::from_str("text = \"No Silver\\non Rat Island\"\nfontPct = 0.04").unwrap();
+        let m = shared.over(&over);
+        assert_eq!(m.font_pct, Some(0.04), "override wins");
+        assert_eq!(m.x_pct, Some(0.5), "inherited");
+        assert_eq!(m.y_pct, Some(0.14), "inherited");
+        assert_eq!(m.fill.as_deref(), Some("#D4A937"), "inherited");
+        assert_eq!(m.font_family.as_deref(), Some("Playfair Display"), "inherited");
+        assert_eq!(m.text.unwrap().plain(), "No Silver\non Rat Island");
+    }
+
+    /// `text` accepts a plain string (every existing book) or styled runs.
+    #[test]
+    fn cover_text_parses_plain_and_runs() {
+        let plain: CoverElement = toml::from_str("text = \"No hay plata\"").unwrap();
+        let t = plain.text.unwrap();
+        assert!(t.is_plain());
+        assert_eq!(t.plain(), "No hay plata");
+        assert_eq!(t.runs().len(), 1, "a plain string is one unstyled run");
+
+        let styled: CoverElement = toml::from_str(
+            r##"text = [ { t = "No hay " }, { t = "plata", bold = true, fill = "#FFF", size = 1.25 } ]"##,
+        )
+        .unwrap();
+        let t = styled.text.unwrap();
+        assert!(!t.is_plain(), "a styled run is not plain");
+        assert_eq!(t.plain(), "No hay plata", "plain() is the flat concatenation");
+        let rs = t.runs();
+        assert_eq!(rs.len(), 2);
+        assert!(!rs[0].styled());
+        assert!(rs[1].styled());
+        assert_eq!(rs[1].bold, Some(true));
+        assert_eq!(rs[1].size, Some(1.25));
+    }
+
+    /// Runs with no style set are still "plain" — the renderer keeps its simple
+    /// single-face path and the editor keeps writing `text = "…"`.
+    #[test]
+    fn unstyled_runs_count_as_plain() {
+        let e: CoverElement =
+            toml::from_str(r#"text = [ { t = "No hay " }, { t = "plata" } ]"#).unwrap();
+        assert!(e.text.unwrap().is_plain());
+    }
 
     #[test]
     fn spine_mult_derivation() {

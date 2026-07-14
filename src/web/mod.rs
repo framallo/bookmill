@@ -682,14 +682,18 @@ async fn api_cover_svg(
 /// style + text carried as overrides). Used to render the editor's working state.
 fn to_cover_el(e: &Element) -> bookmill::config::CoverElement {
     bookmill::config::CoverElement {
-        x_pct: e.x_pct,
-        y_pct: e.y_pct,
-        w_pct: e.w_pct,
-        font_pct: e.font_pct,
+        x_pct: Some(e.x_pct),
+        y_pct: Some(e.y_pct),
+        w_pct: Some(e.w_pct),
+        font_pct: Some(e.font_pct),
         fill: Some(e.fill.clone()),
         font_family: Some(e.font_family.clone()),
         font_style: Some(e.font_style.clone()),
-        text: Some(e.text.clone()),
+        // styled runs when the editor sent any, else the plain string
+        text: Some(match &e.runs {
+            Some(rs) if !rs.is_empty() => bookmill::config::CoverText::Runs(rs.clone()),
+            _ => bookmill::config::CoverText::Plain(e.text.clone()),
+        }),
         align: e.align.clone(),
         line_height: e.line_height,
         letter_spacing: e.letter_spacing,

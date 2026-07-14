@@ -252,8 +252,18 @@ pub(crate) fn resolve(repo: &RepoConfig, book: &BookConfig, lang: &str) -> Resol
         title,
         sub,
         blurb,
-        layout: ml.and_then(|m| m.layout.clone()),
-        wrap_layout: ml.and_then(|m| m.wrap.clone()),
+        // One design for every language: the shared `[cover.layout]` / `[cover.wrap]`
+        // is the base, and `[cover.<lang>.layout]` / `[cover.<lang>.wrap]` overlays
+        // it field-by-field — so ES and EN render the same cover and diverge only
+        // where a language sets something (its text, a smaller title, …).
+        layout: CoverLayout::merge(
+            bc.and_then(|c| c.layout.as_ref()),
+            ml.and_then(|m| m.layout.as_ref()),
+        ),
+        wrap_layout: CoverWrapLayout::merge(
+            bc.and_then(|c| c.wrap.as_ref()),
+            ml.and_then(|m| m.wrap.as_ref()),
+        ),
     }
 }
 
