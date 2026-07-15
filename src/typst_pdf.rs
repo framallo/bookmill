@@ -649,6 +649,18 @@ fn emit_blocks(s: &mut String, blocks: &[Block], root: &Path, captions: bool, gr
                 emit_table(s, header, rows);
                 i += 1;
             }
+            Block::List { ordered, items } => {
+                // Native Typst list markup: `- ` bullet / `+ ` numbered, one item
+                // per line. Item content reuses the same inline() converter as
+                // paragraphs, so bold/italic/links inside a bullet still render.
+                for it in items {
+                    s.push_str(if *ordered { "+ " } else { "- " });
+                    s.push_str(&inline(it));
+                    s.push('\n');
+                }
+                s.push('\n');
+                i += 1;
+            }
             Block::Rule => {
                 s.push_str("#scenebreak\n");
                 i += 1;
@@ -748,6 +760,10 @@ enum Block {
     /// GFM pipe table: a header row plus body rows, each a vector of raw cell
     /// strings (inline markdown, converted at emit time).
     Table { header: Vec<String>, rows: Vec<Vec<String>> },
+    /// A Markdown list. `ordered` selects the Typst marker (`+` numbered vs `-`
+    /// bullet); each item is raw inline markdown (converted at emit time). Flat
+    /// only — nested/indented sublists are flattened into the one list.
+    List { ordered: bool, items: Vec<String> },
 }
 
 /// Remove HTML comments `<!-- ... -->` (including multi-line ones) from Markdown
@@ -877,11 +893,67 @@ fn parse_blocks(md: &str) -> Vec<Block> {
             continue;
         }
 
+        // Markdown list: a run of `- `/`* `/`+ ` (bullet) or `N.`/`N)` (ordered)
+        // marker lines. A blank line or the start of another block ends it; an
+        // unmarked non-blank line is a lazy continuation of the current item
+        // (a wrapped list item). Without this the marker lines fell through to
+        // the paragraph accumulator and joined with spaces, so only the first
+        // "- " survived as a Typst bullet and the rest printed as literal dashes.
+        if let Some((ordered, first)) = list_marker(trimmed) {
+            flush(&mut para, &mut out);
+            let mut items = vec![first];
+            i += 1;
+            while i < lines.len() {
+                let t = lines[i].trim();
+                if t.is_empty() {
+                    break;
+                }
+                if let Some((_, content)) = list_marker(t) {
+                    items.push(content);
+                } else if is_rule(t)
+                    || parse_heading(t).is_some()
+                    || parse_image(t).is_some()
+                    || t.starts_with("```")
+                    || t.starts_with("~~~")
+                    || is_table_row(t)
+                {
+                    break;
+                } else if let Some(last) = items.last_mut() {
+                    last.push(' ');
+                    last.push_str(t);
+                }
+                i += 1;
+            }
+            out.push(Block::List { ordered, items });
+            continue;
+        }
+
         para.push(line.to_string());
         i += 1;
     }
     flush(&mut para, &mut out);
     out
+}
+
+/// If a trimmed line begins a Markdown list item, return `(ordered, content)`
+/// with the marker stripped. Bullets are `-`/`*`/`+` followed by a space;
+/// ordered items are `<digits>.`/`<digits>)` followed by a space. The marker
+/// must be followed by a space so `*emphasis*` and `-3` are not mistaken for
+/// list items (a bare `---`/`***` rule is already handled earlier).
+fn list_marker(line: &str) -> Option<(bool, String)> {
+    for m in ["- ", "* ", "+ "] {
+        if let Some(rest) = line.strip_prefix(m) {
+            return Some((false, rest.trim_start().to_string()));
+        }
+    }
+    let digits: String = line.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if !digits.is_empty() {
+        let after = &line[digits.len()..];
+        if let Some(rest) = after.strip_prefix(". ").or_else(|| after.strip_prefix(") ")) {
+            return Some((true, rest.trim_start().to_string()));
+        }
+    }
+    None
 }
 
 /// A line that looks like a GFM table row: contains a `|` and (after trimming a
