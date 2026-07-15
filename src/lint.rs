@@ -356,8 +356,10 @@ fn canon_res() -> (&'static Regex, &'static Regex, &'static Regex) {
 
 /// Regex/canon checks over the RAW lines (so line numbers are exact): em dashes
 /// in body text, the `%` symbol, and forbidden terms. Skips code fences and the
-/// chapter title / heading lines for the em-dash check.
-fn canon_findings(raw: &str, forbid: &[String]) -> Vec<Finding> {
+/// chapter title / heading lines for the em-dash check. When `allow_percentages`
+/// (business/technical style) the `%` check is skipped; em-dash and forbidden-term
+/// checks always apply.
+fn canon_findings(raw: &str, forbid: &[String], allow_percentages: bool) -> Vec<Finding> {
     let (attr_re, code_re, ddash_re) = canon_res();
     let mut out = Vec::new();
     let mut in_fence = false;
@@ -387,7 +389,7 @@ fn canon_findings(raw: &str, forbid: &[String]) -> Vec<Finding> {
                     count: 1,
                 });
             }
-            if cleaned.contains('%') {
+            if !allow_percentages && cleaned.contains('%') {
                 out.push(Finding {
                     kind: Kind::Canon,
                     text: "%".into(),
@@ -432,6 +434,7 @@ fn lint_chapter(
     dict: Option<&spellbook::Dictionary>,
     ignore: &std::collections::HashSet<String>,
     forbid: &[String],
+    allow_percentages: bool,
     cache: &mut HashMap<String, Class>,
 ) -> ChapterReport {
     let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
@@ -496,7 +499,7 @@ fn lint_chapter(
     }
 
     // --- regex/canon over raw lines ---
-    findings.extend(canon_findings(&raw, forbid));
+    findings.extend(canon_findings(&raw, forbid, allow_percentages));
 
     // order: tilde first, then spell, then canon; tildes/spell by token, canon by line
     findings.sort_by(|a, b| {
@@ -530,7 +533,10 @@ fn tag(k: &Kind) -> &'static str {
 
 /// Build the effective allow-list (lowercased) and forbidden-term list for a book
 /// by merging the repo-root `[lint]` with the per-book `[lint]`.
-fn merged_lint(repo_lint: &LintConfig, book_lint: &LintConfig) -> (std::collections::HashSet<String>, Vec<String>) {
+fn merged_lint(
+    repo_lint: &LintConfig,
+    book_lint: &LintConfig,
+) -> (std::collections::HashSet<String>, Vec<String>, bool) {
     let mut ignore = std::collections::HashSet::new();
     for w in repo_lint.ignore.iter().chain(book_lint.ignore.iter()) {
         let w = w.trim().to_lowercase();
@@ -551,7 +557,10 @@ fn merged_lint(repo_lint: &LintConfig, book_lint: &LintConfig) -> (std::collecti
             forbid.push(t);
         }
     }
-    (ignore, forbid)
+    // per-book style overrides the repo-root one; absent = "children" (default).
+    let style = book_lint.style.as_deref().or(repo_lint.style.as_deref());
+    let allow_percentages = matches!(style, Some("business") | Some("technical"));
+    (ignore, forbid, allow_percentages)
 }
 
 fn langs_for(book: &BookConfig, lang: &Option<String>) -> Vec<String> {
@@ -578,7 +587,7 @@ pub fn run(repo: &Repo, book: Option<String>, lang: Option<String>) -> Result<()
 
     let mut grand_total = 0usize;
     for (b, dir) in books {
-        let (ignore, forbid) = merged_lint(&repo.config.lint, &b.lint);
+        let (ignore, forbid, allow_percentages) = merged_lint(&repo.config.lint, &b.lint);
         for l in langs_for(&b, &lang) {
             let Some(content) = b.content.get(&l) else {
                 println!("  {} [{l}] — no [content.{l}]", b.slug);
@@ -610,7 +619,7 @@ pub fn run(repo: &Repo, book: Option<String>, lang: Option<String>) -> Result<()
             let mut accent_total = 0usize;
             let mut hidden_total = 0usize;
             for path in &files {
-                let rep = lint_chapter(path, &l, dict, &ignore, &forbid, &mut cache);
+                let rep = lint_chapter(path, &l, dict, &ignore, &forbid, allow_percentages, &mut cache);
                 total += rep.total;
                 accent_total += rep.accent;
                 hidden_total += rep.hidden;
@@ -695,7 +704,7 @@ mod tests {
 
     #[test]
     fn canon_flags_emdash_and_percent_not_headings() {
-        let f = canon_findings("# Título — con guion\nEl texto — largo.\nSubió 5%.\n", &[]);
+        let f = canon_findings("# Título — con guion\nEl texto — largo.\nSubió 5%.\n", &[], false);
         // heading line's em dash is NOT flagged; body em dash + % are
         assert!(f.iter().any(|x| x.text == "—" && x.line == 2));
         assert!(f.iter().any(|x| x.text == "%" && x.line == 3));
@@ -703,8 +712,16 @@ mod tests {
     }
 
     #[test]
+    fn business_style_allows_percent_but_still_flags_emdash() {
+        let f = canon_findings("El texto — largo.\nSubió 5%.\n", &[], true);
+        // business/technical: % is allowed, but the em dash is still flagged
+        assert!(f.iter().any(|x| x.text == "—" && x.line == 1));
+        assert!(!f.iter().any(|x| x.text == "%"));
+    }
+
+    #[test]
     fn forbidden_terms_are_flagged() {
-        let f = canon_findings("Esto es como Animal Farm de Orwell.\n", &["Animal Farm".into(), "Orwell".into()]);
+        let f = canon_findings("Esto es como Animal Farm de Orwell.\n", &["Animal Farm".into(), "Orwell".into()], false);
         assert_eq!(f.iter().filter(|x| x.kind == Kind::Canon).count(), 2);
     }
 }

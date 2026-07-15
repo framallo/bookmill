@@ -54,6 +54,12 @@ pub struct LintConfig {
     pub ignore: Vec<String>,
     #[serde(default)]
     pub forbid: Vec<String>,
+    /// prose-lint canon style: "children" (default) forbids numeric percentages
+    /// (`95%` must be written in words); "business"/"technical" allows them.
+    /// Absent = treated as "children" to preserve current behavior. Per-book value
+    /// overrides the repo-root one; em-dash and forbidden-term checks apply to all.
+    #[serde(default)]
+    pub style: Option<String>,
 }
 
 fn default_books_dir() -> String {
