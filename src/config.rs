@@ -105,6 +105,10 @@ pub struct Fonts {
 #[allow(dead_code)]
 pub struct BuildOpts {
     pub output_dir: Option<String>,
+    /// directory holding the per-book KDP metadata worksheets (`<slug>.md`),
+    /// used by `bookmill kdp`. Defaults to "kdp" when unset (back-compatible);
+    /// a repo can relocate them, e.g. `worksheet_dir = "publishing/kdp"`.
+    pub worksheet_dir: Option<String>,
     #[serde(default)]
     pub formats: Vec<String>,
 }

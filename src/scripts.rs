@@ -60,15 +60,28 @@ fn script(repo: &Repo, name: &str) -> Result<PathBuf> {
     Ok(p)
 }
 
+/// Directory holding the per-book KDP worksheets, relative to the repo root.
+/// Configurable via `[build].worksheet_dir`; defaults to "kdp" (back-compatible).
+fn worksheet_dir(repo: &Repo) -> &str {
+    repo.config
+        .build
+        .worksheet_dir
+        .as_deref()
+        .unwrap_or("kdp")
+}
+
 /// Run a Python helper script from the repo root, streaming its output.
 /// Returns Ok even on a non-zero exit (linters flag issues via exit code); the
 /// caller keeps going across books, matching the Makefile's `|| true`.
-fn run_py(root: &Path, script: &Path, args: &[&str]) -> Result<()> {
+/// Exports `BOOKMILL_WORKSHEET_DIR` so helper scripts (kdp-metadata.py) resolve
+/// the same worksheet directory bookmill does.
+fn run_py(repo: &Repo, script: &Path, args: &[&str]) -> Result<()> {
     println!("$ python3 {} {}", script.display(), args.join(" "));
     let status = Command::new("python3")
         .arg(script)
         .args(args)
-        .current_dir(root)
+        .current_dir(&repo.root)
+        .env("BOOKMILL_WORKSHEET_DIR", worksheet_dir(repo))
         .status()
         .with_context(|| format!("running python3 {}", script.display()))?;
     if !status.success() {
@@ -85,7 +98,7 @@ pub fn lint(repo: &Repo, book: Option<String>, lang: Option<String>) -> Result<(
     let script = script(repo, "lint-prose.py")?;
     for (b, _dir) in books(repo, &book)? {
         for l in langs_for(&b, &lang) {
-            run_py(&repo.root, &script, &[&b.slug, &l])?;
+            run_py(repo, &script, &[&b.slug, &l])?;
         }
     }
     Ok(())
@@ -98,18 +111,21 @@ pub fn kdp(repo: &Repo, book: Option<String>) -> Result<()> {
     match book {
         // `all`: scaffold every missing worksheet, then check them all.
         None => {
-            run_py(&repo.root, &script, &["scaffold", "all"])?;
-            run_py(&repo.root, &script, &["check", "all"])?;
+            run_py(repo, &script, &["scaffold", "all"])?;
+            run_py(repo, &script, &["check", "all"])?;
         }
         Some(ref s) if s == "all" => {
-            run_py(&repo.root, &script, &["scaffold", "all"])?;
-            run_py(&repo.root, &script, &["check", "all"])?;
+            run_py(repo, &script, &["scaffold", "all"])?;
+            run_py(repo, &script, &["check", "all"])?;
         }
         Some(s) => {
             let (b, _dir) = repo.find_book(&s)?;
-            let worksheet = repo.root.join("kdp").join(format!("{}.md", b.slug));
+            let worksheet = repo
+                .root
+                .join(worksheet_dir(repo))
+                .join(format!("{}.md", b.slug));
             let sub = if worksheet.exists() { "check" } else { "scaffold" };
-            run_py(&repo.root, &script, &[sub, &b.slug])?;
+            run_py(repo, &script, &[sub, &b.slug])?;
         }
     }
     Ok(())
