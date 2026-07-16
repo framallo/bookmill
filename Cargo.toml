@@ -68,3 +68,10 @@ typst-layout = "0.15.0"
 typst-pdf = "0.15.0"
 typst-kit = { version = "0.15.0", default-features = false, features = ["embedded-fonts", "scan-fonts"] }
 comemo = "0.5.1"
+
+[features]
+# Opt-in LanguageTool-quality grammar for `bookmill lint --deep` (offline). Forwards
+# to prose-lint's `languagetool` backend: nlprule (LanguageTool engine ported to
+# Rust) + ported Java rules. Adds ~26 MB of embedded rule data, so it is off by
+# default. Install with: cargo install --path . --features languagetool
+languagetool = ["prose-lint/languagetool"]
