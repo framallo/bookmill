@@ -14,16 +14,26 @@
 use crate::config::{BookConfig, LintConfig, FORBIDDEN_PUBLIC};
 use crate::discover::Repo;
 use anyhow::{bail, Result};
-use prose_lint::{lint_markdown, Kind, Lang, Opts};
+use prose_lint::{lint_markdown, Kind, Lang, Opts, Variant};
 use std::collections::HashSet;
 
 /// Default forbidden terms the project always cares about (merged with the
 /// `[lint].forbid` config + `FORBIDDEN_PUBLIC`). Matched case-insensitively.
 const DEFAULT_FORBID: &[&str] = &["Pingüina", "Animal Farm", "Orwell", "Rebelión en la granja"];
 
-/// Build the effective allow-list (lowercased), forbidden-term list, and
-/// percentage-style flag for a book by merging repo-root `[lint]` with book `[lint]`.
-fn merged_lint(repo_lint: &LintConfig, book_lint: &LintConfig) -> (HashSet<String>, Vec<String>, bool) {
+/// Effective lint settings for a book, merged repo-root `[lint]` → book `[lint]`.
+struct Merged {
+    ignore: HashSet<String>,
+    forbid: Vec<String>,
+    allow_percentages: bool,
+    /// Lowercased grammar rule ids / categories to suppress (LanguageTool backend).
+    disable_rules: HashSet<String>,
+    /// Spanish register (voseo vs. tuteo).
+    variant: Variant,
+}
+
+/// Build the effective lint settings by merging repo-root `[lint]` with book `[lint]`.
+fn merged_lint(repo_lint: &LintConfig, book_lint: &LintConfig) -> Merged {
     let mut ignore = HashSet::new();
     for w in repo_lint.ignore.iter().chain(book_lint.ignore.iter()) {
         let w = w.trim().to_lowercase();
@@ -46,7 +56,25 @@ fn merged_lint(repo_lint: &LintConfig, book_lint: &LintConfig) -> (HashSet<Strin
     }
     let style = book_lint.style.as_deref().or(repo_lint.style.as_deref());
     let allow_percentages = matches!(style, Some("business") | Some("technical"));
-    (ignore, forbid, allow_percentages)
+
+    // Grammar rule overrides — repo + book merged, lowercased for case-insensitive
+    // matching against a finding's `/`-separated rule segments.
+    let mut disable_rules = HashSet::new();
+    for r in repo_lint.disable_rules.iter().chain(book_lint.disable_rules.iter()) {
+        let r = r.trim().to_lowercase();
+        if !r.is_empty() {
+            disable_rules.insert(r);
+        }
+    }
+    // Register — book overrides repo; absent → Rioplatense (voseo accepted).
+    let variant = book_lint
+        .variant
+        .as_deref()
+        .or(repo_lint.variant.as_deref())
+        .map(Variant::from_name)
+        .unwrap_or_default();
+
+    Merged { ignore, forbid, allow_percentages, disable_rules, variant }
 }
 
 fn langs_for(book: &BookConfig, lang: &Option<String>) -> Vec<String> {
@@ -73,7 +101,8 @@ pub fn run(repo: &Repo, book: Option<String>, lang: Option<String>, grammar: boo
 
     let mut grand_total = 0usize;
     for (b, dir) in books {
-        let (ignore, forbid, allow_percentages) = merged_lint(&repo.config.lint, &b.lint);
+        let Merged { ignore, forbid, allow_percentages, disable_rules, variant } =
+            merged_lint(&repo.config.lint, &b.lint);
         for l in langs_for(&b, &lang) {
             let Some(content) = b.content.get(&l) else {
                 println!("  {} [{l}] — no [content.{l}]", b.slug);
@@ -91,15 +120,23 @@ pub fn run(repo: &Repo, book: Option<String>, lang: Option<String>, grammar: boo
                 forbid: forbid.clone(),
                 allow_percentages,
                 grammar,
+                disable_rules: disable_rules.clone(),
+                variant,
             };
             let lang_enum = Lang::from_code(&l);
 
             let mut notes = Vec::new();
             if lang_enum == Lang::Es {
-                notes.push("voseo-aware".to_string());
+                notes.push(match variant {
+                    Variant::Rioplatense => "voseo-aware".to_string(),
+                    Variant::General => "formal (tuteo)".to_string(),
+                });
             }
             if grammar {
                 notes.push("grammar".to_string());
+                if !disable_rules.is_empty() {
+                    notes.push(format!("{} rule(s) off", disable_rules.len()));
+                }
             }
             if !ignore.is_empty() {
                 notes.push(format!("{} allow-listed", ignore.len()));

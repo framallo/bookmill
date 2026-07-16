@@ -112,6 +112,17 @@ pub struct LintConfig {
     /// overrides the repo-root one; em-dash and forbidden-term checks apply to all.
     #[serde(default)]
     pub style: Option<String>,
+    /// Grammar rules to silence in `--deep` (LanguageTool backend), by rule id or
+    /// category — e.g. `["GUION_LARGO", "COMILLAS_TIPOGRAFICAS"]` for a house style
+    /// that keeps straight quotes and no em dashes. Matches any `/`-separated
+    /// segment of a finding's rule (case-insensitive). Repo + book lists are merged.
+    #[serde(default)]
+    pub disable_rules: Vec<String>,
+    /// Spanish register: "rioplatense"/"voseo" (default — Argentine voseo accepted)
+    /// or "formal"/"general" (tuteo — voseo forms are flagged with the tú-form
+    /// suggestion). Per-book value overrides the repo-root one.
+    #[serde(default)]
+    pub variant: Option<String>,
 }
 
 fn default_books_dir() -> String {
