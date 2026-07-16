@@ -44,6 +44,68 @@ impl Repo {
         self.root.join(&self.config.books_dir)
     }
 
+    // ---- configurable path layout ([paths]) — see config::Paths ----
+
+    /// Build output root (repo-root-relative; `[paths].output_dir`, default "output").
+    pub fn output_dir(&self) -> PathBuf {
+        self.root.join(&self.config.paths.output_dir)
+    }
+
+    /// Per-book cover asset dir (`[paths].cover_dir`, default "cover").
+    pub fn cover_dir(&self, book_dir: &Path) -> PathBuf {
+        book_dir.join(&self.config.paths.cover_dir)
+    }
+
+    /// Project-local template override dir (`[paths].templates_dir`, default "templates").
+    pub fn templates_dir(&self) -> PathBuf {
+        self.root.join(&self.config.paths.templates_dir)
+    }
+
+    /// EPUB stylesheet (`[paths].epub_css`, default "css/epub.css").
+    pub fn epub_css(&self) -> PathBuf {
+        self.root.join(&self.config.paths.epub_css)
+    }
+
+    /// Retail-PDF page-background texture (`[paths].paper_texture`).
+    pub fn paper_texture(&self) -> PathBuf {
+        self.root.join(&self.config.paths.paper_texture)
+    }
+
+    /// Audiobook scratch/cache dir (`[paths].tmp_dir`, default ".bookmill-tmp").
+    pub fn tmp_dir(&self) -> PathBuf {
+        self.root.join(&self.config.paths.tmp_dir)
+    }
+
+    /// eBook front-cover filename for `lang` (`[paths].front_cover`).
+    pub fn front_cover_name(&self, lang: &str) -> String {
+        self.config.paths.front_cover.replace("{lang}", lang)
+    }
+
+    /// Paperback wrap-cover filename for `lang` (`[paths].wrap_cover`).
+    pub fn wrap_cover_name(&self, lang: &str) -> String {
+        self.config.paths.wrap_cover.replace("{lang}", lang)
+    }
+
+    /// Full path to a book's eBook front cover for `lang`.
+    pub fn front_cover(&self, book_dir: &Path, lang: &str) -> PathBuf {
+        self.cover_dir(book_dir).join(self.front_cover_name(lang))
+    }
+
+    /// Full path to a book's paperback wrap cover for `lang`.
+    pub fn wrap_cover(&self, book_dir: &Path, lang: &str) -> PathBuf {
+        self.cover_dir(book_dir).join(self.wrap_cover_name(lang))
+    }
+
+    /// Full path to a book's PDF copyright page for `lang` (`[paths].copyright_pdf`).
+    pub fn copyright_pdf(&self, book_dir: &Path, lang: &str) -> PathBuf {
+        book_dir.join(self.config.paths.copyright_pdf.replace("{lang}", lang))
+    }
+
+    /// Full path to a book's EPUB copyright page for `lang` (`[paths].copyright_epub`).
+    pub fn copyright_epub(&self, book_dir: &Path, lang: &str) -> PathBuf {
+        book_dir.join(self.config.paths.copyright_epub.replace("{lang}", lang))
+    }
+
     /// List discovered book directories (those with a book-level `bookmill.toml`).
     pub fn book_dirs(&self) -> Result<Vec<PathBuf>> {
         let bd = self.books_dir();

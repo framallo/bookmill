@@ -189,8 +189,7 @@ fn plan(
                 );
             }
             let out = repo
-                .root
-                .join("output")
+                .output_dir()
                 .join(&book.slug)
                 .join(&lang)
                 .join(format!("{}-{}.m4b", book.slug, lang));
@@ -261,7 +260,7 @@ pub fn clean(
     let mut removed = 0usize;
     for (book, _dir) in &books {
         for lang in langs_for(book, &lang_filter) {
-            let odir = repo.root.join("output").join(&book.slug).join(&lang);
+            let odir = repo.output_dir().join(&book.slug).join(&lang);
             // New location (repo-local scratch, outside output/) + legacy
             // in-output dirs from older versions.
             let mut targets = vec![

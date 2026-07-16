@@ -72,7 +72,7 @@ pub fn run(
     // setup. Always emitted (even absent a repo stylesheet) so the linked
     // `stylesheet.css` always resolves.
     let mut css = String::new();
-    let css_path = repo.root.join("css/epub.css");
+    let css_path = repo.epub_css();
     if css_path.exists() {
         css.push_str(
             &std::fs::read_to_string(&css_path)

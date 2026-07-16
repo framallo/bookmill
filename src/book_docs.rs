@@ -140,9 +140,9 @@ fn build_sample(
     let mut sample_chaps: Vec<PathBuf> = chaps.iter().take(n).cloned().collect();
     sample_chaps.push(note_path.clone());
 
-    let cepub = some(dir.join(lang).join("copyright-epub.md"));
-    let cpdf = some(dir.join(lang).join("copyright.md"));
-    let cover = some(dir.join("cover").join(format!("front-{lang}.png")));
+    let cepub = some(repo.copyright_epub(dir, lang));
+    let cpdf = some(repo.copyright_pdf(dir, lang));
+    let cover = some(repo.front_cover(dir, lang));
     let openright = book.pdf.chapter_opens.as_deref() == Some("recto");
     let plate_framed = book.pdf.plate_style.as_deref() == Some("framed");
     let plate_width = book.pdf.plate_width.unwrap_or(0.78);
@@ -366,7 +366,7 @@ fn status_line(book: &BookConfig) -> String {
 
 /// `output/<slug>/`
 fn out_dir(repo: &Repo, slug: &str) -> PathBuf {
-    repo.root.join("output").join(slug)
+    repo.output_dir().join(slug)
 }
 
 fn some(p: PathBuf) -> Option<PathBuf> {

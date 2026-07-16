@@ -35,7 +35,7 @@ pub fn editor_cover_svg(
 ) -> Result<String> {
     let repo = config::load_repo(&repo_root.join("bookmill.toml"))?;
     let book = config::load_book(&book_dir.join("bookmill.toml"))?;
-    let cover_dir = book_dir.join("cover");
+    let cover_dir = book_dir.join(&repo.paths.cover_dir);
     let r = cover_svg::CoverRenderer::new();
     if wrap {
         r.wrap_svg_string(&repo, &book, lang, &cover_dir, pages)
@@ -74,7 +74,7 @@ pub fn editor_cover_svg_preview(
             cl.wrap = wrap_layout;
         }
     }
-    let cover_dir = book_dir.join("cover");
+    let cover_dir = book_dir.join(&repo.paths.cover_dir);
     let r = cover_svg::CoverRenderer::new();
     if wrap {
         r.wrap_svg_string(&repo, &book, lang, &cover_dir, pages)

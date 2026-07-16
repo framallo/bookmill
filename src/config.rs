@@ -40,6 +40,58 @@ pub struct RepoConfig {
     /// prose-lint allow-list + forbidden terms ([lint]); merged repo→book by `lint`.
     #[serde(default)]
     pub lint: LintConfig,
+    /// repo path layout ([paths]); every key defaults to bookmill's convention and
+    /// is overridable. Resolved via the `Repo::*` path helpers.
+    #[serde(default)]
+    pub paths: Paths,
+}
+
+// ---------- repo path layout ([paths]) ----------
+/// Configurable repo path layout. Every field defaults to bookmill's long-standing
+/// convention, so an absent `[paths]` changes nothing; set a key to relocate that
+/// artifact. Repo-root-relative keys (output, texture, css, templates, tmp) and
+/// book-relative keys (cover dir, cover/copyright filename patterns, where `{lang}`
+/// is substituted) are resolved by the `Repo::*` helpers in discover.rs.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(default)]
+pub struct Paths {
+    /// build output root (repo-root-relative). Default "output".
+    pub output_dir: String,
+    /// per-book cover asset dir (book-relative). Default "cover".
+    pub cover_dir: String,
+    /// project-local template override dir (repo-root-relative). Default "templates".
+    pub templates_dir: String,
+    /// EPUB stylesheet (repo-root-relative). Default "css/epub.css".
+    pub epub_css: String,
+    /// retail-PDF page-background texture (repo-root-relative). Default "images/paper-texture.jpg".
+    pub paper_texture: String,
+    /// audiobook scratch/cache dir (repo-root-relative). Default ".bookmill-tmp".
+    pub tmp_dir: String,
+    /// eBook front-cover filename pattern (`{lang}` substituted). Default "front-{lang}.png".
+    pub front_cover: String,
+    /// paperback wrap-cover filename pattern (`{lang}` substituted). Default "wrap-{lang}-KDP.pdf".
+    pub wrap_cover: String,
+    /// PDF copyright page pattern, book-relative (`{lang}` substituted). Default "{lang}/copyright.md".
+    pub copyright_pdf: String,
+    /// EPUB copyright page pattern, book-relative (`{lang}` substituted). Default "{lang}/copyright-epub.md".
+    pub copyright_epub: String,
+}
+
+impl Default for Paths {
+    fn default() -> Self {
+        Paths {
+            output_dir: "output".into(),
+            cover_dir: "cover".into(),
+            templates_dir: "templates".into(),
+            epub_css: "css/epub.css".into(),
+            paper_texture: "images/paper-texture.jpg".into(),
+            tmp_dir: ".bookmill-tmp".into(),
+            front_cover: "front-{lang}.png".into(),
+            wrap_cover: "wrap-{lang}-KDP.pdf".into(),
+            copyright_pdf: "{lang}/copyright.md".into(),
+            copyright_epub: "{lang}/copyright-epub.md".into(),
+        }
+    }
 }
 
 // ---------- prose lint ([lint]) ----------

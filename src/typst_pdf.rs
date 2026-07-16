@@ -394,10 +394,11 @@ bottom: {bottom:.4}in, inside: {inside:.4}in, outside: {outside:.4}in))\n",
     // Retail-only paper-texture page background: scale
     // `<repo>/images/paper-texture.jpg` to the full page behind every page. KDP
     // print PDFs must NOT get it. Skip silently if the image is absent.
-    if retail && repo.root.join("images/paper-texture.jpg").exists() {
-        s.push_str(
-            "#set page(background: image(\"/images/paper-texture.jpg\", width: 100%, height: 100%))\n",
-        );
+    if retail && repo.paper_texture().exists() {
+        s.push_str(&format!(
+            "#set page(background: image(\"/{}\", width: 100%, height: 100%))\n",
+            repo.config.paths.paper_texture,
+        ));
     }
     s.push_str(&format!("#set text(size: 11pt, lang: {})\n", ty_str(lang)));
     s.push_str("#set par(justify: true, leading: 0.72em, first-line-indent: 1.2em)\n");
