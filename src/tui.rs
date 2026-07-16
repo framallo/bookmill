@@ -41,9 +41,9 @@ pub enum Action {
     Audiobook { book: String, lang: String },
     /// word + page counts (native)
     Words { book: String, lang: String },
-    /// prose lint (LanguageTool via scripts/lint-prose.py)
+    /// prose lint (native, via the prose-lint crate)
     Lint { book: String, lang: String },
-    /// scaffold/check KDP listing metadata (scripts/kdp-metadata.py)
+    /// scaffold/check KDP listing metadata (native; kdp/<slug>.md worksheet)
     Kdp { book: String },
 }
 

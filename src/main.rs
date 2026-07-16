@@ -20,7 +20,7 @@ mod covers;
 mod deep;
 mod discover;
 mod lint;
-mod scripts;
+mod kdp;
 mod tui;
 mod words;
 mod typst_pdf;
@@ -120,11 +120,12 @@ enum Cmd {
         /// limit to a language (es|en|all)
         #[arg(long)]
         lang: Option<String>,
-        /// deep mode: also run full grammar via scripts/lint-prose.py (LanguageTool)
+        /// deep mode: also run the grammar pass (offline rule engine + optional
+        /// Harper/nlprule backends), on top of tildes/spelling/canon
         #[arg(long, visible_alias = "languagetool")]
         deep: bool,
     },
-    /// Scaffold/check KDP listing metadata via scripts/kdp-metadata.py
+    /// Scaffold/check KDP listing metadata (native; kdp/<slug>.md worksheet)
     Kdp {
         /// book slug (omit or "all" = every book)
         book: Option<String>,
@@ -308,14 +309,8 @@ fn main() -> Result<()> {
         }
         Cmd::Content { book, lang } => cmd_content(&repo, &book, &lang)?,
         Cmd::Words { book, lang } => words::run(&repo, book, lang)?,
-        Cmd::Lint { book, lang, deep } => {
-            if deep {
-                scripts::lint(&repo, book, lang)?
-            } else {
-                lint::run(&repo, book, lang)?
-            }
-        }
-        Cmd::Kdp { book } => scripts::kdp(&repo, book)?,
+        Cmd::Lint { book, lang, deep } => lint::run(&repo, book, lang, deep)?,
+        Cmd::Kdp { book } => kdp::run(&repo, book)?,
         Cmd::Tui => match tui::run(&repo)? {
             Some(action) => {
                 // Show the exact command about to run, before running it.
@@ -355,13 +350,12 @@ fn main() -> Result<()> {
                     }
                     tui::Action::Lint { book, lang } => {
                         let lang = (lang != "all").then_some(lang);
-                        // native lint by default (Python-free); `--deep` on the CLI
-                        // still routes to scripts/lint-prose.py for full grammar.
-                        // Issues make `run` return Err (non-zero exit on the CLI);
-                        // in the TUI we only want the report, so don't abort.
-                        let _ = lint::run(&repo, Some(book), lang);
+                        // Fast native lint (no grammar pass) from the TUI. Issues make
+                        // `run` return Err (non-zero exit on the CLI); in the TUI we
+                        // only want the report, so don't abort.
+                        let _ = lint::run(&repo, Some(book), lang, false);
                     }
-                    tui::Action::Kdp { book } => scripts::kdp(&repo, Some(book))?,
+                    tui::Action::Kdp { book } => kdp::run(&repo, Some(book))?,
                 }
                 // Bare, copy-pasteable command on its own line (no prefix, no
                 // emoji) so a terminal selection re-runs this exact task verbatim.
