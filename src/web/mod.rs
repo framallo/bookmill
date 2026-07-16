@@ -411,7 +411,7 @@ async fn api_book(
 
     let mut langs = serde_json::Map::new();
     for lang in &cfg.languages {
-        let pdf = kdp_pdf_path(&act.disco.root, &slug, lang);
+        let pdf = kdp_pdf_path(&act.disco.output_dir(), &slug, lang);
         let pages = if pdf.exists() { pdf_pages(&pdf) } else { None };
         let cover_exists = book
             .as_ref()
@@ -480,8 +480,8 @@ fn output_specs(slug: &str, lang: &str) -> Vec<OutputSpec> {
 }
 
 /// Absolute path of an output artifact inside `output/<slug>/<lang>/`.
-fn output_path(root: &Path, slug: &str, lang: &str, file: &str) -> PathBuf {
-    root.join("output").join(slug).join(lang).join(file)
+fn output_path(out_root: &Path, slug: &str, lang: &str, file: &str) -> PathBuf {
+    out_root.join(slug).join(lang).join(file)
 }
 
 /// `GET /api/outputs/{book}/{lang}` — the output rows for the detail page: for
@@ -496,7 +496,7 @@ async fn api_outputs(
     let rows: Vec<_> = output_specs(&book, &lang)
         .into_iter()
         .map(|s| {
-            let p = output_path(&act.repo.root, &book, &lang, &s.file);
+            let p = output_path(&act.disco.output_dir(), &book, &lang, &s.file);
             let (exists, mtime) = match std::fs::metadata(&p) {
                 Ok(m) => (
                     true,
@@ -533,7 +533,7 @@ async fn api_output(
         .into_iter()
         .find(|s| s.kind == kind)
         .ok_or((StatusCode::BAD_REQUEST, format!("unknown output kind: {kind}")))?;
-    let path = output_path(&act.repo.root, &book, &lang, &spec.file);
+    let path = output_path(&act.disco.output_dir(), &book, &lang, &spec.file);
     let bytes = std::fs::read(&path).map_err(|_| {
         (StatusCode::NOT_FOUND, format!("not built yet: {}", spec.file))
     })?;
@@ -667,7 +667,7 @@ async fn api_cover_svg(
     let (cfg, dir) = act.disco.find_book(&book).map_err(err)?;
     check_lang(&cfg.languages, &lang)?;
     let wrap = q.wrap != 0;
-    let pages = pdf_pages(&kdp_pdf_path(&act.disco.root, &book, &lang)).unwrap_or(st.default_pages);
+    let pages = pdf_pages(&kdp_pdf_path(&act.disco.output_dir(), &book, &lang)).unwrap_or(st.default_pages);
     let svg = bookmill::editor_cover_svg(&act.disco.root, &dir, &lang, wrap, pages).map_err(err)?;
     Ok((
         [
@@ -717,7 +717,7 @@ async fn api_cover_svg_preview(
     let (cfg, dir) = act.disco.find_book(&book).map_err(err)?;
     check_lang(&cfg.languages, &lang)?;
     let wrap = q.wrap != 0;
-    let pages = pdf_pages(&kdp_pdf_path(&act.disco.root, &book, &lang)).unwrap_or(st.default_pages);
+    let pages = pdf_pages(&kdp_pdf_path(&act.disco.output_dir(), &book, &lang)).unwrap_or(st.default_pages);
     let layout = bookmill::config::CoverLayout {
         title: Some(to_cover_el(&body.title)),
         subtitle: Some(to_cover_el(&body.subtitle)),
@@ -794,9 +794,8 @@ async fn api_save(
 
     // Re-render authoritatively. Pass --pages only if the print interior is absent.
     let kdp_pdf = act
-        .repo
-        .root
-        .join("output")
+        .disco
+        .output_dir()
         .join(&b.slug)
         .join(&lang)
         .join(format!("{}-{}-kdp.pdf", b.slug, lang));
@@ -911,8 +910,8 @@ async fn api_asset(
 // --------------------------------------------------------------------------
 
 /// Canonical KDP print interior path for a book/lang.
-fn kdp_pdf_path(root: &Path, slug: &str, lang: &str) -> PathBuf {
-    root.join("output")
+fn kdp_pdf_path(out_root: &Path, slug: &str, lang: &str) -> PathBuf {
+    out_root
         .join(slug)
         .join(lang)
         .join(format!("{slug}-{lang}-kdp.pdf"))
@@ -933,7 +932,7 @@ async fn api_preview_meta(
     let act = st.active.read().unwrap();
     let (cfg, _dir) = act.disco.find_book(&book).map_err(err)?;
     check_lang(&cfg.languages, &lang)?;
-    let pdf = kdp_pdf_path(&act.disco.root, &book, &lang);
+    let pdf = kdp_pdf_path(&act.disco.output_dir(), &book, &lang);
     let exists = pdf.exists();
     let pages = if exists { pdf_pages(&pdf) } else { None };
     let geometry = crate::build::kdp_print_geometry(&act.disco, &cfg).map(|g| {
@@ -1002,9 +1001,8 @@ fn find_pdftoppm() -> Option<PathBuf> {
 /// Rasterize page `n` of the KDP PDF to a cached PNG via `pdftoppm`, returning
 /// the PNG path. Cache key includes the DPI; the cache is invalidated when the
 /// PDF is newer than the cached image.
-fn render_preview_page(root: &Path, slug: &str, lang: &str, pdf: &Path, n: u32) -> anyhow::Result<PathBuf> {
-    let dir = root
-        .join("output")
+fn render_preview_page(out_root: &Path, slug: &str, lang: &str, pdf: &Path, n: u32) -> anyhow::Result<PathBuf> {
+    let dir = out_root
         .join(".preview-cache")
         .join(slug)
         .join(lang);
@@ -1058,7 +1056,7 @@ async fn api_preview_page(
     let (root, _ok) = {
         let act = st.active.read().unwrap();
         let _ = act.disco.find_book(&book).map_err(err)?;
-        (act.disco.root.clone(), ())
+        (act.disco.output_dir(), ())
     };
     let pdf = kdp_pdf_path(&root, &book, &lang);
     if !pdf.exists() {

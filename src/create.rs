@@ -30,18 +30,37 @@ const SCAFFOLD_ASSETS: &[(&str, &str)] = &[
     ("css/epub.css", include_str!("../templates/scaffold/css/epub.css")),
 ];
 
+/// Bundled binary defaults written into a new repo on `init`. The retail PDF page
+/// texture lives at `[paths].paper_texture` (default `images/paper-texture.jpg`);
+/// shipping a default means a fresh repo's retail PDFs have a paper background out
+/// of the box (override by replacing the file). `(relative path, bytes)`.
+const SCAFFOLD_BINARY_ASSETS: &[(&str, &[u8])] = &[
+    ("images/paper-texture.jpg", include_bytes!("../templates/scaffold/images/paper-texture.jpg")),
+];
+
+/// Placeholder cover background written into each new book's `cover/` dir so
+/// `bookmill build cover` renders something immediately (replace with real art).
+const BOOK_COVER_BG: &[u8] = include_bytes!("../templates/scaffold/cover/bg.jpg");
+
+/// Write bytes to `path` unless it already exists (never clobber a customized file).
+fn write_if_absent(path: &Path, bytes: &[u8]) -> Result<()> {
+    if path.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))
+}
+
 /// Write the shared build assets into `root` (skip any that already exist, so a
 /// customized file is never clobbered).
 fn write_scaffold_assets(root: &Path) -> Result<()> {
     for (rel, contents) in SCAFFOLD_ASSETS {
-        let p = root.join(rel);
-        if p.exists() {
-            continue;
-        }
-        if let Some(parent) = p.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&p, contents).with_context(|| format!("writing {}", p.display()))?;
+        write_if_absent(&root.join(rel), contents.as_bytes())?;
+    }
+    for (rel, bytes) in SCAFFOLD_BINARY_ASSETS {
+        write_if_absent(&root.join(rel), bytes)?;
     }
     Ok(())
 }
@@ -365,6 +384,10 @@ fn write_book(
         let chap = ldir.join(format!("{stem}-01.md"));
         std::fs::write(&chap, starter_chapter(lang))?;
     }
+
+    // placeholder cover background (default [paths].cover_dir = "cover") so
+    // `bookmill build cover` renders immediately; replace with real art.
+    write_if_absent(&book_dir.join("cover").join("bg.jpg"), BOOK_COVER_BG)?;
     Ok(())
 }
 
