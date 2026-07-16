@@ -41,9 +41,10 @@ color_quant = "1.1"
 oxipng = { version = "9", default-features = false, features = ["parallel"] }
 mozjpeg = "0.10"
 regex = "1"
-# Native prose lint: pure-Rust, Hunspell-compatible spellchecker. Drives the
-# missing-tilde detector in src/lint.rs against the bundled es_ES/en_US dicts.
-spellbook = "0.4"
+# Prose lint engine — offline bilingual linter (tildes, voseo, canon, offline
+# LanguageTool-style grammar rules). Extracted into its own reusable crate;
+# `bookmill lint` is a thin driver over it. See github.com/framallo/prose-lint.
+prose-lint = { git = "https://github.com/framallo/prose-lint" }
 # Content hashing for the audiobook incremental-render manifest (which chapters
 # changed since the last render → re-render + tell the proofreader what to re-hear).
 sha2 = "0.10"

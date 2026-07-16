@@ -43,7 +43,7 @@ pub fn run(
         // A book with no background art is no longer skipped: it renders on the
         // solid `[cover].bgcolor`. That's a visible product decision, so ask
         // before doing it (once per book — the art is shared across languages).
-        let cover_dir = dir.join("cover");
+        let cover_dir = repo.cover_dir(dir);
         let no_art = langs
             .iter()
             .all(|l| crate::cover_svg::art_missing(&repo.config, book, l, &cover_dir));
@@ -103,13 +103,13 @@ fn cover_one_resvg(
     pages_override: Option<u32>,
 ) -> Result<()> {
     let slug = &book.slug;
-    let cover_dir = dir.join("cover");
+    let cover_dir = repo.cover_dir(dir);
     // No `cover/` dir is fine: a book with no art renders on the solid bgcolor
     // (the caller has already asked and created the dir). Only a *file* the
     // config explicitly points at and that is missing is an error.
     std::fs::create_dir_all(&cover_dir)
         .with_context(|| format!("creating {}", cover_dir.display()))?;
-    let odir = repo.root.join("output").join(slug).join(lang);
+    let odir = repo.output_dir().join(slug).join(lang);
     std::fs::create_dir_all(&odir)?;
     let pages = resolve_pages(&odir, slug, lang, pages_override)?;
 
@@ -128,8 +128,8 @@ fn cover_one_resvg(
     }
 
     // Non-protected books: render resvg in place (same paths as the Chrome path).
-    let front_png = cover_dir.join(format!("front-{lang}.png"));
-    let wrap_pdf = cover_dir.join(format!("wrap-{lang}-KDP.pdf"));
+    let front_png = cover_dir.join(repo.front_cover_name(lang));
+    let wrap_pdf = cover_dir.join(repo.wrap_cover_name(lang));
     renderer.render_front_png(&repo.config, book, lang, &cover_dir, &front_png)?;
     renderer.render_wrap_pdf(&repo.config, book, lang, &cover_dir, pages, &wrap_pdf)?;
 

@@ -24,6 +24,11 @@ use crate::discover::Repo;
 /// Bundled code-highlight stylesheet appended to every EPUB (styles fenced code +
 /// the syntect class-mode token spans). See `templates/epub-code.css`.
 const CODE_CSS: &str = include_str!("../templates/epub-code.css");
+
+/// Bundled default EPUB stylesheet, used when a repo ships no `css/epub.css`
+/// ([paths].epub_css). This is the same file `bookmill create` scaffolds, so a
+/// repo with no stylesheet still gets fully-styled EPUBs out of the box.
+const DEFAULT_EPUB_CSS: &str = include_str!("../templates/scaffold/css/epub.css");
 use anyhow::{Context, Result};
 use comrak::plugins::syntect::SyntectAdapter;
 use comrak::{markdown_to_html, markdown_to_html_with_plugins, Options, Plugins};
@@ -72,14 +77,17 @@ pub fn run(
     // setup. Always emitted (even absent a repo stylesheet) so the linked
     // `stylesheet.css` always resolves.
     let mut css = String::new();
-    let css_path = repo.root.join("css/epub.css");
+    let css_path = repo.epub_css();
     if css_path.exists() {
         css.push_str(
             &std::fs::read_to_string(&css_path)
                 .with_context(|| format!("reading {}", css_path.display()))?,
         );
-        css.push('\n');
+    } else {
+        // No repo stylesheet → use the bundled default so EPUBs are still styled.
+        css.push_str(DEFAULT_EPUB_CSS);
     }
+    css.push('\n');
     css.push_str(CODE_CSS);
     b.stylesheet(css.as_bytes()).map_err(anyhow::Error::msg)?;
 

@@ -160,7 +160,7 @@ pub fn run(repo: &Repo, book: Option<String>, json: bool) -> Result<()> {
         // 3) cover resolution per language.
         for lang in &b.languages {
             rep.cur_lang = Some(lang.clone());
-            cover_checks(&b.slug, &dir, lang, &mut rep);
+            cover_checks(repo, &b.slug, &dir, lang, &mut rep);
         }
     }
 
@@ -429,9 +429,9 @@ fn pdf_page_size(pdf: &Path) -> Result<(f64, f64)> {
 
 // ---------- Covers ----------
 
-fn cover_checks(slug: &str, dir: &Path, lang: &str, rep: &mut Report) {
-    let front = dir.join("cover").join(format!("front-{lang}.png"));
-    let wrap = dir.join("cover").join(format!("wrap-{lang}-KDP.pdf"));
+fn cover_checks(repo: &Repo, slug: &str, dir: &Path, lang: &str, rep: &mut Report) {
+    let front = repo.front_cover(dir, lang);
+    let wrap = repo.wrap_cover(dir, lang);
     if !front.exists() && !wrap.exists() {
         rep.warn(format!("cover {slug} {lang}: no cover assets (skipped)"));
         return;

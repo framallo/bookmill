@@ -351,8 +351,7 @@ pub fn plan_editions(
                 if matches!(target.as_str(), "kdp-paperback" | "kdp-hardcover") {
                     let (min, max) = crate::config::page_range(&target, &ink);
                     let kdp_pdf = repo
-                        .root
-                        .join("output")
+                        .output_dir()
                         .join(&book.slug)
                         .join(&lang)
                         .join(format!("{}-{}-kdp.pdf", book.slug, lang));
@@ -560,7 +559,7 @@ pub fn fmt_dur(d: Duration) -> String {
 /// Used by deep validation to reuse an already-built artifact instead of
 /// rebuilding it.
 pub fn job_output_path(repo: &Repo, job: &Job) -> PathBuf {
-    let odir = repo.root.join("output").join(&job.slug).join(&job.lang);
+    let odir = repo.output_dir().join(&job.slug).join(&job.lang);
     let base = format!("{}-{}", job.slug, job.lang);
     let fname = match job.out {
         Out::RetailEpub => format!("{base}.epub"),
@@ -625,11 +624,11 @@ fn build_one(
         .with_context(|| format!("no [content.{lang}] for {slug}"))?;
     let chaps = content.resolve(dir)?;
     // copyright pages are optional (the new es-only fables ship without them)
-    let cpdf = some_if_exists(dir.join(lang).join("copyright.md"));
-    let cepub = some_if_exists(dir.join(lang).join("copyright-epub.md"));
+    let cpdf = some_if_exists(repo.copyright_pdf(dir, lang));
+    let cepub = some_if_exists(repo.copyright_epub(dir, lang));
     // cover art is optional (the new es-only fables have no cover/ assets yet)
-    let cover = some_if_exists(dir.join("cover").join(format!("front-{lang}.png")));
-    let odir = repo.root.join("output").join(slug).join(lang);
+    let cover = some_if_exists(repo.front_cover(dir, lang));
+    let odir = repo.output_dir().join(slug).join(lang);
     std::fs::create_dir_all(&odir)?;
     // Front-matter values (title/author/lang/rights) resolved from config; shared
     // by every native engine (Typst, EPUB, DOCX).

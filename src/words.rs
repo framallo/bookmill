@@ -19,7 +19,7 @@ use std::path::Path;
 /// count. Prefer the KDP print interior (`-kdp.pdf`); fall back to the retail
 /// PDF. Uses the build sidecar to rescale to edited source when present.
 fn pages_for(repo: &Repo, slug: &str, lang: &str, words: usize) -> PageCount {
-    let odir = repo.root.join("output").join(slug).join(lang);
+    let odir = repo.output_dir().join(slug).join(lang);
     let base = format!("{slug}-{lang}");
     let kdp = odir.join(format!("{base}-kdp.pdf"));
     match pages::resolve(&kdp, words) {
