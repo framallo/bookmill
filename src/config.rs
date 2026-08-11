@@ -2,11 +2,38 @@
 //! Single source of truth for metadata, listing, layout, and content selection.
 
 use anyhow::{bail, Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub type LangMap = BTreeMap<String, String>;
+
+// ---------- combined (single-book) config tolerance ----------
+// A single-book repo carries repo AND book fields in ONE bookmill.toml, so the
+// same file is parsed by both schemas. Two keys exist in both with different
+// shapes; these deserializers make each side tolerate the other's shape.
+
+/// Repo `author`: a plain string. In a combined config the key may instead be
+/// the book's per-language `[author]` table — then it is simply not the repo
+/// author (the book map wins downstream).
+fn de_repo_author<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    Ok(Option::<toml::Value>::deserialize(d)?
+        .and_then(|v| v.as_str().map(str::to_string)))
+}
+
+/// Book `editions`: an array of edition names. In a combined config the key is
+/// the repo's `[editions.<name>]` definition map — its keys ARE the book's
+/// edition list (a single-book repo builds every edition it defines).
+fn de_book_editions<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+    match Option::<toml::Value>::deserialize(d)? {
+        Some(toml::Value::Array(a)) => Ok(a
+            .into_iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect()),
+        Some(toml::Value::Table(t)) => Ok(t.keys().cloned().collect()),
+        _ => Ok(vec![]),
+    }
+}
 
 /// Public-copy phrases that must never appear (KDP listings, blurbs, titles).
 pub const FORBIDDEN_PUBLIC: &[&str] = &["Animal Farm", "Rebelión en la granja"];
@@ -14,6 +41,7 @@ pub const FORBIDDEN_PUBLIC: &[&str] = &["Animal Farm", "Rebelión en la granja"]
 // ---------- repo level (bookmill.toml) ----------
 #[derive(Debug, Deserialize)]
 pub struct RepoConfig {
+    #[serde(default, deserialize_with = "de_repo_author")]
     pub author: Option<String>,
     /// repo-wide series name; parsed for forward use (books carry their own series).
     #[allow(dead_code)]
@@ -63,6 +91,10 @@ pub struct Paths {
     pub templates_dir: String,
     /// EPUB stylesheet (repo-root-relative). Default "css/epub.css".
     pub epub_css: String,
+    /// dir of font files referenced by the EPUB stylesheet's @font-face url()
+    /// rules (repo-root-relative). Referenced files are embedded into the EPUB
+    /// at fonts/<name> and the url() rewritten to match. Default "templates/fonts".
+    pub epub_fonts: String,
     /// retail-PDF page-background texture (repo-root-relative). Default "images/paper-texture.jpg".
     pub paper_texture: String,
     /// audiobook scratch/cache dir (repo-root-relative). Default ".bookmill-tmp".
@@ -84,6 +116,7 @@ impl Default for Paths {
             cover_dir: "cover".into(),
             templates_dir: "templates".into(),
             epub_css: "css/epub.css".into(),
+            epub_fonts: "templates/fonts".into(),
             paper_texture: "images/paper-texture.jpg".into(),
             tmp_dir: ".bookmill-tmp".into(),
             front_cover: "front-{lang}.png".into(),
@@ -218,12 +251,30 @@ pub struct BookConfig {
     pub slug: String,
     #[serde(default)]
     pub languages: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_book_editions")]
     pub editions: Vec<String>,
     #[serde(default)]
     pub title: LangMap,
     #[serde(default)]
     pub subtitle: LangMap,
+    /// per-language author line ([author] es = "...", en = "..."); a book whose
+    /// author credit differs by language (e.g. a translated co-authorship) sets
+    /// this. Falls back to [meta].author, then the repo author.
+    #[serde(default)]
+    pub author: LangMap,
+    /// per-language illustration credit line ([illustrations] es/en) — shown on
+    /// the title page (PDF + EPUB) under the author. Absent → no credit line.
+    #[serde(default)]
+    pub illustrations: LangMap,
+    /// per-language output basename ([basename] es = "abre-la-valvula") — the
+    /// file stem for every output of that language. Lets a migrated book keep
+    /// its already-published filenames. Default: "<slug>-<lang>".
+    #[serde(default)]
+    pub basename: LangMap,
+    /// per-language paperback ISBN-13 ([isbn] es/en) — drives the back-cover
+    /// barcode; distinct from the per-edition [editions.*].isbn record.
+    #[serde(default)]
+    pub isbn: LangMap,
     #[serde(default)]
     pub meta: Meta,
     #[serde(default)]
@@ -387,6 +438,46 @@ pub struct CoverConfig {
     pub lang: BTreeMap<String, CoverLang>,
 }
 
+/// A free-form cover image element (author portraits, logos), placed on a
+/// cover surface. Coordinates are fractions of the target surface's box:
+/// `x_pct`/`y_pct` = element CENTER, `w_pct` = width. `surface` picks the
+/// panel: "front" (eBook front + wrap front panel) or "back" (wrap back panel).
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct CoverImage {
+    /// image path, cover-dir-relative (e.g. "author-john.png")
+    pub src: String,
+    /// "front" | "back" (default "back")
+    pub surface: Option<String>,
+    #[serde(rename = "xPct")]
+    pub x_pct: f64,
+    #[serde(rename = "yPct")]
+    pub y_pct: f64,
+    #[serde(rename = "wPct")]
+    pub w_pct: f64,
+    /// "circle" clips to a circle (author portraits); anything else = rect
+    pub shape: Option<String>,
+    /// optional caption line under the image (e.g. the author's name)
+    pub caption: Option<String>,
+    /// caption sub-line (e.g. role); rendered smaller
+    pub role: Option<String>,
+    #[serde(rename = "captionColor")]
+    pub caption_color: Option<String>,
+}
+
+/// Back-cover ISBN barcode placement. The ISBN itself comes from the book's
+/// per-language `[isbn]` map; a book/lang with no ISBN renders no barcode.
+/// Coordinates are fractions of the wrap's BACK panel; defaults put the block
+/// bottom-left (the design KDP accepted for this series).
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct CoverBarcode {
+    #[serde(rename = "xPct")]
+    pub x_pct: Option<f64>,
+    #[serde(rename = "yPct")]
+    pub y_pct: Option<f64>,
+    #[serde(rename = "wPct")]
+    pub w_pct: Option<f64>,
+}
+
 /// Per-language cover overrides (`[cover.<lang>]`).
 #[derive(Debug, Deserialize, Default, Clone)]
 pub struct CoverLang {
@@ -412,6 +503,12 @@ pub struct CoverLang {
     /// this governs the wrap's *back* panel (blurb/badge/author). Coordinates are
     /// fractions of the **back panel**. Absent => default flex back (no regression).
     pub wrap: Option<CoverWrapLayout>,
+    /// free-form image elements (author portraits, logos) placed on the cover
+    /// surfaces (`[[cover.<lang>.images]]`). Absent => none (no regression).
+    pub images: Option<Vec<CoverImage>>,
+    /// back-cover ISBN barcode block (`[cover.<lang>.barcode]`); the ISBN comes
+    /// from the book's per-language `[isbn]`. Absent => no barcode rendered.
+    pub barcode: Option<CoverBarcode>,
 }
 
 /// Absolute back-panel layout for the paperback wrap (`[cover.<lang>.wrap]`).
@@ -714,6 +811,32 @@ pub fn default_ane_code(lang: &str) -> &'static str {
 
 #[derive(Debug, Deserialize, Default, Clone)]
 pub struct PdfOpts {
+    /// interior style. Absent/"picture" = the picture-book conventions
+    /// (numbered "Capítulo N" headings, chapter-opening plates). "essay" =
+    /// text-interior mode: unnumbered chapter headings rendered as a colored
+    /// title bar, no automatic plates (a chapter-opening image stays inline),
+    /// title page with author/illustrations/rights lines, and a TOC by default.
+    pub interior: Option<String>,
+    /// chapter-heading bar color (hex, e.g. "#3d4a3d"); essay mode only.
+    pub heading_color: Option<String>,
+    /// main text font family for the PDF (e.g. "Bitter Pro"); resolved from
+    /// the system fonts plus [pdf].fonts_dir. Absent → Typst default serif.
+    pub font: Option<String>,
+    /// main text font weight (e.g. 500 for a Medium-weight body); needs `font`.
+    pub font_weight: Option<u32>,
+    /// main text font size in pt (e.g. 13.0 — the legacy essay interiors used
+    /// scrextend fontsize=13pt). Default 11pt.
+    pub font_size: Option<f32>,
+    /// repo-relative dir of font files to load into the Typst engine (e.g.
+    /// "templates/fonts"). Absent → system + embedded fonts only.
+    pub fonts_dir: Option<String>,
+    /// force the PDF table of contents on/off. Default: essay interior = true,
+    /// picture interior = only when a copyright page exists (legacy behavior).
+    pub toc: Option<bool>,
+    /// per-language TOC title override ([pdf.toc_title] es = "Tabla de
+    /// contenido"); default "Índice"/"Contents".
+    #[serde(default)]
+    pub toc_title: LangMap,
     /// "recto" => chapters open on the right page (openright); else openany
     pub chapter_opens: Option<String>,
     /// chapter-opening plate style: "bleed" (default) fills the verso page

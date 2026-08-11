@@ -339,6 +339,120 @@ impl CoverRenderer {
 
     // -- SVG assembly ------------------------------------------------------
 
+    /// Emit the config's free-form image elements (`[[cover.<lang>.images]]`)
+    /// into `body`. `back`/`front` are the target panel rects (x, y, w, h) in
+    /// the current SVG's coordinates; an element whose surface has no rect here
+    /// is skipped (e.g. back-surface images while rendering the eBook front).
+    /// Circle-shaped images get a thin white ring, and optional caption/role
+    /// lines render under the image.
+    fn emit_cover_images(
+        &self,
+        body: &mut String,
+        defs: &mut String,
+        r: &Resolved,
+        cover_dir: &Path,
+        back: Option<(f64, f64, f64, f64)>,
+        front: Option<(f64, f64, f64, f64)>,
+    ) -> Result<()> {
+        for (i, im) in r.images.iter().enumerate() {
+            let surface = im.surface.as_deref().unwrap_or("back");
+            let Some((px, py, pw, ph)) = (if surface == "front" { front } else { back }) else {
+                continue;
+            };
+            let w = im.w_pct * pw;
+            let cx = px + im.x_pct * pw;
+            let cy = py + im.y_pct * ph;
+            let x = cx - w / 2.0;
+            let y = cy - w / 2.0;
+            let Some(href) = data_uri_opt(&cover_dir.join(&im.src))
+                .with_context(|| format!("embedding cover image {}", im.src))?
+            else {
+                eprintln!("  (cover: image {} not found — skipped)", im.src);
+                continue;
+            };
+            if im.shape.as_deref() == Some("circle") {
+                let cid = format!("imclip{i}");
+                defs.push_str(&format!(
+                    "<clipPath id=\"{cid}\"><circle cx=\"{cx:.2}\" cy=\"{cy:.2}\" r=\"{:.2}\"/></clipPath>",
+                    w / 2.0
+                ));
+                body.push_str(&format!(
+                    "<image x=\"{x:.2}\" y=\"{y:.2}\" width=\"{w:.2}\" height=\"{w:.2}\" preserveAspectRatio=\"xMidYMid slice\" clip-path=\"url(#{cid})\" xlink:href=\"{href}\"/>"
+                ));
+                body.push_str(&format!(
+                    "<circle cx=\"{cx:.2}\" cy=\"{cy:.2}\" r=\"{:.2}\" fill=\"none\" stroke=\"#ffffff\" stroke-width=\"{:.2}\"/>",
+                    w / 2.0,
+                    (w * 0.02).max(1.0)
+                ));
+            } else {
+                body.push_str(&format!(
+                    "<image x=\"{x:.2}\" y=\"{y:.2}\" width=\"{w:.2}\" height=\"{w:.2}\" preserveAspectRatio=\"xMidYMid meet\" xlink:href=\"{href}\"/>"
+                ));
+            }
+            if let Some(cap) = &im.caption {
+                let color = im.caption_color.as_deref().unwrap_or("#ffffff");
+                let size = (w * 0.16).max(9.0);
+                let cap_y = cy + w / 2.0 + size * 1.35;
+                self.emit_line(
+                    body,
+                    cap,
+                    cx,
+                    cap_y,
+                    &TextStyle {
+                        family: "Montserrat",
+                        weight: 600,
+                        size,
+                        italic: false,
+                        letter_spacing: 0.0,
+                        fill: color,
+                        opacity: 1.0,
+                        stroke: "",
+                        shadow_id: "",
+                        anchor: "middle",
+                    },
+                );
+                if let Some(role) = &im.role {
+                    self.emit_line(
+                        body,
+                        role,
+                        cx,
+                        cap_y + size * 1.2,
+                        &TextStyle {
+                            family: "Montserrat",
+                            weight: 400,
+                            size: size * 0.72,
+                            italic: false,
+                            letter_spacing: 0.0,
+                            fill: color,
+                            opacity: 0.85,
+                            stroke: "",
+                            shadow_id: "",
+                            anchor: "middle",
+                        },
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Emit the back-cover ISBN barcode block when the config asks for one and
+    /// the book has an ISBN for this language. `(px, py, pw, ph)` is the back
+    /// panel rect. Defaults place it bottom-left (this series' design).
+    fn emit_barcode(&self, body: &mut String, r: &Resolved, panel: (f64, f64, f64, f64)) {
+        let (Some(bc), Some(isbn)) = (&r.barcode, &r.isbn) else { return };
+        let (px, py, pw, ph) = panel;
+        let w = bc.w_pct.unwrap_or(0.30) * pw;
+        let cx = px + bc.x_pct.unwrap_or(0.20) * pw;
+        let cy = py + bc.y_pct.unwrap_or(0.92) * ph;
+        let x = cx - w / 2.0;
+        let y = cy - crate::barcode::box_height(w) / 2.0;
+        match crate::barcode::ean13_svg(isbn, x, y, w) {
+            Some(svg) => body.push_str(&svg),
+            None => eprintln!("  (cover: isbn {isbn:?} is not 13 digits — barcode skipped)"),
+        }
+    }
+
     fn front_svg(&self, r: &Resolved, cover_dir: &Path) -> Result<String> {
         const W: f64 = 1600.0;
         const H: f64 = 2560.0;
@@ -389,6 +503,7 @@ impl CoverRenderer {
             l.title.is_some() || l.subtitle.is_some() || l.author.is_some() || l.badge.is_some()
         }) {
             self.front_absolute(&mut text, &mut defs, r, W, H);
+            self.emit_cover_images(&mut text, &mut defs, r, cover_dir, None, Some((0.0, 0.0, W, H)))?;
             return Ok(FRONT_SVG_TMPL
                 .replace("{{DEFS}}", &defs)
                 .replace("{{BGCOLOR}}", &xml_attr(&r.bgcolor))
@@ -520,6 +635,9 @@ impl CoverRenderer {
                 anchor: "middle",
             },
         );
+
+        // free-form image elements on the front surface (author photos etc.)
+        self.emit_cover_images(&mut text, &mut defs, r, cover_dir, None, Some((0.0, 0.0, W, H)))?;
 
         Ok(FRONT_SVG_TMPL
             .replace("{{DEFS}}", &defs)
@@ -1793,6 +1911,20 @@ impl CoverRenderer {
         );
         }
 
+        // ---- config-driven image elements + ISBN barcode --------------------
+        // Back-surface images land on the back panel; front-surface images land
+        // on the front panel (mirroring the eBook front). The barcode renders on
+        // the back panel when configured and the book has a per-language ISBN.
+        self.emit_cover_images(
+            &mut body,
+            &mut defs,
+            r,
+            cover_dir,
+            Some((0.0, 0.0, back_w, fh)),
+            Some((front_x, 0.0, front_w, fh)),
+        )?;
+        self.emit_barcode(&mut body, r, (0.0, 0.0, back_w, fh));
+
         Ok(WRAP_SVG_TMPL
             .replace("{{FULL_W_PX}}", &fmt(fw))
             .replace("{{FULL_H_PX}}", &fmt(fh))
@@ -2255,11 +2387,22 @@ fn data_uri(path: &Path) -> Result<String> {
         bail!("image not found: {}", path.display());
     }
     let bytes = std::fs::read(path)?;
-    let mime = match path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()) {
-        Some(e) if e == "png" => "image/png",
-        Some(e) if e == "jpg" || e == "jpeg" => "image/jpeg",
-        Some(e) if e == "webp" => "image/webp",
-        _ => "application/octet-stream",
+    // Sniff the real container from magic bytes — files in the wild carry wrong
+    // extensions (a ".jpg" holding PNG bytes makes svg2pdf reject the SVG), and
+    // the data-URI mime must match the actual bytes.
+    let mime = if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        "image/png"
+    } else if bytes.starts_with(&[0xFF, 0xD8]) {
+        "image/jpeg"
+    } else if bytes.len() > 11 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        "image/webp"
+    } else {
+        match path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()) {
+            Some(e) if e == "png" => "image/png",
+            Some(e) if e == "jpg" || e == "jpeg" => "image/jpeg",
+            Some(e) if e == "webp" => "image/webp",
+            _ => "application/octet-stream",
+        }
     };
     Ok(format!("data:{mime};base64,{}", b64(&bytes)))
 }

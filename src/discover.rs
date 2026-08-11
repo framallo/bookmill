@@ -12,6 +12,10 @@ pub const CONFIG_NAME: &str = "bookmill.toml";
 pub struct Repo {
     pub root: PathBuf,
     pub config: RepoConfig,
+    /// Single-book repo: the root `bookmill.toml` carries BOTH repo fields and a
+    /// top-level `slug` (no separate repo config anywhere above). The repo root
+    /// itself is the sole book dir; `books_dir` is unused.
+    pub single_book: bool,
 }
 
 /// True if a `bookmill.toml` is a book config (has a top-level `slug`).
@@ -26,15 +30,29 @@ fn is_book_config(path: &Path) -> bool {
 impl Repo {
     /// Find the repo by walking up from `start` for a *repo* `bookmill.toml`
     /// (skips book-level configs that share the filename).
+    ///
+    /// Single-book repos: when NO pure repo config exists anywhere up the tree
+    /// but a slug-bearing `bookmill.toml` was passed on the way, that combined
+    /// file is treated as repo + sole book (serde ignores the fields the other
+    /// role doesn't know). Multi-book repos are unaffected: their walk always
+    /// ends at the real repo config.
     pub fn find(start: &Path) -> Result<Repo> {
         let mut dir = start.canonicalize().unwrap_or_else(|_| start.to_path_buf());
+        let mut combined: Option<PathBuf> = None; // first slug-bearing config seen
         loop {
             let cfg = dir.join(CONFIG_NAME);
-            if cfg.exists() && !is_book_config(&cfg) {
-                let config = load_repo(&cfg)?;
-                return Ok(Repo { root: dir, config });
+            if cfg.exists() {
+                if !is_book_config(&cfg) {
+                    let config = load_repo(&cfg)?;
+                    return Ok(Repo { root: dir, config, single_book: false });
+                }
+                combined.get_or_insert(dir.clone());
             }
             if !dir.pop() {
+                if let Some(root) = combined {
+                    let config = load_repo(&root.join(CONFIG_NAME))?;
+                    return Ok(Repo { root, config, single_book: true });
+                }
                 bail!("no repo {CONFIG_NAME} found (run inside a books repo)");
             }
         }
@@ -64,6 +82,11 @@ impl Repo {
     /// EPUB stylesheet (`[paths].epub_css`, default "css/epub.css").
     pub fn epub_css(&self) -> PathBuf {
         self.root.join(&self.config.paths.epub_css)
+    }
+
+    /// EPUB @font-face source dir (`[paths].epub_fonts`, default "templates/fonts").
+    pub fn epub_fonts_dir(&self) -> PathBuf {
+        self.root.join(&self.config.paths.epub_fonts)
     }
 
     /// Retail-PDF page-background texture (`[paths].paper_texture`).
@@ -108,6 +131,11 @@ impl Repo {
 
     /// List discovered book directories (those with a book-level `bookmill.toml`).
     pub fn book_dirs(&self) -> Result<Vec<PathBuf>> {
+        // Single-book repo: the root IS the sole book dir (its combined
+        // bookmill.toml carries the slug); there is no books_dir to scan.
+        if self.single_book {
+            return Ok(vec![self.root.clone()]);
+        }
         let bd = self.books_dir();
         let mut out = Vec::new();
         for entry in std::fs::read_dir(&bd)

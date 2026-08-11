@@ -633,10 +633,27 @@ fn build_one(
     // Front-matter values (title/author/lang/rights) resolved from config; shared
     // by every native engine (Typst, EPUB, DOCX).
     let m = resolve_book_meta(repo, book, lang)?;
-    let base = format!("{slug}-{lang}");
+    // Output file stem: the per-language [basename] override (lets a migrated
+    // book keep its already-published filenames), else "<slug>-<lang>".
+    let base = book
+        .basename
+        .get(lang)
+        .cloned()
+        .unwrap_or_else(|| format!("{slug}-{lang}"));
     let openright = book.pdf.chapter_opens.as_deref() == Some("recto");
     let plate_framed = book.pdf.plate_style.as_deref() == Some("framed");
     let plate_width = book.pdf.plate_width.unwrap_or(0.78);
+    // Interior style ([pdf].interior = "essay" + its knobs) for the Typst engine.
+    let style = crate::typst_pdf::InteriorStyle {
+        essay: book.pdf.interior.as_deref() == Some("essay"),
+        heading_color: book.pdf.heading_color.clone(),
+        font: book.pdf.font.clone(),
+        font_weight: book.pdf.font_weight,
+        font_size: book.pdf.font_size,
+        fonts_dir: book.pdf.fonts_dir.as_ref().map(|d| repo.root.join(d)),
+        toc: book.pdf.toc,
+        toc_title: book.pdf.toc_title.get(lang).cloned(),
+    };
     // Plate captions (image alt shown under/below each plate): book default, with a
     // per-edition override so e.g. KDP can hide them while retail keeps them.
     let ed_cfg = edition.and_then(|n| repo.config.editions.get(n));
@@ -684,6 +701,7 @@ fn build_one(
                 false,
                 cover.as_deref(),
                 geometry,
+                &style,
                 lang,
                 &pdf,
             )?;
@@ -743,6 +761,7 @@ fn build_one(
                 auto_grayscale,
                 None,
                 geometry,
+                &style,
                 lang,
                 &pdf,
             )?;
@@ -762,6 +781,9 @@ pub struct BookMeta {
     pub title: String,
     pub subtitle: Option<String>,
     pub author: String,
+    /// Illustration credit line ([illustrations].<lang>), shown on the title
+    /// page under the author. None → no credit line.
+    pub illustrations: Option<String>,
     pub rights: String,
     /// Listing blurb (`[listing.<lang>].blurb`) → EPUB `dc:description`. Retailers
     /// read it straight off the OPF, so it is worth shipping when we have it.
@@ -778,12 +800,16 @@ pub fn resolve_book_meta(repo: &Repo, book: &BookConfig, lang: &str) -> Result<B
         .with_context(|| format!("no [title.{lang}] for {}", book.slug))?
         .clone();
     let subtitle = book.subtitle.get(lang).cloned();
+    // Author: per-language [author] map first (translated co-authorships), then
+    // the single [meta].author, then the repo-wide author.
     let author = book
-        .meta
         .author
-        .clone()
+        .get(lang)
+        .cloned()
+        .or_else(|| book.meta.author.clone())
         .or_else(|| repo.config.author.clone())
         .unwrap_or_else(|| "Federico Ramallo".into());
+    let illustrations = book.illustrations.get(lang).cloned();
     let date = book.meta.date.clone().or_else(|| repo.config.date.clone());
     let year = date.as_ref().map(date_year).unwrap_or_else(|| "2026".into());
     let rights = book
@@ -797,7 +823,62 @@ pub fn resolve_book_meta(repo: &Repo, book: &BookConfig, lang: &str) -> Result<B
     let listing = book.listing.get(lang);
     let description = listing.and_then(|l| l.blurb.clone());
     let subjects = listing.map(|l| l.keywords.clone()).unwrap_or_default();
-    Ok(BookMeta { title, subtitle, author, rights, description, subjects })
+    Ok(BookMeta { title, subtitle, author, illustrations, rights, description, subjects })
+}
+
+/// Rewrite relative image srcs in a chapter's markdown to repo-root-relative
+/// paths. A src is left alone when it already resolves under the repo root;
+/// otherwise the chapter's own dir and its parent are tried (the parent covers
+/// the pandoc `--resource-path=<lang>` convention, where `images/F4.png` in
+/// `es/chapters/ch.md` means `es/images/F4.png`). Shared by the Typst and EPUB
+/// engines so both see the same files.
+pub fn rebase_image_srcs(md: &str, root: &Path, chapter: &Path) -> String {
+    let mut out = String::with_capacity(md.len());
+    let mut rest = md;
+    while let Some(p) = rest.find("](") {
+        // copy through "](", then examine the src up to the closing paren
+        out.push_str(&rest[..p + 2]);
+        rest = &rest[p + 2..];
+        let Some(close) = rest.find(')') else { break };
+        let inner = &rest[..close];
+        // src ends at the first space (a title/attr may follow inside the parens)
+        let (src, tail) = match inner.find(' ') {
+            Some(sp) => (&inner[..sp], &inner[sp..]),
+            None => (inner, ""),
+        };
+        let is_rel_file = !src.is_empty()
+            && !src.starts_with('/')
+            && !src.starts_with("http://")
+            && !src.starts_with("https://")
+            && !src.starts_with('#');
+        let mut rewritten = None;
+        if is_rel_file && !root.join(src).exists() {
+            let mut bases: Vec<PathBuf> = Vec::new();
+            if let Some(d) = chapter.parent() {
+                bases.push(d.to_path_buf());
+                if let Some(dd) = d.parent() {
+                    bases.push(dd.to_path_buf());
+                }
+            }
+            for b in bases {
+                let cand = b.join(src);
+                if cand.exists() {
+                    if let Ok(rel) = cand.strip_prefix(root) {
+                        rewritten = Some(rel.to_string_lossy().replace('\\', "/"));
+                    }
+                    break;
+                }
+            }
+        }
+        match rewritten {
+            Some(r) => out.push_str(&format!("{r}{tail}")),
+            None => out.push_str(inner),
+        }
+        out.push(')');
+        rest = &rest[close + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Localized "all rights reserved" line, matching the old meta.md wording.
@@ -863,6 +944,7 @@ mod tests {
         Repo {
             root: PathBuf::from("/tmp/bookmill-test"),
             config: toml::from_str(s).unwrap(),
+            single_book: false,
         }
     }
     fn book(s: &str) -> BookConfig {

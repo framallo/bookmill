@@ -77,12 +77,24 @@ pub fn run(
     Ok(())
 }
 
-/// Resolve the spine page count: explicit override, else the built KDP interior.
-fn resolve_pages(odir: &Path, slug: &str, lang: &str, pages_override: Option<u32>) -> Result<u32> {
+/// Resolve the spine page count: explicit override, else the built KDP interior
+/// (honoring the book's per-language `[basename]` output-filename override).
+fn resolve_pages(
+    odir: &Path,
+    book: &BookConfig,
+    lang: &str,
+    pages_override: Option<u32>,
+) -> Result<u32> {
     if let Some(p) = pages_override {
         return Ok(p);
     }
-    let kdp_pdf = odir.join(format!("{slug}-{lang}-kdp.pdf"));
+    let slug = &book.slug;
+    let base = book
+        .basename
+        .get(lang)
+        .cloned()
+        .unwrap_or_else(|| format!("{slug}-{lang}"));
+    let kdp_pdf = odir.join(format!("{base}-kdp.pdf"));
     page_count(&kdp_pdf).with_context(|| {
         format!(
             "need the print interior for spine width — build it first:\n      \
@@ -111,7 +123,7 @@ fn cover_one_resvg(
         .with_context(|| format!("creating {}", cover_dir.display()))?;
     let odir = repo.output_dir().join(slug).join(lang);
     std::fs::create_dir_all(&odir)?;
-    let pages = resolve_pages(&odir, slug, lang, pages_override)?;
+    let pages = resolve_pages(&odir, book, lang, pages_override)?;
 
     if PROTECTED.contains(&slug.as_str()) {
         // Render to a side-by-side comparison path; never touch tracked cover/ assets.
@@ -133,13 +145,20 @@ fn cover_one_resvg(
     renderer.render_front_png(&repo.config, book, lang, &cover_dir, &front_png)?;
     renderer.render_wrap_pdf(&repo.config, book, lang, &cover_dir, pages, &wrap_pdf)?;
 
-    let bundle_png = odir.join(format!("{slug}-{lang}-cover.png"));
-    let bundle_wrap = odir.join(format!("{slug}-{lang}-cover-wrap-kdp.pdf"));
+    // Output bundle names honor the per-language [basename] override, matching
+    // the interior outputs (abre-la-valvula-cover.jpg next to abre-la-valvula.epub).
+    let base = book
+        .basename
+        .get(lang)
+        .cloned()
+        .unwrap_or_else(|| format!("{slug}-{lang}"));
+    let bundle_png = odir.join(format!("{base}-cover.png"));
+    let bundle_wrap = odir.join(format!("{base}-cover-wrap-kdp.pdf"));
     std::fs::copy(&front_png, &bundle_png)
         .with_context(|| format!("copy {} -> {}", front_png.display(), bundle_png.display()))?;
     std::fs::copy(&wrap_pdf, &bundle_wrap)
         .with_context(|| format!("copy {} -> {}", wrap_pdf.display(), bundle_wrap.display()))?;
-    emit_cover_jpg(&front_png, &odir.join(format!("{slug}-{lang}-cover.jpg")))?;
+    emit_cover_jpg(&front_png, &odir.join(format!("{base}-cover.jpg")))?;
 
     println!("  \u{2713} {slug} {lang}: {pages}pp  (resvg: front PNG + wrap PDF + JPG)");
     Ok(())

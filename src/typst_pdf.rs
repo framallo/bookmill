@@ -46,6 +46,31 @@ use typst_kit::fonts::FontStore;
 use typst_layout::PagedDocument;
 use typst_pdf::{PdfOptions, PdfStandard, PdfStandards};
 
+/// Interior style, resolved from `[pdf]` config. Default (`essay: false`) keeps
+/// the picture-book conventions (numbered "Capítulo N" headings, chapter plates).
+/// `[pdf].interior = "essay"` switches to the text-interior mode: unnumbered
+/// chapter headings rendered as a colored full-width title bar, no automatic
+/// plates (a chapter-opening image stays inline), a fuller title page
+/// (author/illustrations/rights), and a TOC by default.
+#[derive(Default, Clone)]
+pub struct InteriorStyle {
+    pub essay: bool,
+    /// heading-bar color (hex, e.g. "#3d4a3d"); essay mode only.
+    pub heading_color: Option<String>,
+    /// main text font family (e.g. "Bitter Pro").
+    pub font: Option<String>,
+    /// main text font weight (e.g. 500).
+    pub font_weight: Option<u32>,
+    /// main text font size in pt (default 11).
+    pub font_size: Option<f32>,
+    /// absolute dir of extra font files to load into the engine.
+    pub fonts_dir: Option<PathBuf>,
+    /// force the TOC on/off; None = essay ? true : legacy (copyright-page-gated).
+    pub toc: Option<bool>,
+    /// TOC title, resolved for the build language; None = "Índice"/"Contents".
+    pub toc_title: Option<String>,
+}
+
 /// Render a book (one language / one PDF flavor) to `out` by compiling the
 /// generated Typst markup with the `typst` crate (no external CLI).
 #[allow(clippy::too_many_arguments)]
@@ -64,10 +89,11 @@ pub fn run(
     auto_grayscale: bool,
     cover: Option<&Path>,
     geometry: Option<PageGeometry>,
+    style: &InteriorStyle,
     lang: &str,
     out: &Path,
 ) -> Result<()> {
-    let (doc, described) = build_doc(repo, meta, cpdf, chaps, openright, plate_framed, plate_width, captions, retail, grayscale, proof, cover, geometry, lang)?;
+    let (doc, described) = build_doc(repo, meta, cpdf, chaps, openright, plate_framed, plate_width, captions, retail, grayscale, proof, cover, geometry, style, lang)?;
     let odir = out.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(odir)?;
     // Keep the generated markup on disk for debugging only — it is NOT handed to
@@ -77,7 +103,7 @@ pub fn run(
 
     // Compile natively. The World resolves images under the repo root, exactly
     // as the CLI's `--root <repo.root>` did.
-    let world = BookWorld::new(repo.root.clone(), doc, grayscale, auto_grayscale)?;
+    let world = BookWorld::new(repo.root.clone(), doc, grayscale, auto_grayscale, style.fonts_dir.as_deref())?;
     let result = typst::compile::<PagedDocument>(&world);
     let document = result.output.map_err(|diags| {
         anyhow!(
@@ -218,6 +244,29 @@ fn font_store() -> &'static FontStore {
     })
 }
 
+/// Font store for a build that loads extra fonts from a repo dir
+/// (`[pdf].fonts_dir`): the shared defaults PLUS a scan of that dir. Cached and
+/// leaked per dir — a CLI process builds a handful of books, each dir is
+/// scanned once, and `Font`/`World` want `'static` access.
+fn font_store_with_dir(dir: &Path) -> &'static FontStore {
+    use std::sync::Mutex;
+    static EXTRA: OnceLock<Mutex<std::collections::HashMap<PathBuf, &'static FontStore>>> =
+        OnceLock::new();
+    let cache = EXTRA.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    let mut map = cache.lock().unwrap();
+    if let Some(s) = map.get(dir) {
+        return s;
+    }
+    let mut store = FontStore::new();
+    // Repo fonts FIRST so they win family-name collisions with system fonts.
+    store.extend(typst_kit::fonts::scan(dir));
+    store.extend(typst_kit::fonts::embedded());
+    store.extend(typst_kit::fonts::system());
+    let leaked: &'static FontStore = Box::leak(Box::new(store));
+    map.insert(dir.to_path_buf(), leaked);
+    leaked
+}
+
 /// A minimal Typst [`World`]: the generated markup is the main source, image
 /// (and any source) files resolve under `root`, fonts come from [`font_store`].
 struct BookWorld {
@@ -236,17 +285,21 @@ struct BookWorld {
 }
 
 impl BookWorld {
-    fn new(root: PathBuf, markup: String, grayscale: bool, auto_grayscale: bool) -> Result<Self> {
+    fn new(root: PathBuf, markup: String, grayscale: bool, auto_grayscale: bool, fonts_dir: Option<&Path>) -> Result<Self> {
         // Main source lives at a fixed project-rooted vpath; image paths in the
         // markup are absolute (`/images/…`) so they resolve from `root`.
         let vpath = VirtualPath::new("/.typst-build.typ")
             .map_err(|e| anyhow!("invalid main source path: {e}"))?;
         let main_id = FileId::new(RootedPath::new(VirtualRoot::Project, vpath));
         let main = Source::new(main_id, markup);
+        let fonts = match fonts_dir {
+            Some(d) if d.is_dir() => font_store_with_dir(d),
+            _ => font_store(),
+        };
         Ok(Self {
             root,
             library: LazyHash::new(Library::default()),
-            fonts: font_store(),
+            fonts,
             main_id,
             main,
             grayscale,
@@ -343,8 +396,10 @@ fn build_doc(
     proof: bool,
     cover: Option<&Path>,
     geometry: Option<PageGeometry>,
+    style: &InteriorStyle,
     lang: &str,
 ) -> Result<(String, bool)> {
+    let essay = style.essay;
     let g = geometry.unwrap_or(PageGeometry {
         pw: 6.0,
         ph: 9.0,
@@ -365,7 +420,9 @@ fn build_doc(
     };
     let inside = g.inner + g.bindingoffset;
     let chlabel = if lang == "es" { "Capítulo" } else { "Chapter" };
-    let toc_title = if lang == "es" { "Índice" } else { "Contents" };
+    let toc_title = style.toc_title.clone().unwrap_or_else(|| {
+        (if lang == "es" { "Índice" } else { "Contents" }).to_string()
+    });
     // recto-open break used before each chapter heading. Proof builds never
     // force a chapter onto an odd page — blank verso pages just waste sheets.
     let recto = if openright && !proof {
@@ -400,9 +457,28 @@ bottom: {bottom:.4}in, inside: {inside:.4}in, outside: {outside:.4}in))\n",
             repo.config.paths.paper_texture,
         ));
     }
-    s.push_str(&format!("#set text(size: 11pt, lang: {})\n", ty_str(lang)));
-    s.push_str("#set par(justify: true, leading: 0.72em, first-line-indent: 1.2em)\n");
-    s.push_str("#set heading(numbering: \"1\")\n");
+    // Body text: optional font family/weight/size from [pdf] (essay interiors
+    // ship their own text face, e.g. Bitter Pro Medium 13pt); Typst serif else.
+    let size = style.font_size.unwrap_or(11.0);
+    let mut text_args = format!("size: {size}pt, lang: {}", ty_str(lang));
+    if let Some(f) = &style.font {
+        text_args += &format!(", font: {}", ty_str(f));
+    }
+    if let Some(w) = style.font_weight {
+        text_args += &format!(", weight: {w}");
+    }
+    s.push_str(&format!("#set text({text_args})\n"));
+    if essay {
+        // Essay paragraphs: block spacing, no first-line indent — the LaTeX
+        // text interior's linestretch 1.2 (baseline 1.44×size → leading 0.44em)
+        // + parskip 0.9em (spacing = baseline + parskip ≈ 1.34em).
+        s.push_str("#set par(justify: true, leading: 0.44em, spacing: 1.34em)\n");
+        // Unnumbered chapters: the heading text IS the title (no "Capítulo N").
+        s.push_str("#set heading(numbering: none)\n");
+    } else {
+        s.push_str("#set par(justify: true, leading: 0.72em, first-line-indent: 1.2em)\n");
+        s.push_str("#set heading(numbering: \"1\")\n");
+    }
     s.push_str("#let islatitle = rgb(\"#C2571C\")\n");
     s.push_str(&format!("#let chlabel = {}\n", ty_str(chlabel)));
     // Chapter plate on the verso (left) page, facing the chapter opener on the
@@ -457,15 +533,28 @@ align(center, image(p, width: 2.4in, height: 2.4in, fit: \"contain\"))); v(1em) 
     s.push_str(
         "#let scenebreak = { v(0.6em); align(center)[#sym.dot.c#h(0.6em)#sym.dot.c#h(0.6em)#sym.dot.c]; v(0.6em) }\n",
     );
-    // chapter heading: terracotta "Capítulo N" label line + centered title
-    s.push_str(&format!(
-        "#show heading.where(level: 1): it => {{\n  {recto}\n  \
+    if essay {
+        // Essay chapter heading: full-text-width color bar, centered white
+        // letter-spaced title (the legacy text-interior "green bar" design).
+        let bar = style.heading_color.as_deref().unwrap_or("#3d4a3d");
+        s.push_str(&format!(
+            "#show heading.where(level: 1): it => {{\n  {recto}\n  \
+block(width: 100%, above: 20pt, below: 30pt, \
+box(fill: rgb({bar}), width: 100%, inset: (x: 12pt, y: 18pt), \
+align(center, text(fill: white, weight: \"regular\", size: 16pt, tracking: 2.4pt, it.body))))\n}}\n",
+            bar = ty_str(bar),
+        ));
+    } else {
+        // chapter heading: terracotta "Capítulo N" label line + centered title
+        s.push_str(&format!(
+            "#show heading.where(level: 1): it => {{\n  {recto}\n  \
 block(width: 100%, above: 20pt, below: 40pt, {{\n    set align(center)\n    \
 if it.numbering != none {{\n      \
 text(fill: islatitle, size: 14pt, smallcaps[#chlabel #context counter(heading).display(\"1\")])\n      \
 linebreak()\n      v(12pt)\n    }}\n    \
 text(fill: islatitle, weight: \"bold\", size: 22pt, it.body)\n  }})\n}}\n",
-    ));
+        ));
+    }
     s.push_str(
         "#show heading.where(level: 2): it => block(above: 1.2em, below: 0.6em, \
 text(weight: \"bold\", size: 13pt, it.body))\n",
@@ -509,13 +598,33 @@ text(weight: \"bold\", size: 13pt, it.body))\n",
             inline(sub)
         ));
     }
-    s.push_str(&format!(
-        "    #v(28pt)\n    #text(size: 13pt)[{}]\n",
-        inline(&meta.author)
-    ));
+    if essay {
+        // Essay title page mirrors the legacy text-interior: "Por/By <author>",
+        // then the illustration credit and the rights line in small italics.
+        let by = if lang == "es" { "Por" } else { "By" };
+        s.push_str(&format!(
+            "    #v(28pt)\n    #text(size: 13pt)[{by} {}]\n",
+            inline(&meta.author)
+        ));
+        if let Some(ill) = &meta.illustrations {
+            s.push_str(&format!(
+                "    #v(14pt)\n    #text(size: 11pt, style: \"italic\")[{}]\n",
+                inline(ill)
+            ));
+        }
+        s.push_str(&format!(
+            "    #v(14pt)\n    #text(size: 10pt, style: \"italic\")[{}]\n",
+            inline(&meta.rights)
+        ));
+    } else {
+        s.push_str(&format!(
+            "    #v(28pt)\n    #text(size: 13pt)[{}]\n",
+            inline(&meta.author)
+        ));
+    }
     s.push_str("  ]\n  #v(1fr)\n]\n");
 
-    // copyright page + table of contents (only when the book ships a copyright)
+    // copyright page (only when the book ships one)
     if let Some(cp) = cpdf {
         let txt = std::fs::read_to_string(cp)
             .with_context(|| format!("reading {}", cp.display()))?;
@@ -527,9 +636,15 @@ text(weight: \"bold\", size: 13pt, it.body))\n",
             }
         }
         s.push_str("  #v(1fr)\n]\n");
+    }
+    // Table of contents — decoupled from the copyright page. [pdf].toc forces
+    // it either way; default: essay interiors always get one, picture books
+    // keep the legacy behavior (TOC only when a copyright page exists).
+    let want_toc = style.toc.unwrap_or(essay || cpdf.is_some());
+    if want_toc {
         s.push_str(&format!(
             "#outline(title: [{}], depth: 1, indent: auto)\n",
-            inline(toc_title)
+            inline(&toc_title)
         ));
     }
 
@@ -543,21 +658,72 @@ text(weight: \"bold\", size: 13pt, it.body))\n",
     for ch in chaps {
         let txt = std::fs::read_to_string(ch)
             .with_context(|| format!("reading {}", ch.display()))?;
+        // Lang-dir-relative image srcs (pandoc --resource-path convention)
+        // rewrite to repo-root-relative so the World can resolve them.
+        let txt = crate::build::rebase_image_srcs(&txt, &repo.root, ch);
+        // Reference-style footnotes ([^id] + [^id]: def) fold into Typst's
+        // inline ^[…] form before parsing; pandoc-era manuscripts use them.
+        let txt = resolve_ref_footnotes(&txt);
         let blocks = parse_blocks(&txt);
         if !proof {
             described &= all_images_described(&blocks);
         }
-        emit_blocks(&mut s, &blocks, &repo.root, captions, grayscale, proof);
+        // Essay interiors keep a chapter-opening image INLINE (under its
+        // heading) instead of promoting it to a full-page verso plate.
+        emit_blocks(&mut s, &blocks, &repo.root, captions, grayscale, proof, !essay);
         s.push('\n');
     }
 
     Ok((s, described))
 }
 
+/// Fold reference-style GFM footnotes into inline form: collect `[^id]: def`
+/// paragraphs (def runs to the next blank line), remove them, and replace each
+/// `[^id]` reference with `^[def]` (which `inline()` renders as #footnote).
+/// A ref with no def, or a def with no ref, is left as-is — `bookmill lint`
+/// flags those (they render as literal brackets, the classic manuscript bug).
+fn resolve_ref_footnotes(text: &str) -> String {
+    use std::collections::BTreeMap;
+    let mut defs: BTreeMap<String, String> = BTreeMap::new();
+    let mut kept: Vec<&str> = Vec::new();
+    let lines: Vec<&str> = text.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        // `[^id]: definition …` at line start
+        if let Some(rest) = line.strip_prefix("[^") {
+            if let Some(close) = rest.find("]:") {
+                let id = rest[..close].to_string();
+                if !id.is_empty() && !id.contains(' ') {
+                    let mut def = rest[close + 2..].trim().to_string();
+                    // continuation lines until blank
+                    let mut j = i + 1;
+                    while j < lines.len() && !lines[j].trim().is_empty() {
+                        def.push(' ');
+                        def.push_str(lines[j].trim());
+                        j += 1;
+                    }
+                    defs.insert(id, def);
+                    i = j;
+                    continue;
+                }
+            }
+        }
+        kept.push(line);
+        i += 1;
+    }
+    let mut out = kept.join("\n");
+    for (id, def) in &defs {
+        out = out.replace(&format!("[^{id}]"), &format!("^[{def}]"));
+    }
+    out
+}
+
 /// Emit a chapter's blocks, applying the heading+plate reorder: a chapter that
 /// opens with a standalone (non-spot) image renders the image as a full-page
 /// verso plate BEFORE its heading, so heading+body open together on the recto.
-fn emit_blocks(s: &mut String, blocks: &[Block], root: &Path, captions: bool, grayscale: bool, proof: bool) {
+/// `auto_plate: false` (essay interiors) keeps such images inline instead.
+fn emit_blocks(s: &mut String, blocks: &[Block], root: &Path, captions: bool, grayscale: bool, proof: bool, auto_plate: bool) {
     // On a grayscale (print) build, an image's `{bw=…}` variant replaces `src`;
     // otherwise (EPUB/retail) `src` is used and its color is kept.
     let eff_src = |src: &str, bw: &Option<String>| -> String {
@@ -569,7 +735,7 @@ fn emit_blocks(s: &mut String, blocks: &[Block], root: &Path, captions: bool, gr
     let mut i = 0;
     while i < blocks.len() {
         match &blocks[i] {
-            Block::Heading { level, text, unnumbered } if *level == 1 => {
+            Block::Heading { level, text, unnumbered } if *level == 1 && auto_plate => {
                 // look ahead for an opening plate image
                 if let Some(Block::Image {
                     src, spot: false, alt, width, height, fit, border, bw, ..
@@ -1116,6 +1282,46 @@ fn inline(s: &str) -> String {
                 continue;
             }
         }
+        // raw-HTML subset (first-party manuscripts): <u>…</u> underlines; a
+        // <span …>…</span> keeps its content (class styling is EPUB-only).
+        // Anything else starting with '<' falls through as escaped text.
+        if c == '<' {
+            let rest: String = chars[i..].iter().collect();
+            if rest.starts_with("<u>") {
+                if let Some(end) = rest.find("</u>") {
+                    let inner = &rest[3..end];
+                    out.push_str("#underline[");
+                    out.push_str(&inline(inner));
+                    out.push(']');
+                    i += end + 4;
+                    continue;
+                }
+            }
+            if rest.starts_with("<span") {
+                if let (Some(open), Some(end)) = (rest.find('>'), rest.find("</span>")) {
+                    if open < end {
+                        let inner = &rest[open + 1..end];
+                        out.push_str(&inline(inner));
+                        i += end + 7;
+                        continue;
+                    }
+                }
+            }
+        }
+        // bold-italic ***...*** -> #strong[#emph[...]] (checked before ** so the
+        // triple marker isn't half-consumed by the bold branch).
+        if c == '*' && chars.get(i + 1) == Some(&'*') && chars.get(i + 2) == Some(&'*') {
+            if let Some(end) = find_seq(&chars, i + 3, &['*', '*', '*']) {
+                let inner: String = chars[i + 3..end].iter().collect();
+                if !inner.is_empty() {
+                    out.push_str("#strong[#emph[");
+                    out.push_str(&inline(&inner));
+                    out.push_str("]]");
+                    i = end + 3;
+                    continue;
+                }
+            }
+        }
         // bold **...** -> #strong[...] (function form, not the `*..*` shorthand, so
         // bold text that starts/ends with `/` can't emit a `*/`/`/*` sequence that
         // Typst would parse as a block comment — matters for tech books).
@@ -1129,15 +1335,57 @@ fn inline(s: &str) -> String {
                 continue;
             }
         }
-        // italic *...* or _..._ -> #emph[...] (function form, same reason as bold)
+        // italic *...* or _..._ -> #emph[...] (function form, same reason as bold).
+        // For '*', the closing scan SKIPS embedded `**bold**` runs so nested
+        // emphasis like `*A **B***` (italic containing bold) closes at the right
+        // star instead of half-consuming the bold marker.
         if c == '*' || c == '_' {
-            if let Some(end) = find_char(&chars, i + 1, c) {
+            let end = if c == '*' {
+                let mut j = i + 1;
+                let mut found = None;
+                while j < chars.len() {
+                    if chars[j] == '*' {
+                        if chars.get(j + 1) == Some(&'*') {
+                            // embedded ** run — jump past its closer
+                            match find_seq(&chars, j + 2, &['*', '*']) {
+                                Some(bend) => {
+                                    j = bend + 2;
+                                    continue;
+                                }
+                                None => break,
+                            }
+                        }
+                        found = Some(j);
+                        break;
+                    }
+                    j += 1;
+                }
+                found
+            } else {
+                find_char(&chars, i + 1, c)
+            };
+            if let Some(end) = end {
                 let inner: String = chars[i + 1..end].iter().collect();
                 if !inner.is_empty() {
                     out.push_str("#emph[");
                     out.push_str(&inline(&inner));
                     out.push(']');
                     i = end + 1;
+                    continue;
+                }
+            }
+        }
+        // underline span [text]{.underline} (pandoc bracketed-span syntax — the
+        // no-raw-HTML replacement for <u>). Checked before the link branch.
+        if c == '[' {
+            if let Some(close) = find_matching_bracket(&chars, i) {
+                let tail: String = chars[close + 1..].iter().take(12).collect();
+                if tail.starts_with("{.underline}") {
+                    let inner: String = chars[i + 1..close].iter().collect();
+                    out.push_str("#underline[");
+                    out.push_str(&inline(&inner));
+                    out.push(']');
+                    i = close + 1 + 12;
                     continue;
                 }
             }
@@ -1177,8 +1425,27 @@ fn find_char(chars: &[char], from: usize, target: char) -> Option<usize> {
 
 /// Parse `[text](url)` starting at `start` (which must be `[`). Returns
 /// (text, url, index_after).
+/// The index of the `]` matching the `[` at `open` (bracket-depth aware, so a
+/// link text may itself contain `[…]{.underline}` spans).
+fn find_matching_bracket(chars: &[char], open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (i, c) in chars.iter().enumerate().skip(open) {
+        match c {
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 fn parse_inline_link(chars: &[char], start: usize) -> Option<(String, String, usize)> {
-    let close = find_char(chars, start + 1, ']')?;
+    let close = find_matching_bracket(chars, start)?;
     if chars.get(close + 1) != Some(&'(') {
         return None;
     }
@@ -1338,6 +1605,18 @@ mod tests {
     }
 
     #[test]
+    fn underline_span_and_nesting() {
+        assert_eq!(inline("[marked]{.underline}"), "#underline[marked]");
+        // span inside a link's text
+        assert_eq!(
+            inline("[[Isaac Naor]{.underline}](https://x)"),
+            "#link(\"https://x\")[#underline[Isaac Naor]]"
+        );
+        // bold-italic wrapping a span
+        assert_eq!(inline("***[p]{.underline}***"), "#strong[#emph[#underline[p]]]");
+    }
+
+    #[test]
     fn heading_unnumbered() {
         match parse_heading("# Epílogo {.unnumbered}").unwrap() {
             Block::Heading { level, text, unnumbered } => {
@@ -1427,7 +1706,7 @@ mod tests {
             _ => panic!("not a table"),
         }
         let mut s = String::new();
-        emit_blocks(&mut s, &blocks, Path::new("/repo"), true, false, false);
+        emit_blocks(&mut s, &blocks, Path::new("/repo"), true, false, false, true);
         assert!(s.contains("#table("));
         assert!(s.contains("columns: 2"));
         assert!(s.contains("table.header([#strong[A]], [#strong[B]])"));
@@ -1462,12 +1741,12 @@ mod tests {
         ));
         // color build (grayscale=false) keeps the color src
         let mut color = String::new();
-        emit_blocks(&mut color, &blocks, Path::new("/repo"), true, false, false);
+        emit_blocks(&mut color, &blocks, Path::new("/repo"), true, false, false, true);
         assert!(color.contains("/libros/x/images/ch.jpg"));
         assert!(!color.contains("/libros/x/images/bw/ch.jpg"));
         // print build (grayscale=true) swaps in the bw variant
         let mut print = String::new();
-        emit_blocks(&mut print, &blocks, Path::new("/repo"), true, true, false);
+        emit_blocks(&mut print, &blocks, Path::new("/repo"), true, true, false, true);
         assert!(print.contains("/libros/x/images/bw/ch.jpg"));
     }
 }

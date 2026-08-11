@@ -4,6 +4,7 @@
 
 mod a11y;
 mod audiobook;
+mod barcode;
 mod build;
 mod config;
 mod create;
@@ -442,7 +443,8 @@ fn cmd_list(repo: &Repo, json: bool) -> Result<()> {
             .collect();
         println!("{}", serde_json::to_string_pretty(&v)?);
     } else {
-        println!("{} book(s) in {}", books.len(), repo.books_dir().display());
+        let where_ = if repo.single_book { repo.root.clone() } else { repo.books_dir() };
+        println!("{} book(s) in {}", books.len(), where_.display());
         for b in &books {
             let title = b.title.values().next().cloned().unwrap_or_default();
             let tag = match b.status.ribbon() {

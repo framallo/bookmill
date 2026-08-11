@@ -297,6 +297,7 @@ mod tests {
             title: "T".into(),
             subtitle: None,
             author: "A".into(),
+            illustrations: None,
             rights: "r".into(),
             description: None,
             subjects: Vec::new(),

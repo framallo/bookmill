@@ -128,6 +128,7 @@ fn build_sample(
         title: format!("{} ({suffix})", base.title),
         subtitle: base.subtitle.clone(),
         author: base.author.clone(),
+        illustrations: base.illustrations.clone(),
         rights: base.rights.clone(),
         description: base.description.clone(),
         subjects: base.subjects.clone(),
@@ -146,6 +147,16 @@ fn build_sample(
     let openright = book.pdf.chapter_opens.as_deref() == Some("recto");
     let plate_framed = book.pdf.plate_style.as_deref() == Some("framed");
     let plate_width = book.pdf.plate_width.unwrap_or(0.78);
+    let style = crate::typst_pdf::InteriorStyle {
+        essay: book.pdf.interior.as_deref() == Some("essay"),
+        heading_color: book.pdf.heading_color.clone(),
+        font: book.pdf.font.clone(),
+        font_weight: book.pdf.font_weight,
+        font_size: book.pdf.font_size,
+        fonts_dir: book.pdf.fonts_dir.as_ref().map(|d| repo.root.join(d)),
+        toc: book.pdf.toc,
+        toc_title: book.pdf.toc_title.get(lang).cloned(),
+    };
     let captions = config::resolve_captions(None, book);
     // Digital geometry (bare trim, no bleed) — the sample is a reading preview.
     let geometry = resolve_geometry(repo, book, None, Out::RetailPdf);
@@ -187,6 +198,7 @@ fn build_sample(
         false,
         cover.as_deref(),
         geometry,
+        &style,
         lang,
         &pdf,
     )

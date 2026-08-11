@@ -89,6 +89,9 @@ pub fn run(
     }
     css.push('\n');
     css.push_str(CODE_CSS);
+    // Embed the fonts the stylesheet's @font-face rules reference (else the
+    // url() refs dangle and text silently falls back to the reader default).
+    let css = embed_css_fonts(&mut b, repo, css)?;
     b.stylesheet(css.as_bytes()).map_err(anyhow::Error::msg)?;
 
     // Cover image: embed front-<lang>.png as the EPUB cover.
@@ -138,6 +141,8 @@ pub fn run(
     for (i, ch) in chaps.iter().enumerate() {
         let md = std::fs::read_to_string(ch)
             .with_context(|| format!("reading {}", ch.display()))?;
+        // Same lang-dir-relative image rebasing as the Typst engine.
+        let md = crate::build::rebase_image_srcs(&md, &repo.root, ch);
         let (clean, nav_title) = clean_chapter(&md);
 
         // Register referenced (non-spot) images as EPUB resources, once each.
@@ -373,8 +378,159 @@ fn highlighter() -> SyntectAdapter {
 fn render_md(md: &str, hl: &SyntectAdapter) -> String {
     let mut plugins = Plugins::default();
     plugins.render.codefence_syntax_highlighter = Some(hl);
-    markdown_to_html_with_plugins(md, &comrak_opts(), &plugins)
+    // Prose-level raw-HTML whitelist: swap <u> for placeholder tokens (and drop
+    // styling <span> tags) BEFORE comrak — which omits raw HTML when unsafe_ is
+    // off — then restore real <u> tags in the rendered XHTML. Fenced code and
+    // inline code spans are left byte-for-byte (tech books show HTML in code).
+    let shielded = shield_raw_html(md);
+    let html = markdown_to_html_with_plugins(&shielded, &comrak_opts(), &plugins);
+    let html = html.replace("@@UO@@", "<u>").replace("@@UC@@", "</u>");
+    // comrak's footnote markup uses bare HTML5 boolean attributes, which are
+    // invalid XML — give each an (empty) value so the XHTML stays well-formed.
+    let mut html = html;
+    for attr in ["data-footnotes", "data-footnote-ref", "data-footnote-backref"] {
+        html = html
+            .replace(&format!("{attr}>"), &format!("{attr}=\"\">"))
+            .replace(&format!("{attr} "), &format!("{attr}=\"\" "));
+    }
+    html
 }
+
+/// Rewrite `[text]{.underline}` spans (bracket-depth aware, multiline) into the
+/// underline tokens. Inner markdown (bold/italic/links) still renders — the
+/// tokens pass through comrak as plain text around it.
+fn convert_underline_spans(md: &str) -> String {
+    const MARK: &str = "]{.underline}";
+    let mut s = md.to_string();
+    while let Some(end) = s.find(MARK) {
+        // walk back to the matching '[' (nested brackets allowed inside)
+        let bytes = s.as_bytes();
+        let mut depth = 1i32;
+        let mut open = None;
+        for i in (0..end).rev() {
+            match bytes[i] {
+                b']' => depth += 1,
+                b'[' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        open = Some(i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(open) = open else { break };
+        let inner = s[open + 1..end].to_string();
+        s.replace_range(open..end + MARK.len(), &format!("@@UO@@{inner}@@UC@@"));
+    }
+    s
+}
+
+/// Replace the prose raw-HTML whitelist with tokens comrak passes through as
+/// plain text: `<u>`/`</u>` → `@@UO@@`/`@@UC@@`; `<span …>`/`</span>` tags are
+/// dropped (their content stays — no stylesheet rule targets them). Code fences
+/// and inline `code` spans are untouched.
+fn shield_raw_html(md: &str) -> String {
+    // Pandoc underline spans `[text]{.underline}` → the same tokens as <u>
+    // (restored to a real <u> tag after comrak). Whole-text pass because a
+    // span may wrap across hard-wrapped lines within a paragraph.
+    let md = convert_underline_spans(md);
+    let mut out = String::with_capacity(md.len());
+    let mut fence = false;
+    for line in md.lines() {
+        let t = line.trim_start();
+        if t.starts_with("```") || t.starts_with("~~~") {
+            fence = !fence;
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        if fence {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        // split on backticks: even segments are prose, odd are inline code
+        for (i, seg) in line.split('`').enumerate() {
+            if i > 0 {
+                out.push('`');
+            }
+            if i % 2 == 0 {
+                let mut s = seg.replace("<u>", "@@UO@@").replace("</u>", "@@UC@@");
+                s = s.replace("</span>", "");
+                while let Some(sp) = s.find("<span") {
+                    match s[sp..].find('>') {
+                        Some(gt) => s.replace_range(sp..sp + gt + 1, ""),
+                        None => break,
+                    }
+                }
+                out.push_str(&s);
+            } else {
+                out.push_str(seg);
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// Embed every font file the stylesheet references via `url(...)` from the
+/// repo's `[paths].epub_fonts` dir (matched by basename), rewriting each url to
+/// the embedded `fonts/<name>` path. Fonts land at OEBPS/fonts/, siblings of
+/// OEBPS/stylesheet.css, so the relative refs resolve. A url whose basename is
+/// not in the dir is left untouched (and will 404 in the reader — visible in
+/// `validate --deep`'s epubcheck run rather than silently swallowed here).
+fn embed_css_fonts(
+    b: &mut EpubBuilder<ZipLibrary>,
+    repo: &Repo,
+    css: String,
+) -> Result<String> {
+    let dir = repo.epub_fonts_dir();
+    if !dir.is_dir() || !css.contains("url(") {
+        return Ok(css);
+    }
+    // collect url(...) references
+    let mut refs: Vec<String> = Vec::new();
+    let mut rest: &str = &css;
+    while let Some(p) = rest.find("url(") {
+        let after = &rest[p + 4..];
+        if let Some(close) = after.find(')') {
+            let raw = after[..close].trim().trim_matches('"').trim_matches('\'');
+            refs.push(raw.to_string());
+            rest = &after[close..];
+        } else {
+            break;
+        }
+    }
+    let mut out = css.clone();
+    let mut embedded: BTreeSet<String> = BTreeSet::new();
+    for r in refs {
+        let base = r.rsplit('/').next().unwrap_or(&r).to_string();
+        let src = dir.join(&base);
+        if !src.is_file() {
+            continue;
+        }
+        if embedded.insert(base.clone()) {
+            let bytes = std::fs::read(&src)
+                .with_context(|| format!("reading font {}", src.display()))?;
+            let mime = match base.rsplit('.').next().unwrap_or("").to_ascii_lowercase().as_str() {
+                "otf" => "font/otf",
+                "woff" => "font/woff",
+                "woff2" => "font/woff2",
+                _ => "font/ttf",
+            };
+            b.add_resource(format!("fonts/{base}"), &bytes[..], mime)
+                .map_err(anyhow::Error::msg)?;
+        }
+        // rewrite every quoting variant of this url to the embedded path
+        for pat in [format!("url(\"{r}\")"), format!("url('{r}')"), format!("url({r})")] {
+            out = out.replace(&pat, &format!("url(\"fonts/{base}\")"));
+        }
+    }
+    Ok(out)
+}
+
 
 /// Strip pandoc attribute blocks and drop `{.spot}` images from a chapter's
 /// Markdown, returning the cleaned Markdown plus the first level-1 heading text
@@ -747,6 +903,9 @@ fn title_page(meta: &BookMeta, lang: &str) -> String {
         body.push_str(&format!("<p class=\"subtitle\">{}</p>\n", xml_escape(sub)));
     }
     body.push_str(&format!("<p class=\"author\">{}</p>\n", xml_escape(&meta.author)));
+    if let Some(ill) = &meta.illustrations {
+        body.push_str(&format!("<p class=\"illustrations\"><em>{}</em></p>\n", xml_escape(ill)));
+    }
     body.push_str("</section>\n");
     xhtml_doc(lang, &meta.title, &body)
 }

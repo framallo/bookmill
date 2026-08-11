@@ -87,6 +87,75 @@ fn langs_for(book: &BookConfig, lang: &Option<String>) -> Vec<String> {
 /// Native prose lint for one book (or all) and one language (or all). When
 /// `grammar` is set, the grammar pass runs too (`--deep`). Non-zero exit (via
 /// `bail`) when any issue remains, so it can gate a release.
+/// Reference-style footnote defects in one chapter, as (line, message):
+///   * a `[^id]` reference with no `[^id]:` definition in the file;
+///   * a definition-looking line `[^id] …` MISSING its colon (renders as
+///     literal brackets — the exact bug class readers report);
+///   * a `[^id]:` definition nothing references.
+pub fn footnote_findings(md: &str) -> Vec<(usize, String)> {
+    use std::collections::BTreeSet;
+    let mut refs: Vec<(usize, String)> = Vec::new();
+    let mut defs: BTreeSet<String> = BTreeSet::new();
+    let mut out: Vec<(usize, String)> = Vec::new();
+    let mut fence = false;
+    for (n, line) in md.lines().enumerate() {
+        let ln = n + 1;
+        let t = line.trim_start();
+        if t.starts_with("```") || t.starts_with("~~~") {
+            fence = !fence;
+            continue;
+        }
+        if fence {
+            continue;
+        }
+        // definition (or colon-less near-definition) at line start
+        if let Some(rest) = line.strip_prefix("[^") {
+            if let Some(close) = rest.find(']') {
+                let id = &rest[..close];
+                if !id.is_empty() && !id.contains(' ') {
+                    let after = &rest[close + 1..];
+                    if after.starts_with(':') {
+                        defs.insert(id.to_string());
+                        continue;
+                    } else if after.starts_with(' ') {
+                        out.push((ln, format!("footnote definition \"[^{id}]\" is missing its colon (write \"[^{id}]:\") — renders as literal brackets")));
+                        continue;
+                    }
+                }
+            }
+        }
+        // references anywhere in the line
+        let mut rest: &str = line;
+        let mut _col = 0;
+        while let Some(p) = rest.find("[^") {
+            let after = &rest[p + 2..];
+            if let Some(close) = after.find(']') {
+                let id = &after[..close];
+                if !id.is_empty() && !id.contains(' ') {
+                    refs.push((ln, id.to_string()));
+                }
+                rest = &after[close + 1..];
+                _col += p + 2 + close + 1;
+            } else {
+                break;
+            }
+        }
+    }
+    for (ln, id) in &refs {
+        if !defs.contains(id) {
+            out.push((*ln, format!("footnote reference \"[^{id}]\" has no definition — renders as literal brackets")));
+        }
+    }
+    let referenced: BTreeSet<&String> = refs.iter().map(|(_, id)| id).collect();
+    for id in &defs {
+        if !referenced.contains(id) {
+            out.push((0, format!("footnote definition \"[^{id}]:\" is never referenced")));
+        }
+    }
+    out.sort();
+    out
+}
+
 pub fn run(repo: &Repo, book: Option<String>, lang: Option<String>, grammar: bool) -> Result<()> {
     let books = match &book {
         Some(s) => vec![repo.find_book(s)?],
@@ -150,6 +219,12 @@ pub fn run(repo: &Repo, book: Option<String>, lang: Option<String>, grammar: boo
             for path in &files {
                 let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
                 let raw = std::fs::read_to_string(path).unwrap_or_default();
+                // Broken reference-style footnotes render as literal "[^N]"
+                // bracket text in the published book — the classic shipped-bug.
+                for (line, msg) in footnote_findings(&raw) {
+                    println!("      [footnote:{line}] {msg}");
+                    total += 1;
+                }
                 let report = lint_markdown(&raw, lang_enum, &opts);
                 let ptotal: usize = report.findings.iter().map(|f| f.count).sum();
                 let paccent: usize = report.findings.iter().filter(|f| f.kind == Kind::Tilde).map(|f| f.count).sum();
@@ -184,4 +259,29 @@ pub fn run(repo: &Repo, book: Option<String>, lang: Option<String>, grammar: boo
         bail!("lint found {grand_total} issue(s)");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::footnote_findings;
+
+    #[test]
+    fn broken_footnotes_detected() {
+        // the exact defect classes shipped in abre-la-válvula (reader complaint)
+        let md = "# T\n\nref here [^6].\n\nanother [^3] here.\n\n[^6] Servicio + Disciplina = Creatividad\n\n[^9]: never referenced\n";
+        let f = footnote_findings(md);
+        let msgs: Vec<&str> = f.iter().map(|(_, m)| m.as_str()).collect();
+        assert!(msgs.iter().any(|m| m.contains("[^6]") && m.contains("missing its colon")), "{msgs:?}");
+        assert!(msgs.iter().any(|m| m.contains("[^3]") && m.contains("no definition")), "{msgs:?}");
+        assert!(msgs.iter().any(|m| m.contains("[^9]") && m.contains("never referenced")), "{msgs:?}");
+    }
+
+    #[test]
+    fn healthy_footnotes_clean() {
+        let md = "# T\n\nref [^1].\n\n[^1]: a proper definition\n";
+        assert!(footnote_findings(md).is_empty());
+        // code fences don't count
+        let code = "# T\n\n```md\n[^5] not a real footnote\n```\n";
+        assert!(footnote_findings(code).is_empty());
+    }
 }

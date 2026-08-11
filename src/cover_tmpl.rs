@@ -70,6 +70,12 @@ pub(crate) struct Resolved {
     /// mode), honored by the SVG wrap renderer's BACK panel only. Coordinates are
     /// fractions of the back panel. `None` => default flex back stack.
     pub(crate) wrap_layout: Option<CoverWrapLayout>,
+    /// free-form image elements (`[[cover.<lang>.images]]`): author portraits etc.
+    pub(crate) images: Vec<crate::config::CoverImage>,
+    /// back-cover ISBN barcode placement (`[cover.<lang>.barcode]`).
+    pub(crate) barcode: Option<crate::config::CoverBarcode>,
+    /// the book's per-language ISBN (`[isbn].<lang>`), for the barcode.
+    pub(crate) isbn: Option<String>,
 }
 
 /// First-set lookup: book field, then repo field, then `default`.
@@ -162,7 +168,15 @@ pub(crate) fn resolve(repo: &RepoConfig, book: &BookConfig, lang: &str) -> Resol
     // Heavy title halo: book/repo `heavy_shadow` override, else the built-in.
     let heavy = pick_opt(bc, rc, |c| c.heavy_shadow.clone()).unwrap_or_else(|| HEAVY_SHADOW.to_string());
 
-    let author = repo.author.clone().unwrap_or_else(|| DEFAULT_AUTHOR.to_string());
+    // Cover author line: the book's per-language [author] map first (translated
+    // co-authorships), then [meta].author, then the repo author, then default.
+    let author = book
+        .author
+        .get(lang)
+        .cloned()
+        .or_else(|| book.meta.author.clone())
+        .or_else(|| repo.author.clone())
+        .unwrap_or_else(|| DEFAULT_AUTHOR.to_string());
     let badge = match lang {
         "es" => pick(bc, rc, |c| c.badge_es.clone(), BADGE_ES),
         _ => pick(bc, rc, |c| c.badge_en.clone(), BADGE_EN),
@@ -264,6 +278,9 @@ pub(crate) fn resolve(repo: &RepoConfig, book: &BookConfig, lang: &str) -> Resol
             bc.and_then(|c| c.wrap.as_ref()),
             ml.and_then(|m| m.wrap.as_ref()),
         ),
+        images: ml.and_then(|m| m.images.clone()).unwrap_or_default(),
+        barcode: ml.and_then(|m| m.barcode.clone()),
+        isbn: book.isbn.get(lang).cloned(),
     }
 }
 

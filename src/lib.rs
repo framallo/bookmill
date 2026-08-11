@@ -14,6 +14,7 @@
 //! compilation keeps the full warning set honest.
 #![allow(dead_code)]
 
+pub mod barcode;
 pub mod config;
 pub mod cover_svg;
 pub mod cover_tmpl;
