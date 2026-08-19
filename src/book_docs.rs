@@ -52,7 +52,28 @@ fn generate_one(repo: &Repo, dir: &Path, langs: &BTreeSet<String>) -> Result<()>
         made.push(rel(repo, &md));
         if config::sample_enabled(&book) {
             match build_sample(repo, &book, dir, lang, &chaps) {
-                Ok(files) => made.extend(files.iter().map(|p| rel(repo, p))),
+                Ok(files) => {
+                    // Samples are distribution artifacts too — run the same
+                    // post-build hooks over them. Best-effort here (book docs
+                    // never fail the build), so a hook error only warns.
+                    let hooks = &repo.config.hooks.post_build;
+                    for p in &files {
+                        made.push(rel(repo, p));
+                        let fmt = match p.extension().and_then(|e| e.to_str()) {
+                            Some("epub") => "epub",
+                            Some("pdf") => "pdf",
+                            Some("docx") => "docx",
+                            _ => continue,
+                        };
+                        if !hooks.is_empty() {
+                            if let Err(e) =
+                                crate::hooks::run_post_build(hooks, p, fmt, lang, &book.slug)
+                            {
+                                eprintln!("  ! hook on sample {}: {e:#}", rel(repo, p));
+                            }
+                        }
+                    }
+                }
                 Err(e) => eprintln!("  ! sample for {}/{lang}: {e:#}", book.slug),
             }
         }

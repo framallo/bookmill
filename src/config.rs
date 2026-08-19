@@ -72,6 +72,45 @@ pub struct RepoConfig {
     /// is overridable. Resolved via the `Repo::*` path helpers.
     #[serde(default)]
     pub paths: Paths,
+    /// external commands run against freshly built artifacts ([hooks]).
+    #[serde(default)]
+    pub hooks: Hooks,
+}
+
+// ---------- external command hooks ([hooks]) ----------
+/// User-defined external commands invoked by the pipeline at defined points.
+/// Keeps bookmill agnostic about what the command does — it just passes the
+/// artifact path and metadata and reports success/failure.
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct Hooks {
+    /// Commands run once per artifact immediately after it builds successfully.
+    #[serde(default)]
+    pub post_build: Vec<Hook>,
+}
+
+/// A single external command. Args support `{file}`, `{format}`, `{lang}` and
+/// `{slug}` placeholders, substituted before the command is spawned directly
+/// (no shell). By default a non-zero exit fails the build; set `required =
+/// false` to downgrade failures to a warning.
+#[derive(Debug, Deserialize, Clone)]
+pub struct Hook {
+    /// Program to run (PATH-resolved, or an absolute/relative path).
+    pub command: String,
+    /// Arguments, with placeholders substituted per artifact.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Restrict to these artifact formats ("epub", "pdf", "docx"); empty = all.
+    #[serde(default)]
+    pub formats: Vec<String>,
+    /// When true (default) a failing hook fails the job.
+    #[serde(default = "default_true")]
+    pub required: bool,
+    /// Optional label for progress output; defaults to the command name.
+    pub name: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 // ---------- repo path layout ([paths]) ----------
