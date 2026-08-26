@@ -55,6 +55,10 @@ use typst_pdf::{PdfOptions, PdfStandard, PdfStandards};
 #[derive(Default, Clone)]
 pub struct InteriorStyle {
     pub essay: bool,
+    /// number picture-book chapters/sections. `Some(false)` → unnumbered
+    /// (titles only, no "Capítulo N", no TOC number prefixes). Default (None) is
+    /// numbered. Ignored in essay mode (always unnumbered).
+    pub numbered: Option<bool>,
     /// heading-bar color (hex, e.g. "#3d4a3d"); essay mode only.
     pub heading_color: Option<String>,
     /// main text font family (e.g. "Bitter Pro").
@@ -477,7 +481,13 @@ bottom: {bottom:.4}in, inside: {inside:.4}in, outside: {outside:.4}in))\n",
         s.push_str("#set heading(numbering: none)\n");
     } else {
         s.push_str("#set par(justify: true, leading: 0.72em, first-line-indent: 1.2em)\n");
-        s.push_str("#set heading(numbering: \"1\")\n");
+        // Numbered by default ("Capítulo N" + numbered TOC). `[pdf].numbered =
+        // false` shows titles only, matching the always-unnumbered EPUB.
+        if style.numbered == Some(false) {
+            s.push_str("#set heading(numbering: none)\n");
+        } else {
+            s.push_str("#set heading(numbering: \"1\")\n");
+        }
     }
     s.push_str("#let islatitle = rgb(\"#C2571C\")\n");
     s.push_str(&format!("#let chlabel = {}\n", ty_str(chlabel)));

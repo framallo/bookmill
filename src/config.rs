@@ -858,6 +858,12 @@ pub struct PdfOpts {
     pub interior: Option<String>,
     /// chapter-heading bar color (hex, e.g. "#3d4a3d"); essay mode only.
     pub heading_color: Option<String>,
+    /// number chapters/sections in the picture-book interior. Default true
+    /// ("Capítulo N" chapter labels + numbered TOC entries). Set `false` to show
+    /// titles only (no "Capítulo N", no leading numbers in the TOC) while keeping
+    /// the picture-book layout — matches the always-unnumbered EPUB. (Essay mode
+    /// is always unnumbered regardless of this flag.)
+    pub numbered: Option<bool>,
     /// main text font family for the PDF (e.g. "Bitter Pro"); resolved from
     /// the system fonts plus [pdf].fonts_dir. Absent → Typst default serif.
     pub font: Option<String>,

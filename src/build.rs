@@ -671,6 +671,7 @@ fn build_one(
     // Interior style ([pdf].interior = "essay" + its knobs) for the Typst engine.
     let style = crate::typst_pdf::InteriorStyle {
         essay: book.pdf.interior.as_deref() == Some("essay"),
+        numbered: book.pdf.numbered,
         heading_color: book.pdf.heading_color.clone(),
         font: book.pdf.font.clone(),
         font_weight: book.pdf.font_weight,
