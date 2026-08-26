@@ -20,6 +20,7 @@ mod cover_tmpl;
 mod covers;
 mod deep;
 mod discover;
+mod hooks;
 mod lint;
 mod kdp;
 mod tui;

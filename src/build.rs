@@ -36,6 +36,15 @@ impl Out {
             Out::Docx => "Docx",
         }
     }
+
+    /// Coarse artifact format ("epub" | "pdf" | "docx"), used by hook filters.
+    pub fn format_token(self) -> &'static str {
+        match self {
+            Out::RetailEpub | Out::KdpEpub => "epub",
+            Out::RetailPdf | Out::KdpPdf => "pdf",
+            Out::Docx => "docx",
+        }
+    }
 }
 
 /// One unit of work in the build queue.
@@ -579,7 +588,10 @@ pub fn job_output_path(repo: &Repo, job: &Job) -> PathBuf {
 
 pub fn build_job(repo: &Repo, job: &Job) -> Result<()> {
     let (book, dir) = repo.load_book_at(&job.dir)?;
-    build_one(
+    // `build_one` returns the path it actually wrote (which honors per-language
+    // `[basename]` overrides, unlike `job_output_path`), so hooks act on the
+    // real artifact.
+    let artifact = build_one(
         repo,
         &book,
         &dir,
@@ -589,7 +601,20 @@ pub fn build_job(repo: &Repo, job: &Job) -> Result<()> {
         job.geometry,
         job.edition.as_deref(),
         &job.target,
-    )
+    )?;
+    // Post-build hooks run against the finished artifact. This is the single
+    // choke point for every build path (CLI, TUI, deep-validate rebuild).
+    let hooks = &repo.config.hooks.post_build;
+    if !hooks.is_empty() {
+        crate::hooks::run_post_build(
+            hooks,
+            &artifact,
+            job.out.format_token(),
+            &job.lang,
+            &job.slug,
+        )?;
+    }
+    Ok(())
 }
 
 fn resolve_books(repo: &Repo, slug: &Option<String>) -> Result<Vec<(BookConfig, PathBuf)>> {
@@ -616,7 +641,7 @@ fn build_one(
     geometry: Option<PageGeometry>,
     edition: Option<&str>,
     target: &str,
-) -> Result<()> {
+) -> Result<PathBuf> {
     let slug = &book.slug;
     let content = book
         .content
@@ -646,6 +671,7 @@ fn build_one(
     // Interior style ([pdf].interior = "essay" + its knobs) for the Typst engine.
     let style = crate::typst_pdf::InteriorStyle {
         essay: book.pdf.interior.as_deref() == Some("essay"),
+        numbered: book.pdf.numbered,
         heading_color: book.pdf.heading_color.clone(),
         font: book.pdf.font.clone(),
         font_weight: book.pdf.font_weight,
@@ -667,7 +693,7 @@ fn build_one(
     // enables `[pdf].auto_grayscale`.
     let auto_grayscale = crate::config::resolve_auto_grayscale(book, &repo.config);
 
-    match out {
+    let artifact: PathBuf = match out {
         Out::RetailEpub => {
             let o = odir.join(format!("{base}.epub"));
             crate::epub_native::run(repo, &m, cepub.as_deref(), &chaps, cover.as_deref(), lang, true, captions, &o)?;
@@ -675,6 +701,7 @@ fn build_one(
             if let Some(c) = &cover {
                 emit_cover_jpg(c, &odir.join(format!("{base}-cover.jpg")))?;
             }
+            o
         }
         Out::KdpEpub => {
             let o = odir.join(format!("{base}-kdp.epub"));
@@ -683,6 +710,7 @@ fn build_one(
             if let Some(c) = &cover {
                 emit_cover_jpg(c, &odir.join(format!("{base}-cover.jpg")))?;
             }
+            o
         }
         Out::RetailPdf => {
             let pdf = odir.join(format!("{base}.pdf"));
@@ -732,6 +760,7 @@ fn build_one(
                 // pronunciation. Restore it; `bookmill validate` reports the lost tagging.
                 crate::pdfmeta::set_catalog_lang(&pdf, lang);
             }
+            pdf
         }
         Out::KdpPdf => {
             // Default KDP print interior is "{base}-kdp.pdf". Regional POD print
@@ -766,13 +795,16 @@ fn build_one(
                 &pdf,
             )?;
             crate::pages::write_sidecar(&pdf, &chaps);
+            pdf
         }
         Out::Docx => {
             // Editor review doc — clean Word document via the native docx-rs engine.
-            crate::docx_native::run(repo, &m, &chaps, &odir.join(format!("{base}.docx")))?;
+            let docx = odir.join(format!("{base}.docx"));
+            crate::docx_native::run(repo, &m, &chaps, &docx)?;
+            docx
         }
-    }
-    Ok(())
+    };
+    Ok(artifact)
 }
 
 /// Resolved per-(book, lang) front-matter values, shared by every native engine
