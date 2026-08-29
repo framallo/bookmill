@@ -23,8 +23,9 @@
 //!
 //! The Markdown -> Typst converter is intentionally small: headings (with the
 //! `{.unnumbered}`/`{.spot}` attributes), paragraphs, `**bold**`/`*italic*`,
-//! links, standalone images, `---` scene breaks, GFM pipe tables, and inline
-//! `^[...]` footnotes. Anything else falls through as escaped literal text.
+//! links, `` `code` `` spans (Typst `#raw`, so they stay monospace inside
+//! paragraphs, list items, and table cells alike), standalone images, `---`
+//! scene breaks, GFM pipe tables, and inline `^[...]` footnotes. Anything else falls through as escaped literal text.
 //! Reference-style GFM footnotes (`[^id]` + `[^id]:` definitions) are deferred:
 //! they need a two-pass collect across blocks and no book in the series uses
 //! them; inline `^[...]` covers the footnote need for now.
@@ -1292,6 +1293,32 @@ fn inline(s: &str) -> String {
                 continue;
             }
         }
+        // inline code span `code` / ``code`` -> #raw("code"): monospace, with no
+        // markdown conversion and no Typst smart typography (dashes, quotes)
+        // applied to the literal. The closer is a backtick run of the same
+        // length as the opener; an unmatched opener falls through as escaped
+        // text. Used verbatim by paragraphs, lists, headings, and table cells
+        // (they all share this converter).
+        if c == '`' {
+            let mut n = 1;
+            while chars.get(i + n) == Some(&'`') {
+                n += 1;
+            }
+            if let Some(end) = find_run(&chars, i + n, '`', n) {
+                let inner: String = chars[i + n..end].iter().collect();
+                // CommonMark: strip one space pair so `` `x` `` can hold backticks
+                let inner = inner
+                    .strip_prefix(' ')
+                    .and_then(|t| t.strip_suffix(' '))
+                    .filter(|t| t.contains(|ch| ch != ' '))
+                    .unwrap_or(&inner);
+                out.push_str("#raw(");
+                out.push_str(&ty_str(inner));
+                out.push(')');
+                i = end + n;
+                continue;
+            }
+        }
         // raw-HTML subset (first-party manuscripts): <u>…</u> underlines; a
         // <span …>…</span> keeps its content (class styling is EPUB-only).
         // Anything else starting with '<' falls through as escaped text.
@@ -1431,6 +1458,27 @@ fn find_seq(chars: &[char], from: usize, seq: &[char]) -> Option<usize> {
 
 fn find_char(chars: &[char], from: usize, target: char) -> Option<usize> {
     (from..chars.len()).find(|&i| chars[i] == target)
+}
+
+/// Find the start of the next run of exactly `n` consecutive `target` chars at
+/// or after `from` (a longer run does not close a shorter code-span opener).
+fn find_run(chars: &[char], from: usize, target: char, n: usize) -> Option<usize> {
+    let mut j = from;
+    while j < chars.len() {
+        if chars[j] == target {
+            let mut k = j;
+            while k < chars.len() && chars[k] == target {
+                k += 1;
+            }
+            if k - j == n {
+                return Some(j);
+            }
+            j = k;
+        } else {
+            j += 1;
+        }
+    }
+    None
 }
 
 /// Parse `[text](url)` starting at `start` (which must be `[`). Returns
@@ -1700,6 +1748,33 @@ mod tests {
         assert_eq!(inline("a^[note]b"), "a#footnote[note]b");
         // a bare caret is escaped (Typst superscript), not treated as a footnote
         assert_eq!(inline("2^3"), "2\\^3");
+    }
+
+    #[test]
+    fn inline_code_span() {
+        assert_eq!(
+            inline("run `cargo test` now"),
+            "run #raw(\"cargo test\") now"
+        );
+        // no markdown/escaping inside the span; quotes/backslashes survive ty_str
+        assert_eq!(inline("`a *b* \"c\"`"), "#raw(\"a *b* \\\"c\\\"\")");
+        // double-backtick span holds a literal backtick (CommonMark space trim)
+        assert_eq!(inline("`` `x` ``"), "#raw(\"`x`\")");
+        // an unmatched opener stays escaped literal text
+        assert_eq!(inline("a ` b"), "a \\` b");
+    }
+
+    #[test]
+    fn table_cell_inline_markup() {
+        // inline code + emphasis inside cells must use the same constructs
+        // paragraphs do (#raw / #emph), never literal backticks
+        let md = "| A | B |\n|---|---|\n| `spec/` | *em* [t](http://x) |\n";
+        let blocks = parse_blocks(md);
+        let mut s = String::new();
+        emit_blocks(&mut s, &blocks, Path::new("/repo"), true, false, false, true);
+        assert!(s.contains("[#raw(\"spec/\")]"));
+        assert!(s.contains("[#emph[em] #link(\"http://x\")[t]]"));
+        assert!(!s.contains('`'));
     }
 
     #[test]
